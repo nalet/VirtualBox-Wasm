@@ -1,0 +1,271 @@
+# $Id: .scm-settings 112421 2026-01-12 20:29:22Z knut.osmundsen@oracle.com $
+## @file
+# Source code massager settings for the EFI Firmware.
+#
+
+#
+# Copyright (C) 2017-2026 Oracle and/or its affiliates.
+#
+# This file is part of VirtualBox base platform packages, as
+# available from https://www.virtualbox.org.
+#
+# This program is free software; you can redistribute it and/or
+# modify it under the terms of the GNU General Public License
+# as published by the Free Software Foundation, in version 3 of the
+# License.
+#
+# This program is distributed in the hope that it will be useful, but
+# WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+# General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, see <https://www.gnu.org/licenses>.
+#
+# SPDX-License-Identifier: GPL-3.0-only
+#
+
+# Reset the directory filtering so we can process MdeModulePkg/Universal/ReportStatusCodeRouter/.
+--filter-out-dirs ""
+
+# Most of this is 3rd party stuff.
+/*!xcpt!/.scm-settings|/*.kmk|/MdeModulePkg/Universal/Disk/PartitionDxe/Apple.c|/VBox*|/*/VBox*: \
+        --external-copyright --dont-set-svn-keywords --no-convert-tabs --no-strip-trailing-blanks \
+        --strip-no-trailing-lines --no-force-final-eol --no-fix-todos --no-fix-header-guards --allow-uefi-style-copyright
+
+/MdeModulePkg/Universal/Disk/PartitionDxe/Apple.c:  --license-ose-dual
+/*.kmk:                                             --license-ose-dual
+/VBox*|/*/VBox*:                                    --license-ose-dual --allow-uefi-style-copyright
+
+# Build related files using '#' for comments.
+/*.dec:        --treat-as Makefile
+/*.dsc:        --treat-as Makefile
+/*.fdf:        --treat-as Makefile
+/*.inf:        --treat-as Makefile
+/BaseTools/Conf/build_rule.template:   --treat-as Makefile
+/BaseTools/Conf/target.template:       --treat-as Makefile
+/BaseTools/Conf/tools_def.template:    --treat-as Makefile
+
+# IASL sources.
+/*.asl:        --treat-as *.h
+/*.aslc:       --treat-as *.h
+
+# NASM source.
+/*.nasm:       --treat-as .asm
+/*.nasmb:      --treat-as .asm
+/*.asm16:      --treat-as .asm
+
+# cpp processed assembly files.
+/*.s:          --treat-as .h
+/*.i:          --treat-as .h
+
+# GAS assembly files w/o preprocessing.
+/*.S:          --treat-as Makefile
+
+# Python sources.
+/*.pyw:        --treat-as python
+
+# Not quite sure what this is, uses C++ comment style.
+/*.vfr:        --treat-as .h
+/*.Vfr:        --treat-as .h
+
+# Linker scripts.
+/*-ld-script:  --treat-as .h
+/*.lds:        --treat-as .h
+
+# Grammar files. Treat as C for now.
+/*.g:          --treat-as .c
+
+# Not entirely sure what the .dlg files are, but they seems to contain C like license headers.
+/*.dlg:        --treat-as .h
+
+# Misc.
+*.xsd:                  --treat-as .xml
+/*.ini:        --treat-as Makefile
+/BaseTools/Conf/FrameworkDatabase.template:     --treat-as xml
+/BaseTools/Source/C/VfrCompile/Pccts/*.r:       --treat-as h
+/BaseTools/BuildEnv:                            --treat-as shell
+/BaseTools/Bin/GccLto/*.a:                      --treat-as binary
+/BaseTools/Source/Python/Ecc/CParser4/C.g4:     --treat-as c --no-convert-eol
+
+# Files that aren't UTF-8.
+/BaseTools/Source/C/VfrCompile/Pccts/antlr/antlr.r:      --skip-unicode-checks
+/BaseTools/Source/C/VfrCompile/Pccts/antlr/AntlrPPC.mak: --skip-unicode-checks
+/BaseTools/Source/C/VfrCompile/Pccts/dlg/DlgPPC.mak:     --skip-unicode-checks
+/BaseTools/Source/C/VfrCompile/Pccts/README:             --skip-unicode-checks
+
+# Some normal makefiles (external code, convenience, ...)
+/*.mak:        --treat-as Makefile
+/*/makefile1:  --treat-as Makefile
+/*/makefile.cygwin:                            --treat-as Makefile
+/*/makefile.old:                               --treat-as Makefile
+/BaseTools/Source/C/Makefiles/*.makefile:      --treat-as Makefile
+/BaseTools/Source/C/Makefiles/ms.*:            --treat-as Makefile
+
+## Text files, usually no license stuff there. See Readme.txt below.
+/*/README:                                          --treat-as plaintext --no-convert-eol
+/BaseTools/UserManuals/*.rtf:                       --treat-as plaintext --no-convert-eol
+/BaseTools/Source/C/VfrCompile/Pccts/*.1:           --treat-as plaintext --no-convert-eol
+/BaseTools/Source/C/VfrCompile/Pccts/*.ps:          --treat-as plaintext --no-convert-eol
+/BaseTools/Source/C/VfrCompile/Pccts/MPW_Read_Me:   --treat-as plaintext --no-convert-eol
+/BaseTools/Source/C/VfrCompile/Pccts/NOTES.bcc:     --treat-as plaintext --no-convert-eol
+/BaseTools/Source/C/VfrCompile/Pccts/NOTES.msvc:    --treat-as plaintext --no-convert-eol
+/BaseTools/Source/C/VfrCompile/Pccts/RIGHTS:        --treat-as plaintext --no-convert-eol
+/BaseTools/Plugin/CodeQL/CodeQlQueries.qls:         --treat-as plaintext --no-convert-eol
+/contrib/*.github-issues:                           --treat-as json5     --no-convert-eol
+/*.md:                                              --no-convert-eol
+/*.svg:                                             --treat-as xml --del-action force-native-eol --add-action force-lf
+
+# Binary files.
+/BaseTools/*.cer:   --treat-as binary
+*.raw:              --treat-as binary
+*.efi:              --treat-as binary
+*.obj:              --treat-as binary
+*.docx:             --treat-as binary
+*.uni:              --treat-as h --no-convert-eol
+
+# Misc
+/.mailmap:          --treat-as hashtext
+*.idf:              --treat-as h
+*.html:             --no-convert-eol
+*.pem:              --treat-as plaintext --no-convert-eol
+*.rst:              --treat-as plaintext
+/EmbeddedPkg/Library/FdtLib/Makefile.libfdt:                    --treat-as make
+/EmbeddedPkg/Scripts/LauterbachT32/*.CMM|/EmbeddedPkg/Scripts/LauterbachT32/*.cmm: --treat-as shell --no-convert-eol
+/IntelFsp2Pkg/Tools/Tests/ExpectedOutput.bsf:                   --treat-as plaintext --no-convert-eol
+
+# Ignore PAGE_SIZE related stuff here.
+/OvmfPkg/Include/IndustryStandard/Xen/io/*.h:                   --no-page-restrictions
+
+# trailing '\0' byte:
+/BaseTools/UserManuals/GenFw_Utility_Man_Page.rtf:              --treat-as binary
+
+/BaseTools/Conf/diff.order:                                     --treat-as hashtext --no-convert-eol
+/BaseTools/Conf/gitattributes:                                  --treat-as hashtext --no-convert-eol
+
+/MdePkg/Library/BaseFdtLib/libfdt/libfdt/.gitignore:            --no-convert-eol
+/MdePkg/Library/BaseFdtLib/libfdt/BSD-2-Clause:                 --treat-as plaintext
+/MdePkg/Library/BaseFdtLib/libfdt/GPL:                          --treat-as plaintext
+/MdePkg/Library/BaseFdtLib/libfdt/MANIFEST.in:                  --treat-as plaintext
+/MdePkg/Library/BaseFdtLib/libfdt/pyproject.toml:               --treat-as plaintext
+
+/OvmfPkg/AmdSev/Grub/grub.cfg:                                  --treat-as plaintext
+
+/RedfishPkg/Documents/Media/*.svg:                              --no-convert-eol
+
+/ShellPkg/Application/ShellCTestApp/TestArgv.log:               --treat-as binary # UTF-16
+
+/.git-blame-ignore-revs:                                        --treat-as hashtext
+/.pytool/Plugin/UncrustifyCheck/uncrustify.cfg:                 --treat-as hashtext
+
+/.editorconfig|.git-blame-ignore-revs|.mailmap:                 --no-convert-eol
+/.gitmodules|.gitignore|/.devcontainer/devcontainer.json:       --no-convert-eol
+
+## @todo Temporary until openssl is updated and we can cleanup the eol style mess
+/CryptoPkg/Library/*:           --no-convert-eol --dont-set-svn-mime-type-on-binaries
+/CryptoPkg/Library/*.cnf.in:                                    --treat-as hashtext
+/CryptoPkg/Library*/build.info.in:                              --treat-as hashtext
+/CryptoPkg/Library*/*.pc.in:                                    --treat-as plaintext
+/CryptoPkg/Library*/*.cmake.in:                                 --treat-as plaintext
+/CryptoPkg/Library*/*.m4:                                       --treat-as plaintext
+/CryptoPkg/Library/OpensslLib/openssl/test/dane*.in:            --treat-as hashtext
+/CryptoPkg/Library/OpensslLib/openssl/test/quic-openssl-docker/Dockerfile: --treat-as plaintext
+/CryptoPkg/Library/OpensslLib/UefiAsm.conf:                     --treat-as perl
+/CryptoPkg/Library/OpensslLib/openssl/test/*.json.in:           --treat-as json5
+# Copied from /src/libs/:
+/CryptoPkg/Library/*.pod:                                       --treat-as plaintext
+/CryptoPkg/Library/*.pod.in:                                    --treat-as plaintext
+/CryptoPkg/Library/*.c.in:                                      --treat-as c
+/CryptoPkg/Library/*.h.in:                                      --treat-as h
+/CryptoPkg/Library/*VMS*.com|/CryptoPkg/Library/*VMS*.com.in|/CryptoPkg/Library/*/config.com:   --treat-as plaintext --add-action force-lf
+# Copied from /src/libs/:
+/CryptoPkg/Library/*.H:                                         --treat-as h
+/CryptoPkg/Library/*.cnf:                                       --treat-as hashtext
+/CryptoPkg/Library/*.crt:                                       --treat-as plaintext
+/CryptoPkg/Library/*.ctags:                                     --treat-as hashtext
+/CryptoPkg/Library/*.ec:                                        --treat-as hashtext
+/CryptoPkg/Library/*.key:                                       --treat-as plaintext
+/CryptoPkg/Library/*.num:                                       --treat-as plaintext
+/CryptoPkg/Library/*.p12:                                       --treat-as binary
+/CryptoPkg/Library/*.PL:                                        --treat-as perl
+/CryptoPkg/Library/*.pl.in:                                     --treat-as perl
+/CryptoPkg/Library/*.pem:                                       --treat-as plaintext
+/CryptoPkg/Library/*.pm.in:                                     --treat-as perl
+/CryptoPkg/Library/*.opt:                                       --treat-as plaintext
+/CryptoPkg/Library/*.sh.in:                                     --treat-as shell
+/CryptoPkg/Library/*.txt.attr:                                  --treat-as plaintext
+/CryptoPkg/Library*/openssl-mangling.h:                         --no-fix-header-guards
+/CryptoPkg/Library*/VBOX-UPDATE-NOTES:                          --treat-as text
+/CryptoPkg/Library*/VERSION.dat:                                --treat-as plaintext
+/CryptoPkg/Library*/apps/*.srl:                                 --treat-as plaintext
+/CryptoPkg/Library*/apps/tsget.in:                              --treat-as perl
+/CryptoPkg/Library*/apps/insta.ca.crt:                          --treat-as binary
+/CryptoPkg/Library*/build.info:                                 --treat-as hashtext
+/CryptoPkg/Library*/Configurations/*.conf:                      --treat-as perl
+/CryptoPkg/Library*/Configurations/common0.tmpl:                --treat-as perl
+/CryptoPkg/Library*/Configurations/descrip.mms.tmpl:            --treat-as perl
+/CryptoPkg/Library*/Configurations/INTERNALS.Configure:         --treat-as plaintext
+/CryptoPkg/Library*/Configurations/*akefile.tmpl:               --treat-as make
+/CryptoPkg/Library*/doc/*.el:                                   --treat-as plaintext
+/CryptoPkg/Library*/doc/*.odg:                                  --treat-as binary
+/CryptoPkg/Library*/doc/*.ods:                                  --treat-as binary
+/CryptoPkg/Library*/doc/*.plantuml:                             --treat-as plaintext
+/CryptoPkg/Library*/doc/life-cycles/*.dot:                      --treat-as c
+/CryptoPkg/Library*/demos/bio/descrip.mms:                      --treat-as make
+/CryptoPkg/Library*/external/perl/Text-Template-*/MANIFEST:     --treat-as plaintext
+/CryptoPkg/Library*/external/perl/Text-Template-*/SIGNATURE:    --treat-as plaintext
+/CryptoPkg/Library*/external/perl/Text-Template-*/t/*.t:        --treat-as perl
+/CryptoPkg/Library*/external/perl/Text-Template-*/t/*.t:        --treat-as perl
+/CryptoPkg/Library*/fuzz/*.config:                              --treat-as plaintext
+/CryptoPkg/Library*/providers/common/der/*.asn1:                --treat-as plaintext --add-action copyright-sql-style
+/CryptoPkg/Library*/providers/*.checksum*:                      --treat-as plaintext
+/CryptoPkg/Library*/providers/*.sources:                        --treat-as plaintext
+/CryptoPkg/Library*/os-dep/Apple/*.xcprivacy:                   --treat-as xml
+/CryptoPkg/Library*/test/*.ascii:                               --treat-as plaintext
+/CryptoPkg/Library*/test/*.cms:                                 --treat-as binary
+/CryptoPkg/Library*/test/*.csv:                                 --treat-as plaintext
+/CryptoPkg/Library*/test/*.csr:                                 --treat-as plaintext
+/CryptoPkg/Library*/test/*.der:                                 --treat-as binary
+/CryptoPkg/Library*/test/*.eml:                                 --treat-as plaintext
+/CryptoPkg/Library*/test/*.msb:                                 --treat-as plaintext
+/CryptoPkg/Library*/test/*.ors:                                 --treat-as plaintext
+/CryptoPkg/Library*/test/*.out:                                 --treat-as plaintext
+/CryptoPkg/Library*/test/*.pfx:                                 --treat-as binary
+/CryptoPkg/Library*/test/*.pkcs7:                               --treat-as plaintext
+/CryptoPkg/Library*/test/*.pvk:                                 --treat-as binary
+/CryptoPkg/Library*/test/*.scr:                                 --treat-as plaintext
+/CryptoPkg/Library*/test/*.sct:                                 --treat-as plaintext
+/CryptoPkg/Library*/test/*.tsr:                                 --treat-as binary
+/CryptoPkg/Library*/test/*.tsq:                                 --treat-as binary
+/CryptoPkg/Library*/test/*.tlssct:                              --treat-as binary
+/CryptoPkg/Library*/test/*.utf8:                                --treat-as plaintext
+/CryptoPkg/Library*/test/ssl_test.tmpl:                         --treat-as plaintext
+/CryptoPkg/Library*/test/*/plain_text:                          --treat-as plaintext
+/CryptoPkg/Library*/test/data*.bin:                             --treat-as plaintext
+/CryptoPkg/Library*/test/recipes/04-test_pem_reading_data/wellknown:         --treat-as plaintext
+/CryptoPkg/Library*/test/recipes/65-test_cmp_client_data/client.csr:         --treat-as binary
+/CryptoPkg/Library*/test/recipes/80-test_cms_data/ciphertext_from_1_1_1.cms: --treat-as plaintext
+/CryptoPkg/Library*/test/recipes/90-test_store_data/testrsa.msb:             --treat-as binary
+/CryptoPkg/Library*/tools/c_rehash.in:                          --treat-as perl
+/CryptoPkg/Library*/util/*.syms:                                --treat-as hashtext
+/CryptoPkg/Library*/util/markdownlint.rb:                       --treat-as hashtext
+
+#
+# VBoxPkg
+#
+/VBoxPkg/*:                                                 --allow-uefi-style-copyright
+/VBoxPkg/*.h:                                               --no-fix-header-guards
+/VBoxPkg/VBoxFsDxe/test/*:      --external-copyright --no-strip-trailing-blanks --no-fix-todos --strip-no-trailing-lines
+/VBoxPkg/VBoxMisc/efi-app/Readme.txt:                       --treat-as hashtext
+/VBoxPkg/Logo/Logo.idf:                                     --external-copyright --no-fix-header-guards
+/VBoxPkg/Logo/*.uni:                                        --external-copyright --no-fix-header-guards
+
+
+#
+# Files that are (C) oracle, but are not by us.
+#
+/OvmfPkg/Include/IndustryStandard/FusionMptScsi.h:          --no-update-copyright-year --no-update-license
+/OvmfPkg/Include/IndustryStandard/PvScsi.h:                 --no-update-copyright-year --no-update-license
+/OvmfPkg/MptScsiDxe/*:                                      --no-update-copyright-year --no-update-license
+/OvmfPkg/PvScsiDxe/*:                                       --no-update-copyright-year --no-update-license
+

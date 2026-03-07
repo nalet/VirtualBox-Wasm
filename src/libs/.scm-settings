@@ -1,0 +1,309 @@
+# $Id: .scm-settings 113233 2026-03-03 16:39:21Z alexander.rudnev@oracle.com $
+## @file
+# Source code massager settings for src/libs.
+#
+
+#
+# Copyright (C) 2022-2026 Oracle and/or its affiliates.
+#
+# This file is part of VirtualBox base platform packages, as
+# available from https://www.virtualbox.org.
+#
+# This program is free software; you can redistribute it and/or
+# modify it under the terms of the GNU General Public License
+# as published by the Free Software Foundation, in version 3 of the
+# License.
+#
+# This program is distributed in the hope that it will be useful, but
+# WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+# General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, see <https://www.gnu.org/licenses>.
+#
+# SPDX-License-Identifier: GPL-3.0-only
+#
+
+#
+# Reset the directory filter so we can scan lwip-2.2.1/doc/doxygen/output/*.
+#
+--filter-out-dirs  ""
+--filter-out-dirs  ".svn"
+
+#
+# Subdirectories are exported in full or not all at all.
+#
+--svn-sync-process-export subdir-either-or
+
+
+#
+# Default for all sub-dir content is external copyright and disabling almost all all rewriters
+#
+*!xcpt!*.kmk|.scm-settings|VBox*|vbox*|genjifaces.xsl|gen_python_deps.py|_iprt_atomic.h|xptc*_vbox.*|xpcom-namespace-cleanup.map|ipcMsg*.h|xpidl_idl.c|openssl-mangling.h|threads_iprt.c|old-solaris-asm-trick.h|mythread.h|sysdefs.h|tuklib_physmem.h|extF80_scale_extF80.c|*_sincos.*|extF80_log2.c|extF80_tan.c|*vbox/platform.h|jconfigint.h|sys_arch.c|/libslirp*/include/glib.h|/libslirp*/include/slirp/libslirp.h|/dxvk-*/src/dxvk/dxvk_video_decoder.*: \
+        --3rd-party --no-strip-trailing-blanks
+
+
+#
+# Generic 3rd party extension and file mappings:
+#
+*.adoc|*.build|*.checksrc|*.in|*.lua|*.cs|*.hlsl|*.js|*.svg|*.1|*.3|*.5|*.css|*.LICENSE|*.rtf|*.m4|*.tex: --treat-as plaintext
+.clang-format|.clangd|.git|COPYING|CHANGELOG|Makefile.mk|Makefile.soname|Dockerfile|BUILD.bazel|change.log|doxygen.config: --treat-as plaintext
+*.dsp|*.dsw|*.sln|*.Doxyfile:               --treat-as hashtext
+*.lib|*.chm|*.docx|*.icc|*.ppm:             --treat-as binary
+
+*.pod:                                      --treat-as plaintext
+*.pgm:                                      --treat-as binary --skip-unicode-checks --dont-set-svn-executable
+*.awk:                                      --treat-as shell
+*.hpp11:                                    --treat-as h
+config.h.*.*:                               --treat-as h
+*.vcproj|*.vcxproj|*.vcxproj.filters|*.plist|*.vsprops|*.csproj: --treat-as xml
+Makefile.release|*.mak|*.mk:                --treat-as make
+
+*vms*.com|*VMS*.com|/openssl*/config.com:   --treat-as plaintext --add-action force-lf
+
+
+#
+# library specific options.
+#
+/dx*/*.inl:             --treat-as h
+
+/dxmt*/*.obj:           --treat-as plaintext
+/dxmt*/*.metal:         --treat-as plaintext
+/dxmt*/*.options:       --treat-as plaintext
+/dxmt*/dxmt.conf:       --treat-as plaintext
+/dxmt-*/include/native/directx/d*.h:        --allow-lgpl-without-disclaimer
+/dxmt-*/include/native/directx/d*.inl:      --allow-lgpl-without-disclaimer
+
+/dxvk*/*.comp:          --treat-as plaintext
+/dxvk*/*.glsl:          --treat-as plaintext
+/dxvk*/*.vert:          --treat-as plaintext
+/dxvk*/*.frag:          --treat-as plaintext
+/dxvk*/*.sym:           --treat-as plaintext
+/dxvk*/*.geom:          --treat-as plaintext
+/dxvk*/*.cppm:          --treat-as plaintext
+/dxvk*/*.gn:            --treat-as plaintext
+/dxvk*/*.bf:            --treat-as plaintext
+/dxvk*/dep5:            --treat-as plaintext
+/dxvk*/RELEASE:         --treat-as plaintext
+/dxvk*/WORKSPACE:       --treat-as plaintext
+/dxvk*/dxvk.conf:       --treat-as plaintext
+/dxvk*/makeHeaders:     --treat-as shell
+/dxvk-*/include/native/directx/d*.h:        --allow-lgpl-without-disclaimer
+/dxvk-*/include/native/directx/d*.inl:      --allow-lgpl-without-disclaimer
+/dxvk-*/src/dxvk/dxvk_video_decoder.h:      --no-fix-header-guards
+
+/libjpeg*/java/doc/element-list:                     --treat-as plaintext
+/libjpeg*/java/doc/legal/ADDITIONAL_LICENSE_INFO:    --treat-as plaintext
+/libjpeg*/java/doc/legal/ASSEMBLY_EXCEPTION:         --treat-as plaintext
+/libjpeg*/java/MANIFEST.MF:                          --treat-as plaintext
+/libjpeg*/src/*-mapfile*:                            --treat-as plaintext
+/libjpeg*/release/make*.in:                          --treat-as shell
+/libjpeg*/testimages/*.scan:                         --treat-as plaintext
+
+/liblzma*/*.map:        --treat-as plaintext
+
+/libpng*/ANNOUNCE:              --treat-as plaintext
+/libpng*/*.dfa:                 --treat-as plaintext
+/libpng*/scripts/makefile.*:    --treat-as makefile
+
+/libpng*/ci/.shellcheckrc:                              --treat-as shell
+/libpng-*/contrib/gregbook/Makefile.*:                  --treat-as make
+/libpng-*/contrib/oss-fuzz/libpng_read_fuzzer.options:  --treat-as plaintext
+/libpng-*/contrib/oss-fuzz/png.dict:                    --treat-as hashtext --add-action force-lf
+/libpng-*/contrib/pngexif/.pylintrc:                    --treat-as plaintext
+/libpng-*/projects/owatcom/*.tgt:                       --treat-as plaintext
+/libpng-*/projects/owatcom/*.wpj:                       --treat-as plaintext
+/libpng-*/projects/owatcom/*.mak:                       --treat-as plaintext
+/libpng-*/projects/vstudio/*.props:                     --treat-as xml
+/libpng-*/scripts/pnglibconf.mak:                       --add-action force-lf --dont-set-svn-executable
+/libpng-*/scripts/*.mms:                                --treat-as make
+/libpng-*/scripts/macro.lst:                            --treat-as plaintext
+/libpng-*/scripts/pnglibconf.h.prebuilt:                --treat-as h
+/libpng-*/scripts/*.ppc:                                --treat-as plaintext --add-action force-lf
+/libpng-*/TRADEMARK:                                    --treat-as plaintext
+
+/libslirp*/include/glib.h:              --license-ose-dual
+/libslirp*/include/slirp/libslirp.h:    --license-ose-dual
+/libslirp*/.gitpublish:                 --treat-as plaintext
+/libslirp*/COPYRIGHT:                   --treat-as plaintext
+/libslirp-*/src/*.map:                  --treat-as plaintext
+/libslirp*/fuzzing/*-d:                 --treat-as plaintext
+/libslirp*/fuzzing/*-h:                 --treat-as plaintext
+/libslirp*/fuzzing/*.options:           --treat-as plaintext
+/libslirp*/fuzzing/tftp/toto:           --treat-as binary
+# a bunch of the .pcap and .pkt files are symlinks, so, we don't set svn:mime-type=octet on those.
+/libslirp*/fuzzing/*.pcap:              --treat-as binary
+/libslirp*/fuzzing/*.pkt:               --treat-as binary
+/libslirp*/fuzzing/IN_icmp6/ndp.pcap:                   --dont-set-svn-mime-type-on-binaries
+/libslirp*/fuzzing/IN_ip*-header/*.pcap:                --dont-set-svn-mime-type-on-binaries
+/libslirp*/fuzzing/IN_ip-header/*.pkt:                  --dont-set-svn-mime-type-on-binaries
+/libslirp*/fuzzing/IN_udp/dhcp_capture.pcap:            --dont-set-svn-mime-type-on-binaries
+/libslirp*/fuzzing/IN_udp/tftp_capture.pcap:            --dont-set-svn-mime-type-on-binaries
+/libslirp*/fuzzing/IN_udp/tftp_get_libslirp-txt.pcap:   --dont-set-svn-mime-type-on-binaries
+/libslirp*/fuzzing/IN_udp/*.pkt:                        --dont-set-svn-mime-type-on-binaries
+/libslirp*/fuzzing/IN_udp6/tftp_capture.pcap:           --dont-set-svn-mime-type-on-binaries
+/libslirp*/fuzzing/IN_udp6/tftp_get_libslirp-txt.pcap:  --dont-set-svn-mime-type-on-binaries
+
+/libssh*/*:                                             --allow-lgpl-without-disclaimer
+/libssh*/.arcconfig:                                    --treat-as plaintext
+/libssh*/*.toml:                                        --treat-as hashtext
+/libssh*/BSD:                                           --treat-as plaintext
+/libssh*/cmake/Modules/COPYING-CMAKE-SCRIPTS:           --treat-as plaintext
+/libssh*/doc/*.dox:                                     --treat-as c
+/libssh*/ABI/*.symbols:                                 --treat-as plaintext
+/libssh*/ABI/current:                                   --treat-as plaintext
+/libssh*/src/external/ge25519_base.data:                --treat-as h
+/libssh*/src/*.map:                                     --treat-as plaintext
+/libssh*/tests/fuzz/*corpus/*:                          --treat-as binary --dont-set-svn-mime-type-on-binaries
+/libssh*/tests/*.pub:                                   --treat-as plaintext
+/libssh*/tests/*.supp:                                  --treat-as plaintext
+/libssh*/tests/keys/*:                                  --treat-as plaintext
+/libssh*/tests/keys/ssh_host_key:                       --treat-as binary
+
+/libtpms*/CREDITS:                                      --treat-as plaintext
+/libtpms*/MAINTAINERS:                                  --treat-as plaintext
+/libtpms*/debian/*!xcpt!rules:                          --treat-as plaintext --add-action force-lf
+/libtpms*/debian/rules:                                 --treat-as shell
+/libtpms*/src/*.syms:                                   --treat-as plaintext
+/libtpms*/src/tpm2/crypto/openssl/*.txt?:               --treat-as plaintext
+/libtpms*/src/*.inl:                                    --treat-as h
+/libtpms*/tests/common:                                 --treat-as hashtext
+/libtpms*/tests/corpus-execute-command/*:               --treat-as binary
+
+/libvorbis*/vq/*.vqs:                                   --treat-as plaintext
+/libvorbis*/doc/*.cfg:                                  --treat-as plaintext
+/libvorbis*/doc/Vorbis_I_spec.html:                     --skip-unicode-checks
+/libvorbis*/macosx/*InfoPlist.strings:                  --treat-as binary
+/libvorbis*/macosx/Vorbis.xcodeproj/project.pbxproj:    --treat-as plaintext
+/libvorbis*/symbian/vorbis.mmp:                         --treat-as h
+/libvorbis*/win32/VS2010/libogg.props:                  --treat-as xml
+
+/libvpx*/*.dox:                                         --treat-as h
+/libvpx*/*.doxy_template:                               --treat-as hashtext
+/libvpx*/.mailmap:                                      --treat-as plaintext
+/libvpx*/codereview.settings:                           --treat-as hashtext
+/libvpx*/PATENTS:                                       --treat-as plaintext
+/libvpx*/third_party/googletest/src/CONTRIBUTORS:       --treat-as hashtext
+/libvpx*/tools/*.pde:                                   --treat-as c
+/libvpx*/test/*.sha1:                                   --treat-as plaintext
+/libvpx*/*exports_*:                                    --treat-as plaintext
+
+/libxml2*/Copyright:                                    --treat-as plaintext
+/libxml2*/*.doap:                                       --treat-as xml
+/libxml2*/*.syms:                                       --treat-as plaintext
+/libxml2*/python/*.toml:                                --treat-as plaintext
+/libxml2*/python/*.py:                                  --skip-unicode-checks
+/libxml2*/python/*.py.in:                               --treat-as python
+/libxml2*/os400/libxmlrpg/*.rpgle:                      --treat-as plaintext --skip-unicode-checks
+/libxml2*/win32/*.msvc:                                 --treat-as hashtext
+/libxml2*/win32/Makefile.*:                             --treat-as make
+/libxml2*/fuzz/*.dict:                                  --treat-as hashtext
+/libxml2*/fuzz/*.options:                               --treat-as plaintext
+/libxml2*/fuzz/static_seed/regexp/*:                    --treat-as binary
+/libxml2*/fuzz/static_seed/uri/*:                       --treat-as binary
+/libxml2-*/include/vboxconfig.h:                        --3rd-party
+
+/lwip*/BUILDING:                                        --treat-as plaintext
+/lwip*/FEATURES:                                        --treat-as plaintext
+/lwip*/UPGRADING:                                       --treat-as plaintext
+/lwip*/FILES:                                           --treat-as plaintext
+/lwip*/src/netif/ppp/PPPD_FOLLOWUP:                     --treat-as plaintext
+
+/openssl*/*.H:                                          --treat-as h
+/openssl*/*.cnf:                                        --treat-as hashtext
+/openssl*/*.crt:                                        --treat-as plaintext
+/openssl*/*.ctags:                                      --treat-as hashtext
+/openssl*/*.ec:                                         --treat-as hashtext
+/openssl*/*.key:                                        --treat-as plaintext
+/openssl*/*.num:                                        --treat-as plaintext
+/openssl*/*.p12:                                        --treat-as binary
+/openssl*/*.PL:                                         --treat-as perl
+/openssl*/*.pl.in:                                      --treat-as perl
+/openssl*/*.pem:                                        --treat-as plaintext
+/openssl*/*.pm.in:                                      --treat-as perl
+/openssl*/*.opt:                                        --treat-as plaintext
+/openssl*/*.sh.in:                                      --treat-as shell
+/openssl*/*.txt.attr:                                   --treat-as plaintext
+/openssl*/openssl-mangling.h:                           --no-fix-header-guards
+/openssl*/VBOX-UPDATE-NOTES:                            --treat-as text
+/openssl*/VERSION.dat:                                  --treat-as plaintext
+/openssl*/apps/*.srl:                                   --treat-as plaintext
+/openssl*/apps/tsget.in:                                --treat-as perl
+/openssl*/apps/insta.ca.crt:                            --treat-as binary
+/openssl*/build.info:                                   --treat-as hashtext
+/openssl*/Configurations/*.conf:                        --treat-as perl
+/openssl*/Configurations/common0.tmpl:                  --treat-as perl
+/openssl*/Configurations/descrip.mms.tmpl:              --treat-as perl
+/openssl*/Configurations/INTERNALS.Configure:           --treat-as plaintext
+/openssl*/Configurations/*akefile.tmpl:                 --treat-as make
+/openssl*/doc/*.el:                                     --treat-as plaintext
+/openssl*/doc/*.odg:                                    --treat-as binary
+/openssl*/doc/*.ods:                                    --treat-as binary
+/openssl*/doc/*.plantuml:                               --treat-as plaintext
+/openssl*/doc/life-cycles/*.dot:                        --treat-as c
+/openssl*/demos/bio/descrip.mms:                        --treat-as make
+/openssl*/external/perl/Text-Template-*/MANIFEST:       --treat-as plaintext
+/openssl*/external/perl/Text-Template-*/SIGNATURE:      --treat-as plaintext
+/openssl*/external/perl/Text-Template-*/t/*.t:          --treat-as perl
+/openssl*/external/perl/Text-Template-*/t/*.t:          --treat-as perl
+/openssl*/fuzz/*.config:                                --treat-as plaintext
+/openssl*/providers/common/der/*.asn1:                  --treat-as plaintext --add-action copyright-sql-style
+/openssl*/providers/*.checksum*:                        --treat-as plaintext
+/openssl*/providers/*.sources:                          --treat-as plaintext
+/openssl*/os-dep/Apple/*.xcprivacy:                     --treat-as xml
+/openssl*/test/*.ascii:                                 --treat-as plaintext
+/openssl*/test/*.cms:                                   --treat-as binary
+/openssl*/test/*.csv:                                   --treat-as plaintext
+/openssl*/test/*.csr:                                   --treat-as plaintext
+/openssl*/test/*.der:                                   --treat-as binary
+/openssl*/test/*.eml:                                   --treat-as plaintext
+/openssl*/test/*.msb:                                   --treat-as plaintext
+/openssl*/test/*.ors:                                   --treat-as plaintext
+/openssl*/test/*.out:                                   --treat-as plaintext
+/openssl*/test/*.pfx:                                   --treat-as binary
+/openssl*/test/*.pkcs7:                                 --treat-as plaintext
+/openssl*/test/*.pvk:                                   --treat-as binary
+/openssl*/test/*.scr:                                   --treat-as plaintext
+/openssl*/test/*.sct:                                   --treat-as plaintext
+/openssl*/test/*.tsr:                                   --treat-as binary
+/openssl*/test/*.tsq:                                   --treat-as binary
+/openssl*/test/*.tlssct:                                --treat-as binary
+/openssl*/test/*.utf8:                                  --treat-as plaintext
+/openssl*/test/ssl_test.tmpl:                           --treat-as plaintext
+/openssl*/test/*/plain_text:                            --treat-as plaintext
+/openssl*/test/data*.bin:                               --treat-as plaintext
+/openssl*/test/recipes/04-test_pem_reading_data/wellknown:          --treat-as plaintext
+/openssl*/test/recipes/65-test_cmp_client_data/client.csr:          --treat-as binary
+/openssl*/test/recipes/80-test_cms_data/ciphertext_from_1_1_1.cms:  --treat-as plaintext
+/openssl*/test/recipes/90-test_store_data/testrsa.msb:              --treat-as binary
+/openssl*/tools/c_rehash.in:                            --treat-as perl
+/openssl*/util/*.syms:                                  --treat-as hashtext
+/openssl*/util/markdownlint.rb:                         --treat-as hashtext
+
+/softfloat*/*.diff:                                     --treat-as plaintext
+
+/xpcom18a4/*.idl:                                       --treat-as plaintext --add-action copyright-c-style
+/xpcom18a4/xpcom-namespace-cleanup.map:                 --treat-as .scm-settings
+/xpcom18a4/nsprpub/pr/include/md/_vbox.cfg:              --treat-as h
+
+/zlib*/INDEX:                                           --treat-as plaintext
+/zlib*/zconf.h.cmakein:                                 --treat-as h
+/zlib*/zlib.map:                                        --treat-as plaintext
+/zlib*/zlib.pc.cmakein:                                 --treat-as plaintext
+/zlib*/*/Makefile.*:                                    --treat-as make
+/zlib*/contrib/*.pas:                                   --treat-as plaintext
+/zlib*/contrib/ada/*.adb:                               --treat-as plaintext --add-action copyright-sql-style
+/zlib*/contrib/ada/*.ads:                               --treat-as plaintext --add-action copyright-sql-style
+/zlib*/contrib/ada/*.gpr:                               --treat-as plaintext
+/zlib*/contrib/blast/test.pk:                           --treat-as binary
+/zlib*/contrib/dotzlib/DotZLib/*.cs:                    --skip-unicode-checks
+/zlib*/contrib/puff/zeros.raw:                          --treat-as binary
+/zlib*/old/descrip.mms:                                 --treat-as make
+/zlib*/os400/bndsrc:                                    --treat-as plaintext
+/zlib*/qnx/package.qpg:                                 --treat-as xml
+/zlib*/test/*:                                          --svn-sync-process-export subdir-either-or
+/zlib*/msdos/*:                                         --svn-sync-process-export subdir-either-or
+/zlib*/*.cmake:                                         --svn-sync-process-export subdir-either-or
+/zlib*/*.in:                                            --svn-sync-process-export subdir-either-or
+/zlib*/*.txt:                                           --svn-sync-process-export subdir-either-or

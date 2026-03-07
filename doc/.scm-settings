@@ -1,0 +1,69 @@
+# $Id: .scm-settings 112403 2026-01-11 19:29:08Z knut.osmundsen@oracle.com $
+## @file
+# Source code massager settings for the docs.
+#
+
+#
+# Copyright (C) 2010-2026 Oracle and/or its affiliates.
+#
+# This file is part of VirtualBox base platform packages, as
+# available from https://www.virtualbox.org.
+#
+# This program is free software; you can redistribute it and/or
+# modify it under the terms of the GNU General Public License
+# as published by the Free Software Foundation, in version 3 of the
+# License.
+#
+# This program is distributed in the hope that it will be useful, but
+# WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+# General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, see <https://www.gnu.org/licenses>.
+#
+# SPDX-License-Identifier: GPL-3.0-only
+#
+
+# Much is exported but not everything.
+--svn-sync-process-export all
+/rtf_to_html|/rtf_to_txt: --svn-sync-process-export none
+
+
+/*.html: --treat-as plaintext
+/*.rtf:  --treat-as binary
+/*.doc:  --treat-as binary
+/*.odt:  --treat-as binary
+/*.ods:  --treat-as binary
+/*.odg:  --treat-as binary
+/*.sxi:  --treat-as binary
+/*.vpp:  --treat-as binary
+/*.wiki: --treat-as plaintext
+
+# Abusing --external-copyright.
+/*.txvpck:                      --treat-as xml --external-copyright --no-convert-eol
+/*.txvStateDiagram20:           --treat-as xml --external-copyright --no-convert-eol
+/*.txvComponentDiagram20:       --treat-as xml --external-copyright --no-convert-eol
+/*.xmi:                         --treat-as xml --external-copyright --no-convert-eol
+/*.tpx:                         --treat-as xml --external-copyright --no-convert-eol
+/*.graphml:                     --treat-as xml --external-copyright --no-convert-eol
+
+/*.iuml:                        --treat-as plaintext --add-action copyright-tick-style
+
+/*.*: --svn-sync-process-export all
+
+/graphml*:  --svn-sync-process-export none
+/GUI*:      --svn-sync-process-export none
+/iuml*:     --svn-sync-process-export none
+/tg*:       --svn-sync-process-export none
+/vp*:       --svn-sync-process-export none
+/xmi*:      --svn-sync-process-export none
+/License.*: --svn-sync-process-export none
+
+## @todo export: probably not.
+/VBox-7.1-thoughts-on-ARM.txt:      --svn-sync-process-export none
+
+## @todo export: yes?
+/CFG.txt:                           --svn-sync-process-export none
+/TMTIMER-Statechart-Diagram.gif:    --svn-sync-process-export none
+

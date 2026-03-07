@@ -1,0 +1,35 @@
+# VirtualBox build outputs
+out/
+obj/
+
+# kBuild generated files
+*.o
+*.d
+*.dep
+*.a
+*.so
+*.so.*
+*.dylib
+
+# Emscripten outputs
+*.wasm
+*.js.map
+*.bc
+
+# Generated config headers
+AutoConfig.kmk
+
+# Editor / OS
+.DS_Store
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
+
+# Large tool binaries (downloaded at build time)
+tools/linux.amd64/
+tools/linux.x86/
+tools/darwin.amd64/
+tools/win.amd64/
+tools/win.x86/

@@ -1,0 +1,103 @@
+# $Id: .scm-settings 112403 2026-01-11 19:29:08Z knut.osmundsen@oracle.com $
+## @file
+# Source code massager settings for the Main API.
+#
+
+#
+# Copyright (C) 2010-2026 Oracle and/or its affiliates.
+#
+# This file is part of VirtualBox base platform packages, as
+# available from https://www.virtualbox.org.
+#
+# This program is free software; you can redistribute it and/or
+# modify it under the terms of the GNU General Public License
+# as published by the Free Software Foundation, in version 3 of the
+# License.
+#
+# This program is distributed in the hope that it will be useful, but
+# WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+# General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, see <https://www.gnu.org/licenses>.
+#
+# SPDX-License-Identifier: GPL-3.0-only
+#
+
+
+# All is exported.
+--svn-sync-process-export all
+
+# No 'rc' variables allowed, use hrc, vrc, ++ instead according to the type.
+/*: --no-rc-use
+
+# cbindings have different licences.
+/cbinding/*.h:                          --license-lgpl
+/cbinding/VBoxCAPIGlue.c:               --license-mit
+/cbinding/VBoxCAPIGlue.h.in:            --license-mit --treat-as .h
+/cbinding/makefile.tstCAPIGlue:         --license-mit --treat-as Makefile
+
+# The Python bindings is licensed under dual GPL and CDDL.
+/glue/python/vboxapi.py:                --license-ose-dual
+/glue/python/pyproject.toml:            --license-ose-dual --treat-as qt-pro
+
+# Source dirs.
+/src-all/VBoxAPI-end*.d:                    --external-copyright # file tails
+/src-client/README.testing:                 --treat-as plaintext
+/src-server/*.ids:                          --treat-as hashtext --external-copyright
+/src-all/win/VBoxAPIWrap-precomp_vcc.h:     --no-fix-header-guards
+/src-all/xpcom/VBoxAPIWrap-precomp_gcc.h:   --no-fix-header-guards
+/src-client/win/precomp_vcc.h:              --no-fix-header-guards
+/src-client/xpcom/precomp_gcc.h:            --no-fix-header-guards
+/src-server/win/precomp_vcc.h:              --no-fix-header-guards
+/src-server/xpcom/precomp_gcc.h:            --no-fix-header-guards
+
+/*.h:                                       --guard-relative-to-dir .        --guard-prefix MAIN_INCLUDED_SRC_
+/include/*.h:                               --guard-relative-to-dir include  --guard-prefix MAIN_INCLUDED_
+/include/*.h:                               --guard-relative-to-dir include  --guard-prefix MAIN_INCLUDED_
+/cbinding/VBoxCAPI*.h:                      --guard-relative-to-dir ''
+/cbinding/VBoxCAPI*.h:                      --guard-relative-to-dir ''
+/cbinding/VBoxCAPIGlue.h.in:                --guard-relative-to-dir ''
+
+# IDL and XML
+/idl/VirtualBox.xidl:                       --treat-as xml
+/idl/VirtualBox.dtd:                        --treat-as xml
+
+/xml/VirtualBox-settings.xsd:               --treat-as xml
+/xml/samples/*.xml:                         --external-copyright
+
+# We don't have any copyright or license in the .cfg and .sif files.
+# Exploint --external-copyright to check that this remains the case.
+# This does not imply anything wrt to the copyright status of the files.
+/UnattendedTemplates/*.cfg:                 --external-copyright --treat-as shell
+/UnattendedTemplates/*.sif:                 --external-copyright
+/UnattendedTemplates/*.xml:                 --dont-set-svn-eol --no-convert-eol
+/UnattendedTemplates/os2_response_files.rsp:    --treat-as batch --external-copyright
+/UnattendedTemplates/ubuntu_autoinstall_*data:  --treat-as shell --external-copyright
+
+# Secure boot certificates.
+/Certificates/*.crt:                    --treat-as binary
+
+# The webservice is fun.
+/webservice/Makefile.webtest:           --treat-as Makefile
+/webservice/types.txt:                  --treat-as plaintext --external-copyright
+/webservice/MANIFEST.MF.in:             --treat-as plaintext --external-copyright --del-action force-native-eol --add-action force-lf
+
+# The webservice samples are MIT and need some hacks to handle unusual file types.
+/webservice/samples/*:                  --license-mit
+/webservice/samples/*/Makefile.glue:    --treat-as Makefile
+/webservice/samples/php/clienttest.php: --treat-as .c
+
+# Testcases.
+/testcase/makefile.tstVBoxAPIWin:       --treat-as Makefile
+/testcase/makefile.tstVBoxAPIXPCOM:     --treat-as Makefile
+/testcase/ovf-dummy.vmdk:               --treat-as binary
+/testcase/*.ovf:                        --treat-as xml --external-copyright --dont-set-svn-keywords
+/testcase/VBoxVBTest/*.frm:             --treat-as vbs --external-copyright ## @todo copyright the file!
+/testcase/VBoxVBTest/*.frx:             --treat-as binary
+/testcase/VBoxVBTest/VBoxVBTest.vbp:    --treat-as plaintext
+/testcase/*: --unrestricted-rc-use      # for now:
+/testcase/tstUnattendedScript-1.expected: --treat-as plaintext --external-copyright
+/testcase/tstUnattendedScript-1.template: --treat-as plaintext --external-copyright
+

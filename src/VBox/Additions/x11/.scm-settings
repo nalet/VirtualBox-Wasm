@@ -1,0 +1,56 @@
+# $Id: .scm-settings 112403 2026-01-11 19:29:08Z knut.osmundsen@oracle.com $
+## @file
+# Source code massager settings for the x11 guest addition components.
+#
+
+#
+# Copyright (C) 2010-2026 Oracle and/or its affiliates.
+#
+# This file is part of VirtualBox base platform packages, as
+# available from https://www.virtualbox.org.
+#
+# This program is free software; you can redistribute it and/or
+# modify it under the terms of the GNU General Public License
+# as published by the Free Software Foundation, in version 3 of the
+# License.
+#
+# This program is distributed in the hope that it will be useful, but
+# WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+# General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, see <https://www.gnu.org/licenses>.
+#
+# SPDX-License-Identifier: GPL-3.0-only
+#
+
+# Exporting everything.
+--svn-sync-process-export all
+
+# This directory.
+/undefined_*:                       --treat-as hashtext --external-copyright --del-action force-native-eol --add-action force-lf
+/undefined_*:                       --no-strip-trailing-blanks # bugs in content!
+
+# vboxvideo
+/vboxvideo/*.c|/vboxvideo/*.h: --license-mit
+/vboxvideo/vboxvideo*.c|/vboxvideo/vboxvideo*.h: --license-based-on-mit --no-convert-tabs --dont-set-svn-keywords
+/vboxvideo/edid.c: --license-based-on-mit
+/vboxvideo/setmode.c: --license-based-on-mit
+
+/VBoxClient/display-svga-xf86cvt.cpp: --license-based-on-mit
+
+# Installer
+/Installer/*.conf:                  --treat-as hashtext  --del-action force-native-eol --add-action force-lf --external-copyright
+/Installer/*.desktop:               --treat-as plaintext --del-action force-native-eol --add-action force-lf
+/Installer/98vboxadd-xclient:       --treat-as .sh
+/Installer/vboxvideo.ids:           --treat-as plaintext --del-action force-native-eol --add-action force-lf
+
+# wlInclude
+/wlInclude/*:                       --3rd-party
+
+# x11include
+/x11include/*:                      --3rd-party
+/x11include/*.h.in:                 --treat-as .h
+/x11include/XFree86-4.3/*:          --skip-unicode-checks
+

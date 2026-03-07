@@ -1,0 +1,42 @@
+# $Id: .scm-settings 112403 2026-01-11 19:29:08Z knut.osmundsen@oracle.com $
+## @file
+# Source code massager settings for the PDM Devices and Drivers.
+#
+
+#
+# Copyright (C) 2019-2026 Oracle and/or its affiliates.
+#
+# This file is part of VirtualBox base platform packages, as
+# available from https://www.virtualbox.org.
+#
+# This program is free software; you can redistribute it and/or
+# modify it under the terms of the GNU General Public License
+# as published by the Free Software Foundation, in version 3 of the
+# License.
+#
+# This program is distributed in the hope that it will be useful, but
+# WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+# General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, see <https://www.gnu.org/licenses>.
+#
+# SPDX-License-Identifier: GPL-3.0-only
+#
+
+# Export almost everything.
+--svn-sync-process-export all
+/Bus/*PciRaw.*: --svn-sync-process-export none
+## @todo export: why isn't this exported?
+/Network/scripts/ArpValidator.py: --svn-sync-process-export none
+
+/*.h: --guard-relative-to-dir .
+/Graphics/vmsvga_glext/*.h|/Graphics/vmsvga/*.h: --guard-relative-to-dir ''
+/*.h: --only-guest-host-page
+
+# Same as for the VMM, careful with page stuff.
+/*.h:   --only-guest-host-page --no-ASMMemPage-use
+/*.cpp: --only-guest-host-page --no-ASMMemPage-use
+/*.m:   --only-guest-host-page --no-ASMMemPage-use
+

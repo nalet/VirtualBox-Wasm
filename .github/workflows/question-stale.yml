@@ -1,0 +1,28 @@
+name: Close stale questions
+
+on:
+  schedule:
+    - cron: '26 6 * * *'
+  workflow_dispatch:
+
+jobs:
+  close-stale-questions:
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+    steps:
+      - name: Mark and close stale issues
+        uses: actions/stale@v9
+        with:
+          days-before-stale: 42
+          days-before-close: 28
+          days-before-pr-stale: -1
+          days-before-pr-close: -1
+          any-of-labels: 'question'
+          labels-to-add-when-unstale: 'answered'
+          labels-to-remove-when-stale: 'answered'
+          stale-issue-label: 'stale'
+          stale-issue-message: |
+            Hi there — it looks like a member of the VirtualBox team requested additional information, but we haven’t received a response yet. Please update this issue within the next four weeks. After that, it may be automatically closed. If you need additional clarification or time, please let us know!
+          close-issue-message: |
+            Hi! We’re going to close this issue for now since it’s labeled question and hasn’t had any activity for at least ten weeks. If you still need help, please feel free to reopen this issue or start a new one. We’ll be happy to take another look.

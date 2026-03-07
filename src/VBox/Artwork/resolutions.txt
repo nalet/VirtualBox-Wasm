@@ -1,0 +1,22 @@
+The following pixel resolutions are needed for proper icons on all
+platforms (32-bit / RGB+A):
+
+16
+20
+24 (Windows)
+32
+40
+48 (Windows)
+64
+128
+256 (Vista)
+512 (Mac)
+
+In addition the following sizes are required in 256 colors (adaptive palette)
+and if possible 16 color (windows system palette) for making Windows icons:
+
+16
+24
+32
+48
+

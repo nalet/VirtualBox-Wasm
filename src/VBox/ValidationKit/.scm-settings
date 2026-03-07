@@ -1,0 +1,89 @@
+# $Id: .scm-settings 112403 2026-01-11 19:29:08Z knut.osmundsen@oracle.com $
+## @file
+# Source code massager settings for the Validation Kit.
+#
+
+#
+# Copyright (C) 2017-2026 Oracle and/or its affiliates.
+#
+# This file is part of VirtualBox base platform packages, as
+# available from https://www.virtualbox.org.
+#
+# This program is free software; you can redistribute it and/or
+# modify it under the terms of the GNU General Public License
+# as published by the Free Software Foundation, in version 3 of the
+# License.
+#
+# This program is distributed in the hope that it will be useful, but
+# WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+# General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, see <https://www.gnu.org/licenses>.
+#
+# The contents of this file may alternatively be used under the terms
+# of the Common Development and Distribution License Version 1.0
+# (CDDL), a copy of it is provided in the "COPYING.CDDL" file included
+# in the VirtualBox distribution, in which case the provisions of the
+# CDDL are applicable instead of those of the GPL.
+#
+# You may elect to license modified versions of this file under the
+# terms and conditions of either the GPL or the CDDL or both.
+#
+# SPDX-License-Identifier: GPL-3.0-only OR CDDL-1.0
+#
+
+# Most of this should be exported.
+--svn-sync-process-export all
+/tests/api/tdOci*|/tests/api/oci*|/tests/api/tdCloud*:   --svn-sync-process-export none
+## @todo export: Why is the docker stuff kept private?
+/testmanager/docker*:                   --svn-sync-process-export none
+## @todo export: Why is the usbtest.service kept private?
+/utils/usb/linux/usbtest.service:       --svn-sync-process-export none
+
+# The validation kit is dual licensed.
+--license-ose-dual
+
+*.c16:                                  --treat-as .c
+*.c32:                                  --treat-as .c
+*.c64:                                  --treat-as .c
+
+*.css:                                  --treat-as .h --no-fix-header-guards
+*.js:                                   --treat-as .h --no-fix-header-guards
+
+/testdriver/*.ps1:                      --treat-as Makefile
+/testmanager/apache-template-*.conf:    --treat-as Makefile
+/testmanager/misc/htpasswd-*:           --treat-as plaintext
+
+# No (C) or license in the html templates.
+/testmanager/webui/*.html:              --external-copyright # generated from the .txt files
+
+# Some stuff without (easily locatable) licenses and such.
+/docs/*.html:                           --external-copyright # generated from the .txt files
+
+# XML for database diagrams.
+/testmanager/db/TestManagerDatabase.dmd:    --3rd-party --treat-as xml
+/testmanager/db/TestManagerDatabase/*.xml:  --3rd-party
+
+# Test data.
+/tests/*.nvram:                         --treat-as binary
+/tests/*.pem:                           --treat-as plaintext --no-strip-trailing-blanks
+/tests/*.ova:                           --treat-as binary
+/tests/*.vdi:                           --treat-as binary
+/utils/usb/linux/usbtest.service:       --treat-as plaintext --del-action force-native-eol --add-action force-lf
+
+# TXS configure files.
+/utils/TestExecServ/linux/*.desktop:    --treat-as plaintext --del-action force-native-eol --add-action force-lf
+/utils/TestExecServ/linux/*.service:    --treat-as plaintext --del-action force-native-eol --add-action force-lf
+/utils/TestExecServ/win/*.reg:          --treat-as plaintext --del-action force-native-eol --add-action force-crlf
+
+# misc
+/bootsectors/bs3kit/bs3kit-mangling-code.h:        --no-fix-header-guards
+/bootsectors/bs3kit/bs3kit-mangling-code-define.h: --no-fix-header-guards
+/bootsectors/bs3kit/bs3kit-mangling-code-undef.h:  --no-fix-header-guards
+/bootsectors/bs3kit/bs3kit-template-header.h:      --no-fix-header-guards
+/bootsectors/bs3kit/bs3kit-template-footer.h:      --no-fix-header-guards
+/bootsectors/bs3kit/bs3-cmn-instantiate-common.h:  --no-fix-header-guards
+/bootsectors/bs3kit/*.h: --guard-relative-to-dir bootsectors/bs3kit/ --guard-prefix BS3KIT_INCLUDED_
+

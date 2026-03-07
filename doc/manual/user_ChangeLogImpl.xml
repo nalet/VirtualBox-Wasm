@@ -1,0 +1,104 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+    Copyright (C) 2006-2026 Oracle and/or its affiliates.
+
+    This file is part of VirtualBox base platform packages, as
+    available from https://www.virtualbox.org.
+
+    This program is free software; you can redistribute it and/or
+    modify it under the terms of the GNU General Public License
+    as published by the Free Software Foundation, in version 3 of the
+    License.
+
+    This program is distributed in the hope that it will be useful, but
+    WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+    General Public License for more details.
+
+    You should have received a copy of the GNU General Public License
+    along with this program; if not, see <https://www.gnu.org/licenses>.
+
+    SPDX-License-Identifier: GPL-3.0-only
+-->
+
+<!--
+Release change log structure
+
+Each release has a matching log of changes which were made for that and
+earlier releases. Earlier releases means anything with a lower number (e.g.
+5.0.18 is lower than 5.1.2) which was released before this one. The log is
+kept in the file doc/manual/user_ChangeLogImpl.xml. Anything worth mentioning,
+particularly new features and fixed bugs, with a trac bug number if possible,
+should be added to the top of the change log (that is, the section for the
+upcoming release) for the branch in which it first appears - stable or
+development - before the next release. If you back-port it to older branches
+please add an entry there too. When a new major release is made, change log
+sections for earlier releases are merged in.
+
+Change log sections are split into two groups: major new features (normally
+only for dot zero releases) and fixes. In addition, the entries in each group
+are ordered as follows:
+
+    VMM-related entries (most important)
+    GUI-related entries (most visible for users)
+    Device-related entries
+    VBoxManage/API/Main-related entries
+    Host-related entries
+    Guest-related entries
+    BIOS/EFI/ACPI-related entries
+
+Please do further ordering as seems appropriate by importance and visibility for
+users, e.g. audio before serial ports and generally Windows before Linux.  Please
+also try to describe the user impact, not the technical details, and only use
+technical terms if no non-technical ones are clear enough.
+
+Rules for adding a changelog entry to make them look more uniform:
+
+    1. Begin the entry with an UPPERCASE letter, e.g. "Foo: Fixed" vs. "Foo: fixed"
+    2. Use the past form of something, e.g. "Fixed ..." vs. "Fix ..."
+    3. No dot (.) after the entry, e.g. "<para>Foo: Bar</para>" vs. "<para>Foo: Bar.</para>"
+    4. Use TWO (2) spaces for indentation
+    5. Use line breaks when hitting column 80
+
+    Full example:
+
+      <listitem>
+        <para>Foo: Fixed something really important, really really long line
+          with lots more text not fitting into 80 columns</para>
+      </listitem>
+-->
+<chapter>
+
+<!-- HACK ALERT! Seems we must have a single top level element for xi:include to work.
+                           So, we use chapter and xpointer="xpointer(/chapter/)" with xi:include. -->
+  <sect1>
+
+    <title>Version X.Y.0 (date TBD)</title>
+
+    <para>This is a major update. The following new features were added:</para>
+
+    <itemizedlist>
+
+      <listitem>
+        <para>Building the OSE Edition: Implemented a new configure.py script which
+          unifies the ./configure (non-Windows) and configure.vbs (Windows) scripts
+          Please adjust your building process accordingly, as the compatibility wrapper
+          scripts ./configure and configure.vbs are now marked as being deprecated and
+          will be removed in a future version of VirtualBox.</para>
+      </listitem>
+
+    </itemizedlist>
+
+    <para>In addition, the following items were fixed or added:</para>
+
+    <itemizedlist>
+
+      <listitem>
+        <para>placeholder</para>
+      </listitem>
+
+    </itemizedlist>
+
+  </sect1>
+
+</chapter>

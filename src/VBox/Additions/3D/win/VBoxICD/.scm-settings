@@ -1,0 +1,34 @@
+# $Id: .scm-settings 112403 2026-01-11 19:29:08Z knut.osmundsen@oracle.com $
+## @file
+# Source code massager settings for VBoxGL.
+#
+
+#
+# Copyright (C) 2010-2026 Oracle and/or its affiliates.
+#
+# This file is part of VirtualBox base platform packages, as
+# available from https://www.virtualbox.org.
+#
+# This program is free software; you can redistribute it and/or
+# modify it under the terms of the GNU General Public License
+# as published by the Free Software Foundation, in version 3 of the
+# License.
+#
+# This program is distributed in the hope that it will be useful, but
+# WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+# General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, see <https://www.gnu.org/licenses>.
+#
+# SPDX-License-Identifier: GPL-3.0-only
+#
+
+## @todo r=bird: Someone please explain how these two files are generated!
+## Looks like mesa/mesa-24.0.2/src/gallium/targets/libgl-gdi/opengl32.def.in
+## is the source and that mesa-24.0.2/bin/gen_vs_module_defs.py (or something)
+## have been used do the mangling.  So, external-copyright is probably
+## approrpiate here, then.
+/opengl32*.def: --external-copyright --no-convert-tabs
+

@@ -1,0 +1,5 @@
+/wine_x11drv*
+/wine_ttydrv*
+/common
+/FetchDir
+/darwin

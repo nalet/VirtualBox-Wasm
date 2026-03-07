@@ -1,0 +1,76 @@
+# $Id: .scm-settings 112403 2026-01-11 19:29:08Z knut.osmundsen@oracle.com $
+## @file
+# Source code massager settings for the host installers.
+#
+
+#
+# Copyright (C) 2010-2026 Oracle and/or its affiliates.
+#
+# This file is part of VirtualBox base platform packages, as
+# available from https://www.virtualbox.org.
+#
+# This program is free software; you can redistribute it and/or
+# modify it under the terms of the GNU General Public License
+# as published by the Free Software Foundation, in version 3 of the
+# License.
+#
+# This program is distributed in the hope that it will be useful, but
+# WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+# General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, see <https://www.gnu.org/licenses>.
+#
+# The contents of this file may alternatively be used under the terms
+# of the Common Development and Distribution License Version 1.0
+# (CDDL), a copy of it is provided in the "COPYING.CDDL" file included
+# in the VirtualBox distribution, in which case the provisions of the
+# CDDL are applicable instead of those of the GPL.
+#
+# You may elect to license modified versions of this file under the
+# terms and conditions of either the GPL or the CDDL or both.
+#
+# SPDX-License-Identifier: GPL-3.0-only OR CDDL-1.0
+#
+
+# Almost all is exported.
+--svn-sync-process-export all
+/win/ca/bootstrap-ca.sh|/win/ca/issue-cert.sh:  --svn-sync-process-export none
+
+# Driver code is dual licensed, except for adpctl.
+--license-ose-dual
+/adpctl/*: --license-ose-gpl
+
+# External stuff.
+/Support/freebsd/SUPDrv-freebsd.c:              --external-copyright
+/Support/freebsd/SUPDrv-freebsd.def:            --no-update-copyright-year --no-update-license
+/Support/os2/SUPDrv-os2.cpp:                    --external-copyright
+/Support/os2/SUPDrvA-os2.asm:                   --external-copyright
+/VBoxNetAdp/freebsd/VBoxNetAdp-freebsd.c:       --external-copyright
+/VBoxNetFlt/freebsd/VBoxNetFlt-freebsd.c:       --external-copyright
+/VBoxUSB/solaris/include/usbai_private.h:       --3rd-party
+
+# No license header (public domain).
+/VBoxUSB/os2/usbcalls.c:                        --external-copyright
+/VBoxUSB/os2/usbcalls.h:                        --external-copyright --no-convert-tabs
+
+# Trivial dual C and assembly include files which cannot have comments.
+/Support/win/import-template-kernel32.h:        --no-update-copyright-year --no-update-license --no-fix-header-guards
+/Support/win/import-template-ntdll.h:           --no-update-copyright-year --no-update-license --no-fix-header-guards
+
+# Binary files
+/Support/Certificates/*.taf:                    --treat-as binary
+/Support/Certificates/*.cer:                    --treat-as binary
+/Support/Certificates/*.crt:                    --treat-as binary
+/Support/win/winstub.com:                       --treat-as binary
+
+# Misc
+/linux/build_in_tmp:                            --treat-as .sh
+/*/solaris/*.conf:                              --treat-as .sh
+/VBoxNetAdp/solaris/hostname.vboxnet0:          --treat-as plaintext --del-action force-native-eol --add-action force-lf --dont-set-svn-keywords
+/Support/solaris/mod.sh:                        --no-convert-tabs
+/Support/linux/SUPDrv-linux.mod.c:              --no-convert-tabs
+
+/*.h:                                           --guard-relative-to-dir .
+

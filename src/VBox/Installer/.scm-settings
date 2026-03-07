@@ -1,0 +1,100 @@
+# $Id: .scm-settings 112403 2026-01-11 19:29:08Z knut.osmundsen@oracle.com $
+## @file
+# Source code massager settings for the host installers.
+#
+
+#
+# Copyright (C) 2010-2026 Oracle and/or its affiliates.
+#
+# This file is part of VirtualBox base platform packages, as
+# available from https://www.virtualbox.org.
+#
+# This program is free software; you can redistribute it and/or
+# modify it under the terms of the GNU General Public License
+# as published by the Free Software Foundation, in version 3 of the
+# License.
+#
+# This program is distributed in the hope that it will be useful, but
+# WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+# General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, see <https://www.gnu.org/licenses>.
+#
+# SPDX-License-Identifier: GPL-3.0-only
+#
+
+# Much of the stuff is exported here.
+--svn-sync-process-export all
+/common/keygen*|/win/InstallHelper/internal*: --svn-sync-process-export none
+## @todo export: Explain why the following is private. Reason: work in progress stuck in a very incomplete, early stage. To be exported when it becomes somewhat buildable/usable.
+/linux/rpm-kmod*|/linux/rpm-VBoxGuestAdditions*: --svn-sync-process-export none
+
+# External stuff.
+/linux/rpm-kmod-VBoxGuest/kmodtool-VBoxGuest-el6.sh: --external-copyright
+/common/virtualbox.xml:                              --external-copyright
+
+# Dual licensed code.
+/common/vboxapisetup.py:      --license-ose-dual
+/common/vboxapisetup-stub.py: --license-ose-dual
+
+# ignore desktop files.
+*.desktop.in|*.desktop:                         --treat-as plaintext --del-action force-native-eol --add-action force-lf
+
+# Darwin stuff.
+/darwin/DiskImage/DS_Store:                     --treat-as binary
+/darwin/VirtualBox/*.provisionprofile:          --treat-as binary
+/darwin/*.rtf:                                  --treat-as plaintext
+/darwin/*.strings:                              --treat-as plaintext --del-action force-native-eol --add-action force-lf
+/darwin/DiskImage/VirtualBox_Uninstall.tool:    --treat-as shell
+/darwin/VBoxKEXTs/postflight:                   --treat-as shell
+/darwin/VirtualBox/postflight:                  --treat-as shell
+/darwin/VirtualBox/preflight:                   --treat-as shell
+/darwin/*/distribution.dist:                    --treat-as xml --no-convert-eol
+/darwin/VirtualBox_mpkg/*.html:                 --external-copyright
+
+# FreeBSD stuff.
+/freebsd/pkg-comment|/freebsd/pkg-descr|/freebsd/pkg_plist: --treat-as plaintext --del-action force-native-eol --add-action force-lf
+
+# Linux stuff.
+/linux/debian/changelog.in|/linux/debian/compat|/linux/debian/control|/linux/debian/copyright|/linux/debian/dirs: \
+    --treat-as plaintext --del-action force-native-eol --add-action force-lf
+/linux/debian/lintian-override.in|/linux/rpm-kmod-VBoxGuest/README|/linux/README.testing|/linux/debian/templates: \
+    --treat-as plaintext --del-action force-native-eol --add-action force-lf
+/linux/distributions_*: \
+    --treat-as plaintext --del-action force-native-eol --add-action force-lf
+/linux/*.spec.in|/linux/*.spec: \
+    --treat-as hashtext --del-action force-native-eol --add-action force-lf
+/linux/debian/postinst:                         --treat-as shell
+/linux/debian/postrm:                           --treat-as shell
+/linux/debian/preinst:                          --treat-as shell
+/linux/debian/prerm:                            --treat-as shell
+/linux/debian/rules|/linux/rpm/rules:           --treat-as Makefile --no-convert-eol --dont-set-svn-executable
+/linux/debian/templates:                        --no-strip-trailing-blanks # ??
+/linux/deffiles:                                --treat-as shell
+/linux/Makefile*.gmk:                           --treat-as Makefile --no-convert-eol
+/linux/rpm-kmod/build-kmod.in:                  --treat-as shell
+/linux/rpm-kmod/kmodtool:                       --treat-as shell --external-copyright --no-strip-trailing-blanks
+/linux/rpm-kmod/rules:                          --treat-as Makefile --no-convert-eol --dont-set-svn-executable
+/linux/rpm-kmod*.spec:                          --external-copyright
+/linux/rpm-kmod/*.spec.in:                      --external-copyright
+/linux/rpm-kmod/vboxdrv.spec.in:                --no-strip-trailing-blanks # ??
+
+# Caveat: If we export /linux/rpm-VBoxGuestAdditions/, the --no-update-license hack must go.
+/linux/rpm-VBoxGuestAdditions/rules:                        --no-update-license --treat-as Makefile --no-convert-eol --dont-set-svn-executable
+/linux/rpm-VBoxGuestAdditions/VBoxGuestAdditions.tmpl.spec: --no-update-license --treat-as shell
+
+# Solaris stuff.
+/solaris/*.xml:                                 --no-convert-eol
+/solaris/vboxconfig.sh:                         --no-convert-tabs
+/solaris/*.space|/solaris/vbox-ips.mog:         \
+    --treat-as hashtext  --del-action force-native-eol --add-action force-lf --external-copyright
+/solaris/*.pkginfo|/solaris/*.pkgresponse|/solaris/*.applications.in|/solaris/*.keys|/solaris/*.mime: \
+    --treat-as plaintext --del-action force-native-eol --add-action force-lf --external-copyright
+/solaris/vbox.pkgresponse:                      --no-strip-trailing-blanks # ??
+
+# Windows
+/win/MsiHack/MsiHackExtension.cs:               --treat-as .c
+/win/VBoxKey.wxi:                               --external-copyright
+/win/Stub/VBoxStub.manifest:                    --treat-as xml --external-copyright

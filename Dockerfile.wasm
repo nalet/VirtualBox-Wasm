@@ -130,7 +130,8 @@ RUN . /opt/emsdk/emsdk_env.sh 2>/dev/null \
         out/linux.amd64/release/lib/VBox-liblzf.a \
         -sMEMORY64=1 \
         -sALLOW_MEMORY_GROWTH=1 \
-        -sINITIAL_MEMORY=67108864 \
+        -msimd128 \
+        -sINITIAL_MEMORY=134217728 \
         -sSTACK_SIZE=1048576 \
         -sENVIRONMENT=web \
         -sEXPORTED_RUNTIME_METHODS='["callMain"]' \
@@ -154,7 +155,8 @@ RUN . /opt/emsdk/emsdk_env.sh 2>/dev/null \
         out/linux.amd64/release/lib/VBox-liblzf.a \
         -sMEMORY64=1 \
         -sALLOW_MEMORY_GROWTH=1 \
-        -sINITIAL_MEMORY=67108864 \
+        -msimd128 \
+        -sINITIAL_MEMORY=134217728 \
         -sSTACK_SIZE=1048576 \
         2>&1 | tail -5 \
     && node --experimental-wasm-memory64 /tmp/vbox-wasm-node.js 2>&1 || true

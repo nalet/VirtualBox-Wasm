@@ -36,7 +36,7 @@ TOOL_VBoxXEmscripten_OBJCOPY  ?= $(ECHO) no-objcopy-for-wasm
 TOOL_VBoxXEmscripten_LDFLAGS.dll ?= -shared
 
 TOOL_VBoxXEmscripten_COBJSUFF         ?= .o
-TOOL_VBoxXEmscripten_CFLAGS           ?= -Wno-unused-command-line-argument -Wno-unknown-warning-option -Wno-\#warnings -Wno-string-plus-int -Wno-unused-function -Wno-unused-parameter -sMEMORY64=1
+TOOL_VBoxXEmscripten_CFLAGS           ?= -Wno-unused-command-line-argument -Wno-unknown-warning-option -Wno-\#warnings -Wno-string-plus-int -Wno-unused-function -Wno-unused-parameter -sMEMORY64=1 -msimd128
 TOOL_VBoxXEmscripten_CFLAGS.debug     ?= -g
 TOOL_VBoxXEmscripten_CFLAGS.profile   ?= -O2
 TOOL_VBoxXEmscripten_CFLAGS.release   ?= -O2
@@ -44,7 +44,7 @@ TOOL_VBoxXEmscripten_CINCS            ?=
 TOOL_VBoxXEmscripten_CDEFS            ?=
 
 TOOL_VBoxXEmscripten_CXXOBJSUFF       ?= .o
-TOOL_VBoxXEmscripten_CXXFLAGS         ?= -Wno-unused-command-line-argument -Wno-unknown-warning-option -Wno-c++17-compat-mangling -Wno-nested-anon-types -Wno-gnu-anonymous-struct -Wno-\#warnings -Wno-wasm-exception-spec -Wno-string-plus-int -Wno-unused-function -Wno-unused-parameter -sMEMORY64=1
+TOOL_VBoxXEmscripten_CXXFLAGS         ?= -Wno-unused-command-line-argument -Wno-unknown-warning-option -Wno-c++17-compat-mangling -Wno-nested-anon-types -Wno-gnu-anonymous-struct -Wno-\#warnings -Wno-wasm-exception-spec -Wno-string-plus-int -Wno-unused-function -Wno-unused-parameter -sMEMORY64=1 -msimd128
 TOOL_VBoxXEmscripten_CXXFLAGS.debug   ?= -g
 TOOL_VBoxXEmscripten_CXXFLAGS.profile ?= -O2
 TOOL_VBoxXEmscripten_CXXFLAGS.release ?= -O2

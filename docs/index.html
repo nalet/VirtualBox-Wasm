@@ -18,16 +18,9 @@
       align-items: center;
       padding: 2rem;
     }
-    h1 {
-      font-size: 1.8rem;
-      margin-bottom: 0.3rem;
-      color: #4fc3f7;
-    }
-    .subtitle {
-      color: #888;
-      margin-bottom: 1.5rem;
-      font-size: 0.95rem;
-    }
+    h1 { font-size: 1.8rem; margin-bottom: 0.3rem; color: #4fc3f7; }
+    .subtitle { color: #888; margin-bottom: 1.5rem; font-size: 0.95rem; }
+
     #status {
       margin-bottom: 1rem;
       padding: 0.5rem 1.2rem;
@@ -39,67 +32,55 @@
     #status.success { background: #1b5e20; color: #a5d6a7; }
     #status.error   { background: #b71c1c; color: #ef9a9a; }
 
+    /* Feature badges */
+    .features {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.4rem;
+      margin-bottom: 1rem;
+      max-width: 724px;
+      justify-content: center;
+    }
+    .feat {
+      font-size: 0.72rem;
+      padding: 2px 8px;
+      border-radius: 3px;
+      font-weight: 600;
+    }
+    .feat.ok   { background: #1b5e20; color: #a5d6a7; }
+    .feat.no   { background: #333;    color: #666; }
+    .feat.wait { background: #333;    color: #ffd54f; }
+
     #screen {
-      width: 724px;
-      height: 404px;
-      background: #000;
-      border: 2px solid #444;
-      border-radius: 4px;
-      margin-bottom: 0.5rem;
-      position: relative;
-      overflow: hidden;
-      cursor: none;
+      width: 724px; height: 404px;
+      background: #000; border: 2px solid #444; border-radius: 4px;
+      margin-bottom: 0.5rem; position: relative; overflow: hidden; cursor: none;
     }
     #screen.no-vm { cursor: default; }
-    #screen canvas {
-      width: 720px;
-      height: 400px;
-      image-rendering: pixelated;
-    }
+    #screen canvas { width: 720px; height: 400px; image-rendering: pixelated; }
     #screen .placeholder {
-      position: absolute;
-      inset: 0;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      color: #555;
-      pointer-events: none;
+      position: absolute; inset: 0;
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      color: #555; pointer-events: none;
     }
     #screen .placeholder .icon { font-size: 3rem; margin-bottom: 0.5rem; }
 
     .toolbar {
-      width: 724px;
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      margin-bottom: 1rem;
-      font-size: 0.8rem;
-      color: #666;
+      width: 724px; display: flex; justify-content: space-between;
+      align-items: center; margin-bottom: 1rem; font-size: 0.8rem; color: #666;
     }
     .toolbar .input-status span {
-      display: inline-block;
-      padding: 2px 8px;
-      border-radius: 3px;
-      margin-left: 4px;
-      background: #222;
-      color: #555;
+      display: inline-block; padding: 2px 8px; border-radius: 3px;
+      margin-left: 4px; background: #222; color: #555;
     }
     .toolbar .input-status span.active { background: #1b5e20; color: #a5d6a7; }
 
     #console {
-      width: 724px;
-      max-height: 200px;
-      background: #0d0d1a;
-      border: 1px solid #333;
-      border-radius: 6px;
-      padding: 0.8rem;
-      overflow-y: auto;
+      width: 724px; max-height: 200px;
+      background: #0d0d1a; border: 1px solid #333; border-radius: 6px;
+      padding: 0.8rem; overflow-y: auto;
       font-family: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
-      font-size: 0.8rem;
-      line-height: 1.4;
-      white-space: pre-wrap;
-      word-break: break-all;
+      font-size: 0.8rem; line-height: 1.4; white-space: pre-wrap; word-break: break-all;
     }
     #console .log  { color: #b0bec5; }
     #console .info { color: #4fc3f7; }
@@ -107,35 +88,26 @@
     #console .err  { color: #ef5350; }
 
     .info-bar {
-      margin-top: 1.5rem;
-      display: flex;
-      gap: 2rem;
-      font-size: 0.8rem;
-      color: #666;
+      margin-top: 1.5rem; display: flex; gap: 2rem;
+      font-size: 0.8rem; color: #666;
     }
     .info-bar span { display: flex; align-items: center; gap: 0.3rem; }
 
     .compat-warning {
-      display: none;
-      background: #4a1c00;
-      color: #ffcc80;
-      padding: 1rem 1.5rem;
-      border-radius: 6px;
-      margin-bottom: 1rem;
-      max-width: 724px;
-      font-size: 0.9rem;
-      line-height: 1.5;
+      display: none; background: #4a1c00; color: #ffcc80;
+      padding: 1rem 1.5rem; border-radius: 6px; margin-bottom: 1rem;
+      max-width: 724px; font-size: 0.9rem; line-height: 1.5;
     }
-
     a { color: #4fc3f7; }
   </style>
 </head>
 <body>
   <h1>VirtualBox/Wasm</h1>
-  <p class="subtitle">VirtualBox IPRT runtime compiled to WebAssembly (Wasm64 / memory64)</p>
+  <p class="subtitle">VirtualBox VMM + IEM x86 interpreter compiled to WebAssembly (Wasm64 / memory64)</p>
 
+  <div id="features" class="features"></div>
   <div id="compat-warning" class="compat-warning"></div>
-  <div id="status" class="loading">Checking browser support...</div>
+  <div id="status" class="loading">Detecting capabilities...</div>
 
   <div id="screen" class="no-vm" tabindex="0">
     <canvas id="vga" width="720" height="400"></canvas>
@@ -158,6 +130,7 @@
 
   <div class="info-bar">
     <span>Wasm64 (memory64)</span>
+    <span>VBoxVMM + IEM</span>
     <span>IPRT 7.2.97</span>
     <span><a href="https://github.com/nalet/VirtualBox-Wasm" target="_blank">GitHub</a></span>
   </div>
@@ -167,6 +140,7 @@
     const con = document.getElementById('console');
     const statusEl = document.getElementById('status');
     const compat = document.getElementById('compat-warning');
+    const featEl = document.getElementById('features');
 
     function appendLine(text, cls) {
       const span = document.createElement('span');
@@ -176,34 +150,148 @@
       con.scrollTop = con.scrollHeight;
     }
 
-    // ── memory64 feature detection ──
-    async function checkMemory64() {
+    // ── Feature detection ──
+    const caps = {};
+
+    async function detectMemory64() {
       try {
-        const testBytes = new Uint8Array([
+        const bytes = new Uint8Array([
           0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,
           0x05, 0x03, 0x01, 0x04, 0x00,
         ]);
-        await WebAssembly.compile(testBytes);
+        await WebAssembly.compile(bytes);
         return true;
-      } catch (e) { return false; }
+      } catch { return false; }
+    }
+
+    async function detectSIMD() {
+      try {
+        // v128.const + drop — minimal SIMD module
+        const bytes = new Uint8Array([
+          0x00,0x61,0x73,0x6d,0x01,0x00,0x00,0x00,
+          0x01,0x05,0x01,0x60,0x00,0x01,0x7b,
+          0x03,0x02,0x01,0x00,
+          0x07,0x05,0x01,0x01,0x66,0x00,0x00,
+          0x0a,0x16,0x01,0x14,0x00,0xfd,0x0c,
+          0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+          0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,
+          0x0b
+        ]);
+        await WebAssembly.compile(bytes);
+        return true;
+      } catch { return false; }
+    }
+
+    function detectSharedArrayBuffer() {
+      return typeof SharedArrayBuffer !== 'undefined';
+    }
+
+    function detectOffscreenCanvas() {
+      return typeof OffscreenCanvas !== 'undefined';
+    }
+
+    function detectOPFS() {
+      return 'storage' in navigator && 'getDirectory' in navigator.storage;
+    }
+
+    function detectStreamingCompile() {
+      return typeof WebAssembly.compileStreaming === 'function';
+    }
+
+    function detectCrossOriginIsolated() {
+      return self.crossOriginIsolated === true;
+    }
+
+    function addBadge(label, ok) {
+      const el = document.createElement('span');
+      el.className = 'feat ' + (ok ? 'ok' : 'no');
+      el.textContent = (ok ? '\u2713 ' : '\u2717 ') + label;
+      featEl.appendChild(el);
+      return ok;
+    }
+
+    // ── Cross-Origin Isolation service worker ──
+    async function ensureCrossOriginIsolation() {
+      if (self.crossOriginIsolated) return true;
+      if (!('serviceWorker' in navigator)) return false;
+
+      try {
+        const reg = await navigator.serviceWorker.register('sw.js');
+        // If the SW is already active and controlling this page, we're good
+        // after a reload. If it just installed, we need to reload once.
+        if (reg.active && navigator.serviceWorker.controller) {
+          // SW is active but we're not isolated — means headers not applied yet
+          // This happens on first load; reload to pick up headers.
+          return false;
+        }
+        // Wait for SW to activate
+        const sw = reg.installing || reg.waiting;
+        if (sw) {
+          await new Promise((resolve) => {
+            sw.addEventListener('statechange', () => {
+              if (sw.state === 'activated') resolve();
+            });
+            if (sw.state === 'activated') resolve();
+          });
+          // Reload so the SW intercepts the page load with correct headers
+          if (!self.crossOriginIsolated) {
+            appendLine('Activating cross-origin isolation (one-time reload)...', 'info');
+            window.location.reload();
+            return false; // won't reach here
+          }
+        }
+        return self.crossOriginIsolated;
+      } catch (e) {
+        appendLine('SW registration failed: ' + e.message, 'warn');
+        return false;
+      }
+    }
+
+    // ── Wasm module caching (IndexedDB) ──
+    const WASM_CACHE_DB = 'vbox-wasm-cache';
+    const WASM_CACHE_STORE = 'modules';
+
+    function openCacheDB() {
+      return new Promise((resolve, reject) => {
+        const req = indexedDB.open(WASM_CACHE_DB, 1);
+        req.onupgradeneeded = () => req.result.createObjectStore(WASM_CACHE_STORE);
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+      });
+    }
+
+    async function getCachedModule(url) {
+      try {
+        const db = await openCacheDB();
+        return await new Promise((resolve, reject) => {
+          const tx = db.transaction(WASM_CACHE_STORE, 'readonly');
+          const req = tx.objectStore(WASM_CACHE_STORE).get(url);
+          req.onsuccess = () => resolve(req.result || null);
+          req.onerror = () => reject(req.error);
+        });
+      } catch { return null; }
+    }
+
+    async function setCachedModule(url, module) {
+      try {
+        const db = await openCacheDB();
+        const tx = db.transaction(WASM_CACHE_STORE, 'readwrite');
+        tx.objectStore(WASM_CACHE_STORE).put(module, url);
+      } catch { /* best-effort */ }
     }
 
     // ── VGA Display ──
     const vgaCanvas = document.getElementById('vga');
     const vgaCtx = vgaCanvas.getContext('2d');
     const VGA = {
-      width: 720,
-      height: 400,
-      imageData: null,
-      init: function() {
+      width: 720, height: 400, imageData: null,
+      init() {
         this.imageData = vgaCtx.createImageData(this.width, this.height);
-        // Fill with black
         const d = this.imageData.data;
         for (let i = 3; i < d.length; i += 4) d[i] = 255;
         vgaCtx.putImageData(this.imageData, 0, 0);
       },
-      // Called by VM to update a rectangular region of the framebuffer
-      updateRect: function(x, y, w, h, rgbaData) {
+      updateRect(x, y, w, h, rgbaData) {
         const img = this.imageData;
         for (let row = 0; row < h; row++) {
           for (let col = 0; col < w; col++) {
@@ -217,13 +305,11 @@
         }
         vgaCtx.putImageData(img, 0, 0, x, y, w, h);
       },
-      // Full screen update from a flat RGBA buffer
-      updateAll: function(rgbaData) {
+      updateAll(rgbaData) {
         this.imageData.data.set(rgbaData);
         vgaCtx.putImageData(this.imageData, 0, 0);
       },
-      // For text mode: draw a character at col,row (will be used by BIOS text mode)
-      putChar: function(col, row, ch, fg, bg) {
+      putChar(col, row, ch, fg, bg) {
         vgaCtx.fillStyle = bg;
         vgaCtx.fillRect(col * 9, row * 16, 9, 16);
         vgaCtx.fillStyle = fg;
@@ -233,7 +319,6 @@
     };
 
     // ── Keyboard Input ──
-    // PS/2 Set 1 scancode table (key → make code; break = make | 0x80)
     const PS2_SCANCODES = {
       'Escape':0x01,'Digit1':0x02,'Digit2':0x03,'Digit3':0x04,'Digit4':0x05,
       'Digit5':0x06,'Digit6':0x07,'Digit7':0x08,'Digit8':0x09,'Digit9':0x0A,
@@ -255,7 +340,6 @@
       'Numpad1':0x4F,'Numpad2':0x50,'Numpad3':0x51,'Numpad0':0x52,
       'NumpadDecimal':0x53,'F11':0x57,'F12':0x58,
     };
-    // Extended scancodes (prefixed with 0xE0)
     const PS2_EXT_SCANCODES = {
       'ControlRight':0x1D,'AltRight':0x38,'ArrowUp':0x48,'ArrowLeft':0x4B,
       'ArrowRight':0x4D,'ArrowDown':0x50,'Home':0x47,'End':0x4F,
@@ -264,10 +348,8 @@
     };
 
     const Keyboard = {
-      queue: [],
-      captured: false,
-
-      init: function() {
+      queue: [], captured: false,
+      init() {
         const screen = document.getElementById('screen');
         screen.addEventListener('keydown', (e) => this.onKey(e, true));
         screen.addEventListener('keyup', (e) => this.onKey(e, false));
@@ -276,130 +358,127 @@
           document.getElementById('kbd-status').classList.add('active');
         });
       },
-
-      onKey: function(e, isDown) {
+      onKey(e, isDown) {
         if (!this.captured) return;
-        e.preventDefault();
-        e.stopPropagation();
-
+        e.preventDefault(); e.stopPropagation();
         const code = e.code;
         if (PS2_EXT_SCANCODES[code] !== undefined) {
-          const sc = PS2_EXT_SCANCODES[code];
           this.queue.push(0xE0);
-          this.queue.push(isDown ? sc : (sc | 0x80));
+          this.queue.push(isDown ? PS2_EXT_SCANCODES[code] : (PS2_EXT_SCANCODES[code] | 0x80));
         } else if (PS2_SCANCODES[code] !== undefined) {
-          const sc = PS2_SCANCODES[code];
-          this.queue.push(isDown ? sc : (sc | 0x80));
+          this.queue.push(isDown ? PS2_SCANCODES[code] : (PS2_SCANCODES[code] | 0x80));
         }
-        // Will be consumed by VM via Keyboard.dequeue()
       },
-
-      dequeue: function() {
-        return this.queue.length > 0 ? this.queue.shift() : -1;
-      },
-
-      hasData: function() {
-        return this.queue.length > 0;
-      }
+      dequeue() { return this.queue.length > 0 ? this.queue.shift() : -1; },
+      hasData() { return this.queue.length > 0; }
     };
 
     // ── Mouse Input ──
     const Mouse = {
-      queue: [],  // PS/2 mouse packets: [buttons, dx, dy]
-      captured: false,
-      x: 0,
-      y: 0,
-      buttons: 0,
-
-      init: function() {
+      queue: [], captured: false, x: 0, y: 0, buttons: 0,
+      init() {
         const screen = document.getElementById('screen');
         const posEl = document.getElementById('mouse-pos');
-
         screen.addEventListener('click', () => {
-          if (!this.captured && document.pointerLockElement !== screen) {
+          if (!this.captured && document.pointerLockElement !== screen)
             screen.requestPointerLock();
-          }
         });
-
         document.addEventListener('pointerlockchange', () => {
           this.captured = document.pointerLockElement === screen;
           document.getElementById('mouse-status').classList.toggle('active', this.captured);
           document.getElementById('screen').classList.toggle('no-vm', !this.captured);
-          if (this.captured) {
-            appendLine('Mouse captured (press Esc to release)', 'info');
-          }
+          if (this.captured) appendLine('Mouse captured (press Esc to release)', 'info');
         });
-
         screen.addEventListener('mousemove', (e) => {
           if (!this.captured) return;
-          // Clamp deltas to PS/2 range (-128..127)
           const dx = Math.max(-128, Math.min(127, e.movementX));
-          const dy = Math.max(-128, Math.min(127, -e.movementY)); // PS/2 Y is inverted
-          this.x += e.movementX;
-          this.y += e.movementY;
+          const dy = Math.max(-128, Math.min(127, -e.movementY));
+          this.x += e.movementX; this.y += e.movementY;
           posEl.textContent = Math.round(this.x) + ',' + Math.round(this.y);
-          if (dx !== 0 || dy !== 0) {
-            this.enqueuePacket(this.buttons, dx, dy);
-          }
+          if (dx !== 0 || dy !== 0) this.enqueuePacket(this.buttons, dx, dy);
         });
-
         screen.addEventListener('mousedown', (e) => {
           if (!this.captured) return;
           this.buttons |= (1 << e.button);
           this.enqueuePacket(this.buttons, 0, 0);
         });
-
         screen.addEventListener('mouseup', (e) => {
           if (!this.captured) return;
           this.buttons &= ~(1 << e.button);
           this.enqueuePacket(this.buttons, 0, 0);
         });
-
-        // Prevent context menu in screen area
         screen.addEventListener('contextmenu', (e) => e.preventDefault());
       },
-
-      enqueuePacket: function(buttons, dx, dy) {
-        // PS/2 3-byte mouse packet
-        let byte0 = 0x08; // bit 3 always set
-        if (buttons & 1) byte0 |= 0x01; // left
-        if (buttons & 2) byte0 |= 0x02; // right
-        if (buttons & 4) byte0 |= 0x04; // middle
-        if (dx < 0) byte0 |= 0x10;      // X sign
-        if (dy < 0) byte0 |= 0x20;      // Y sign
-        this.queue.push(byte0, dx & 0xFF, dy & 0xFF);
+      enqueuePacket(buttons, dx, dy) {
+        let b0 = 0x08;
+        if (buttons & 1) b0 |= 0x01;
+        if (buttons & 2) b0 |= 0x02;
+        if (buttons & 4) b0 |= 0x04;
+        if (dx < 0) b0 |= 0x10;
+        if (dy < 0) b0 |= 0x20;
+        this.queue.push(b0, dx & 0xFF, dy & 0xFF);
       },
-
-      dequeue: function() {
-        return this.queue.length > 0 ? this.queue.shift() : -1;
-      },
-
-      hasData: function() {
-        return this.queue.length > 0;
-      }
+      dequeue() { return this.queue.length > 0 ? this.queue.shift() : -1; },
+      hasData() { return this.queue.length > 0; }
     };
 
     // ── Emscripten Module hooks ──
     var Module = {
-      print: function(text) {
-        appendLine(text, 'log');
-        console.log(text);
-      },
-      printErr: function(text) {
-        if (text.startsWith('info:') || text.includes('INFO')) {
+      print(text) { appendLine(text, 'log'); console.log(text); },
+      printErr(text) {
+        if (text.startsWith('info:') || text.includes('INFO'))
           appendLine(text, 'info');
-        } else {
-          appendLine(text, 'warn');
-        }
+        else appendLine(text, 'warn');
         console.warn(text);
       },
-      onRuntimeInitialized: function() {
-        appendLine('--- Emscripten runtime initialized ---', 'info');
-      },
-      onAbort: function(what) {
+      onRuntimeInitialized() { appendLine('--- Emscripten runtime initialized ---', 'info'); },
+      onAbort(what) {
         appendLine('ABORT: ' + what, 'err');
         statusEl.className = 'error';
         statusEl.textContent = 'Runtime aborted';
+      },
+
+      // Use streaming compilation with IndexedDB cache
+      instantiateWasm(imports, successCallback) {
+        const wasmUrl = 'vbox-wasm.wasm';
+        appendLine('Loading WebAssembly module...', 'info');
+        const t0 = performance.now();
+
+        (async () => {
+          try {
+            // Try IndexedDB cache first
+            const cached = await getCachedModule(wasmUrl);
+            if (cached) {
+              appendLine('Using cached compiled module (' + Math.round(performance.now() - t0) + 'ms)', 'info');
+              const instance = await WebAssembly.instantiate(cached, imports);
+              successCallback(instance);
+              return;
+            }
+
+            // Streaming compile + cache
+            if (typeof WebAssembly.compileStreaming === 'function') {
+              appendLine('Streaming compile...', 'info');
+              const module = await WebAssembly.compileStreaming(fetch(wasmUrl));
+              const instance = await WebAssembly.instantiate(module, imports);
+              appendLine('Compiled in ' + Math.round(performance.now() - t0) + 'ms', 'info');
+              setCachedModule(wasmUrl, module);
+              successCallback(instance);
+            } else {
+              // Fallback: fetch + compile
+              const resp = await fetch(wasmUrl);
+              const bytes = await resp.arrayBuffer();
+              const module = await WebAssembly.compile(bytes);
+              const instance = await WebAssembly.instantiate(module, imports);
+              appendLine('Compiled in ' + Math.round(performance.now() - t0) + 'ms', 'info');
+              setCachedModule(wasmUrl, module);
+              successCallback(instance);
+            }
+          } catch (e) {
+            appendLine('Wasm instantiation failed: ' + e.message, 'err');
+          }
+        })();
+
+        return {}; // Tell Emscripten we're handling instantiation
       }
     };
 
@@ -409,10 +488,44 @@
       Keyboard.init();
       Mouse.init();
 
-      appendLine('Checking browser capabilities...', 'info');
+      appendLine('Detecting browser capabilities...', 'info');
 
-      const hasMemory64 = await checkMemory64();
-      if (!hasMemory64) {
+      // Feature detection
+      caps.memory64 = await detectMemory64();
+      caps.simd = await detectSIMD();
+      caps.sab = detectSharedArrayBuffer();
+      caps.offscreen = detectOffscreenCanvas();
+      caps.opfs = detectOPFS();
+      caps.streaming = detectStreamingCompile();
+      caps.coi = detectCrossOriginIsolated();
+
+      addBadge('Memory64', caps.memory64);
+      addBadge('SIMD128', caps.simd);
+      addBadge('SharedArrayBuffer', caps.sab);
+      addBadge('Cross-Origin Isolated', caps.coi);
+      addBadge('OffscreenCanvas', caps.offscreen);
+      addBadge('OPFS', caps.opfs);
+      addBadge('Streaming Compile', caps.streaming);
+
+      // Log details
+      appendLine('memory64: ' + (caps.memory64 ? 'OK' : 'MISSING'), caps.memory64 ? 'info' : 'err');
+      appendLine('SIMD128: ' + (caps.simd ? 'OK' : 'not available'), caps.simd ? 'info' : 'warn');
+      appendLine('SharedArrayBuffer: ' + (caps.sab ? 'OK' : 'needs COOP/COEP'), caps.sab ? 'info' : 'warn');
+      appendLine('Cross-Origin Isolated: ' + (caps.coi ? 'OK' : 'no'), caps.coi ? 'info' : 'warn');
+      appendLine('OffscreenCanvas: ' + (caps.offscreen ? 'OK' : 'no'), caps.offscreen ? 'info' : 'warn');
+      appendLine('OPFS: ' + (caps.opfs ? 'OK' : 'no'), caps.opfs ? 'info' : 'warn');
+
+      // Register COOP/COEP service worker if not already isolated
+      if (!caps.coi && 'serviceWorker' in navigator) {
+        appendLine('Registering cross-origin isolation service worker...', 'info');
+        const isolated = await ensureCrossOriginIsolation();
+        if (isolated) {
+          caps.coi = true;
+          caps.sab = detectSharedArrayBuffer();
+        }
+      }
+
+      if (!caps.memory64) {
         compat.style.display = 'block';
         compat.innerHTML =
           '<strong>Browser does not support WebAssembly memory64.</strong><br>' +
@@ -420,15 +533,13 @@
           'Safari does not yet support memory64.';
         statusEl.className = 'error';
         statusEl.textContent = 'memory64 not supported';
-        appendLine('ERROR: WebAssembly memory64 not supported in this browser.', 'err');
         return;
       }
 
-      appendLine('memory64 support: OK', 'info');
+      statusEl.textContent = 'Loading VirtualBox/Wasm...';
       appendLine('VGA display: 720x400 canvas ready', 'info');
       appendLine('Keyboard: PS/2 Set 1 scancodes (click screen to capture)', 'info');
       appendLine('Mouse: PS/2 3-byte packets with pointer lock', 'info');
-      statusEl.textContent = 'Loading VirtualBox/Wasm...';
 
       try {
         const script = document.createElement('script');
@@ -441,10 +552,9 @@
         document.body.appendChild(script);
 
         const checkDone = setInterval(function() {
-          const text = con.textContent;
-          if (text.includes('All basic IPRT tests passed')) {
+          if (con.textContent.includes('All basic IPRT tests passed')) {
             statusEl.className = 'success';
-            statusEl.textContent = 'IPRT running in Wasm64';
+            statusEl.textContent = 'IPRT + VBoxVMM running in Wasm64';
             clearInterval(checkDone);
           }
         }, 200);

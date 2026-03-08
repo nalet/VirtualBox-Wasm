@@ -40,7 +40,7 @@
 # pragma once
 #endif
 
-#if defined(RT_ARCH_AMD64) || defined(RT_ARCH_ARM64)
+#if defined(RT_ARCH_AMD64) || defined(RT_ARCH_ARM64) || defined(RT_ARCH_WASM64)
 # include "elf64.h"
 typedef Elf64_Addr          Elf_Addr;
 typedef Elf64_Half          Elf_Half;

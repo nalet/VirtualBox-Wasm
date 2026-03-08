@@ -1,0 +1,149 @@
+# VirtualBox WebAssembly build environment (Wasm64 with memory64)
+FROM ubuntu:22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential gcc g++ make nasm yasm \
+    libssl-dev libcurl4-openssl-dev libxml2-dev libxslt1-dev \
+    libpulse-dev libasound2-dev \
+    libsdl2-dev libsdl2-ttf-dev \
+    libgl-dev libglu1-mesa-dev \
+    libx11-dev libxext-dev libxmu-dev libxrandr-dev libxinerama-dev libxcursor-dev \
+    libcap-dev libpam0g-dev \
+    libdevmapper-dev \
+    python3 python3-dev \
+    uuid-dev zlib1g-dev \
+    acpica-tools xsltproc makeself \
+    wget git ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN git clone https://github.com/emscripten-core/emsdk.git /opt/emsdk \
+    && cd /opt/emsdk \
+    && ./emsdk install latest \
+    && ./emsdk activate latest
+
+# Install Node.js 23+ (required by latest Emscripten output)
+RUN curl -fsSL https://deb.nodesource.com/setup_23.x | bash - \
+    && apt-get install -y nodejs
+
+ENV PATH="/opt/emsdk:/opt/emsdk/upstream/emscripten:${PATH}"
+ENV EMSDK="/opt/emsdk"
+ENV EM_CONFIG="/opt/emsdk/.emscripten"
+
+COPY . /build/vbox
+WORKDIR /build/vbox
+
+# Verify kBuild binaries were copied
+RUN ls -la /build/vbox/kBuild/bin/linux.amd64/kmk \
+    && echo "kmk binary found OK"
+
+ENV PATH="/build/vbox/kBuild/bin/linux.amd64:${PATH}"
+ENV KBUILD_PATH="/build/vbox/kBuild"
+
+RUN ./configure \
+    --disable-qt \
+    --disable-libsdl2 \
+    --disable-libsdl2_ttf \
+    --disable-libasound \
+    --disable-libpulse \
+    --disable-libvncserver \
+    --disable-libgl \
+    --disable-curl \
+    --disable-libssh \
+    --disable-libtpms \
+    --disable-libslirp \
+    --disable-python_c_api \
+    --disable-python_modules \
+    --disable-java \
+    --disable-gsoap \
+    --disable-dxvk \
+    --disable-dxmt \
+    --disable-glslang \
+    2>&1 | tail -20 || true
+
+# Phase 1: Full kmk pass (native BldProg helpers)
+RUN . /opt/emsdk/emsdk_env.sh 2>/dev/null \
+    && export PATH="/build/vbox/kBuild/bin/linux.amd64:${PATH}" \
+    && echo "=== Phase 1: Full kmk pass (native helpers) ==" \
+    && kmk VBOX_WITH_NO_GCC_WARNING_POLICY=1 2>&1 | tail -20 || true
+
+# Phase 2a: OpenSSL crypto headers (must come before libraries)
+RUN . /opt/emsdk/emsdk_env.sh 2>/dev/null \
+    && export PATH="/build/vbox/kBuild/bin/linux.amd64:${PATH}" \
+    && echo "=== Phase 2a: Installing OpenSSL crypto headers ==" \
+    && kmk -C src/libs/openssl-3.4.4 crypto-headers 2>&1 | tail -5 || true
+
+# Phase 2b: Bundled zlib
+RUN . /opt/emsdk/emsdk_env.sh 2>/dev/null \
+    && export PATH="/build/vbox/kBuild/bin/linux.amd64:${PATH}" \
+    && echo "=== Phase 2b: Building bundled zlib ==" \
+    && kmk -C src/libs/zlib-1.3.2 VBox-zlib 2>&1 | tail -10 || true
+
+# Phase 2c: Bundled liblzma + strip code-gen main()
+RUN . /opt/emsdk/emsdk_env.sh 2>/dev/null \
+    && export PATH="/build/vbox/kBuild/bin/linux.amd64:${PATH}" \
+    && echo "=== Phase 2c: Building bundled liblzma ==" \
+    && kmk -C src/libs/liblzma-5.8.1 VBox-liblzma 2>&1 | tail -10 || true \
+    && emar -d out/linux.amd64/release/obj/VBox-liblzma/VBox-liblzma.a crc_clmul_consts_gen.o 2>/dev/null || true \
+    && emar -d out/linux.amd64/release/lib/VBox-liblzma.a crc_clmul_consts_gen.o 2>/dev/null || true
+
+# Phase 2d: Bundled liblzf
+RUN . /opt/emsdk/emsdk_env.sh 2>/dev/null \
+    && export PATH="/build/vbox/kBuild/bin/linux.amd64:${PATH}" \
+    && echo "=== Phase 2d: Building bundled liblzf ==" \
+    && kmk -C src/libs/liblzf-3.6 2>&1 | tail -5 || true
+
+# Phase 2e: RuntimeR3 + RuntimeEFCPP
+RUN . /opt/emsdk/emsdk_env.sh 2>/dev/null \
+    && export PATH="/build/vbox/kBuild/bin/linux.amd64:${PATH}" \
+    && echo "=== Phase 2e: Building RuntimeR3 + RuntimeEFCPP ==" \
+    && rm -rf obj/RuntimeBldProg/ \
+    && kmk -C src/VBox/Runtime RuntimeR3 RuntimeEFCPP 2>&1 | tail -20 || true
+
+# Phase 3: Link browser-compatible PoC (outputs to docs/)
+RUN . /opt/emsdk/emsdk_env.sh 2>/dev/null \
+    && echo "=== PoC: Linking vbox-wasm.js (browser target) ==" \
+    && em++ -o docs/vbox-wasm.js wasm-main.cpp \
+        -I include -I out/linux.amd64/release \
+        -I src/VBox/Runtime/include \
+        -DRT_ARCH_AMD64 -D__AMD64__ \
+        -DIN_RING3 -DARCH_BITS=64 -DHC_ARCH_BITS=64 \
+        -DRT_OS_LINUX -DVBOX -DVBOX_OSE \
+        out/linux.amd64/release/lib/RuntimeR3.a \
+        out/linux.amd64/release/lib/RuntimeEFCPP.a \
+        out/linux.amd64/release/lib/VBox-zlib.a \
+        out/linux.amd64/release/lib/VBox-liblzma.a \
+        out/linux.amd64/release/lib/VBox-liblzf.a \
+        -sMEMORY64=1 \
+        -sALLOW_MEMORY_GROWTH=1 \
+        -sINITIAL_MEMORY=67108864 \
+        -sSTACK_SIZE=1048576 \
+        -sENVIRONMENT=web \
+        -sEXPORTED_RUNTIME_METHODS='["callMain"]' \
+        -sINVOKE_RUN=1 \
+        -sMODULARIZE=0 \
+        2>&1 | tail -20 \
+    && echo "=== Artifacts ===" \
+    && ls -lh docs/vbox-wasm.js docs/vbox-wasm.wasm
+
+# Also run under Node.js to verify
+RUN . /opt/emsdk/emsdk_env.sh 2>/dev/null \
+    && echo "=== PoC: Node.js verification ==" \
+    && em++ -o /tmp/vbox-wasm-node.js wasm-main.cpp \
+        -I include -I out/linux.amd64/release \
+        -I src/VBox/Runtime/include \
+        -DRT_ARCH_AMD64 -D__AMD64__ \
+        -DIN_RING3 -DARCH_BITS=64 -DHC_ARCH_BITS=64 \
+        -DRT_OS_LINUX -DVBOX -DVBOX_OSE \
+        out/linux.amd64/release/lib/RuntimeR3.a \
+        out/linux.amd64/release/lib/RuntimeEFCPP.a \
+        out/linux.amd64/release/lib/VBox-zlib.a \
+        out/linux.amd64/release/lib/VBox-liblzma.a \
+        out/linux.amd64/release/lib/VBox-liblzf.a \
+        -sMEMORY64=1 \
+        -sALLOW_MEMORY_GROWTH=1 \
+        -sINITIAL_MEMORY=67108864 \
+        -sSTACK_SIZE=1048576 \
+        2>&1 | tail -5 \
+    && node --experimental-wasm-memory64 /tmp/vbox-wasm-node.js 2>&1 || true

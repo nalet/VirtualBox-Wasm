@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>VirtualBox/Wasm — IPRT Proof of Concept</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      background: #1a1a2e;
+      color: #e0e0e0;
+      font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 2rem;
+    }
+    h1 {
+      font-size: 1.8rem;
+      margin-bottom: 0.3rem;
+      color: #4fc3f7;
+    }
+    .subtitle {
+      color: #888;
+      margin-bottom: 1.5rem;
+      font-size: 0.95rem;
+    }
+    #status {
+      margin-bottom: 1rem;
+      padding: 0.5rem 1.2rem;
+      border-radius: 6px;
+      font-weight: 600;
+      font-size: 0.9rem;
+    }
+    #status.loading { background: #333; color: #ffd54f; }
+    #status.success { background: #1b5e20; color: #a5d6a7; }
+    #status.error   { background: #b71c1c; color: #ef9a9a; }
+
+    #screen {
+      width: 720px;
+      height: 400px;
+      background: #0d0d1a;
+      border: 2px solid #333;
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin-bottom: 1rem;
+      position: relative;
+      overflow: hidden;
+    }
+    #screen canvas {
+      display: none; /* Will be used when VGA emulation is ready */
+    }
+    #screen .placeholder {
+      text-align: center;
+      color: #555;
+    }
+    #screen .placeholder .icon {
+      font-size: 3rem;
+      margin-bottom: 0.5rem;
+    }
+
+    #console {
+      width: 720px;
+      max-height: 300px;
+      background: #0d0d1a;
+      border: 1px solid #333;
+      border-radius: 6px;
+      padding: 1rem;
+      overflow-y: auto;
+      font-family: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+      font-size: 0.85rem;
+      line-height: 1.5;
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+    #console .log  { color: #b0bec5; }
+    #console .info { color: #4fc3f7; }
+    #console .warn { color: #ffd54f; }
+    #console .err  { color: #ef5350; }
+
+    .info-bar {
+      margin-top: 1.5rem;
+      display: flex;
+      gap: 2rem;
+      font-size: 0.8rem;
+      color: #666;
+    }
+    .info-bar span { display: flex; align-items: center; gap: 0.3rem; }
+
+    .compat-warning {
+      display: none;
+      background: #4a1c00;
+      color: #ffcc80;
+      padding: 1rem 1.5rem;
+      border-radius: 6px;
+      margin-bottom: 1rem;
+      max-width: 720px;
+      font-size: 0.9rem;
+      line-height: 1.5;
+    }
+
+    a { color: #4fc3f7; }
+  </style>
+</head>
+<body>
+  <h1>VirtualBox/Wasm</h1>
+  <p class="subtitle">VirtualBox IPRT runtime compiled to WebAssembly (Wasm64 / memory64)</p>
+
+  <div id="compat-warning" class="compat-warning"></div>
+  <div id="status" class="loading">Checking browser support...</div>
+
+  <div id="screen">
+    <canvas id="vga" width="720" height="400"></canvas>
+    <div class="placeholder">
+      <div class="icon">&#128187;</div>
+      <div>VGA display — awaiting VMM integration</div>
+      <div style="margin-top:0.5rem;font-size:0.8rem;">Goal: Puppy Linux booting here</div>
+    </div>
+  </div>
+
+  <div id="console"></div>
+
+  <div class="info-bar">
+    <span>Wasm64 (memory64)</span>
+    <span>IPRT 7.2.97</span>
+    <span><a href="https://github.com/nalet/VirtualBox-Wasm" target="_blank">GitHub</a></span>
+  </div>
+
+  <script>
+    const con = document.getElementById('console');
+    const status = document.getElementById('status');
+    const compat = document.getElementById('compat-warning');
+
+    function appendLine(text, cls) {
+      const span = document.createElement('span');
+      span.className = cls || 'log';
+      span.textContent = text + '\n';
+      con.appendChild(span);
+      con.scrollTop = con.scrollHeight;
+    }
+
+    // Check for memory64 (Wasm64) support
+    async function checkMemory64() {
+      try {
+        // memory64 uses i64 for memory size instead of i32
+        // Minimal module: (memory (export "m") i64 1)
+        const bytes = new Uint8Array([
+          0x00, 0x61, 0x73, 0x6d,  // magic
+          0x01, 0x00, 0x00, 0x00,  // version
+          0x05, 0x04, 0x01,        // memory section, 4 bytes, 1 entry
+          0x04, 0x01, 0x00,        // limits: flags=4 (i64, no max), min=1, (no max since flag bit 0 is 0... actually flag 0x04 means memory64)
+          // Hmm, let me use a proper encoding
+        ]);
+        // Actually let's just try instantiating with the right flags
+        // A simpler test: try to compile a module that uses memory64
+        const testBytes = new Uint8Array([
+          0x00, 0x61, 0x73, 0x6d, // \0asm
+          0x01, 0x00, 0x00, 0x00, // version 1
+          // Memory section
+          0x05, 0x03, 0x01,       // section id=5, size=3, count=1
+          0x04, 0x00,             // flags=0x04 (memory64), initial=0
+        ]);
+        await WebAssembly.compile(testBytes);
+        return true;
+      } catch (e) {
+        return false;
+      }
+    }
+
+    // Hook console output from Emscripten
+    var Module = {
+      print: function(text) {
+        appendLine(text, 'log');
+        console.log(text);
+      },
+      printErr: function(text) {
+        // Emscripten info messages go to stderr
+        if (text.startsWith('info:') || text.includes('INFO')) {
+          appendLine(text, 'info');
+        } else {
+          appendLine(text, 'warn');
+        }
+        console.warn(text);
+      },
+      onRuntimeInitialized: function() {
+        appendLine('--- Emscripten runtime initialized ---', 'info');
+      },
+      onAbort: function(what) {
+        appendLine('ABORT: ' + what, 'err');
+        status.className = 'error';
+        status.textContent = 'Runtime aborted';
+      }
+    };
+
+    async function main() {
+      appendLine('Checking browser capabilities...', 'info');
+
+      const hasMemory64 = await checkMemory64();
+      if (!hasMemory64) {
+        compat.style.display = 'block';
+        compat.innerHTML =
+          '<strong>Browser does not support WebAssembly memory64.</strong><br>' +
+          'Required: Chrome 133+, Firefox 134+, or Edge 133+.<br>' +
+          'Safari does not yet support memory64.';
+        status.className = 'error';
+        status.textContent = 'memory64 not supported';
+        appendLine('ERROR: WebAssembly memory64 not supported in this browser.', 'err');
+        return;
+      }
+
+      appendLine('memory64 support: OK', 'info');
+      status.textContent = 'Loading VirtualBox/Wasm...';
+
+      // Load the Emscripten-generated JS (which loads the .wasm)
+      try {
+        const script = document.createElement('script');
+        script.src = 'vbox-wasm.js';
+        script.onerror = function() {
+          appendLine('ERROR: Failed to load vbox-wasm.js. Build artifacts may not be deployed yet.', 'err');
+          status.className = 'error';
+          status.textContent = 'Failed to load';
+        };
+        document.body.appendChild(script);
+
+        // Watch for completion
+        const checkDone = setInterval(function() {
+          const text = con.textContent;
+          if (text.includes('All basic IPRT tests passed')) {
+            status.className = 'success';
+            status.textContent = 'IPRT running in Wasm64';
+            clearInterval(checkDone);
+          }
+        }, 200);
+      } catch(e) {
+        appendLine('ERROR: ' + e.message, 'err');
+        status.className = 'error';
+        status.textContent = 'Load failed';
+      }
+    }
+
+    main();
+  </script>
+</body>
+</html>

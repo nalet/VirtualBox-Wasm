@@ -3008,6 +3008,9 @@ DECLINLINE(void) ASMSerializeInstruction(void) RT_NOTHROW_DEF
     __asm__ __volatile__ (RTASM_ARM_DSB_SY :: RTASM_ARM_DSB_SY_IN_REG :);
 # endif
 }
+#elif defined(RT_ARCH_WASM64)
+/* Provided by asm-fake.cpp — no inline definition here to avoid redefinition. */
+RTDECL(void) ASMSerializeInstruction(void) RT_NOTHROW_PROTO;
 #else
 # error "Port me"
 #endif
@@ -9024,6 +9027,9 @@ DECLINLINE(void *) ASMReadStackPointer(void) RT_NOTHROW_DEF
     __asm__ __volatile__("Lstart_ASMReadStackPointer_%=:\n\t"
                          "mov %0, sp\n\t"
                          : "=r" (pv));
+
+#elif defined(RT_ARCH_WASM64)
+    pv = __builtin_frame_address(0);
 
 #else
 # ifdef RT_ARCH_AMD64

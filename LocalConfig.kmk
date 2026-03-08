@@ -1,0 +1,111 @@
+# LocalConfig.kmk — Emscripten/Wasm64 build overrides
+#
+# This file is auto-loaded by Config.kmk and can safely override templates.
+#
+# Strategy: leave VBOX_GCC_TOOL as the host g++ so DynamicConfig.kmk probes
+# native flags correctly and BldProg targets stay native.  Override TOOL at
+# the template level for ring-3 targets only.
+#
+# SPDX-License-Identifier: GPL-3.0-only
+
+#
+# ── Force bundled zlib (system zlib unavailable for Wasm cross-compilation) ──
+#
+VBOX_USE_IN_TREE_ZLIB := 1
+
+#
+# ── Signal that we are building for Emscripten/Wasm ──
+#
+# Used in sub-makefiles to exclude Linux-specific sources.
+#
+VBOX_WITH_EMSCRIPTEN := 1
+
+#
+# ── Strip -mtune=generic (x86-only, rejected by emcc) ──
+#
+VBOX_GCC_OPT    := $(filter-out -mtune=generic,$(VBOX_GCC_OPT))
+VBOX_GCC_R0_OPT := $(filter-out -mtune=generic,$(VBOX_GCC_R0_OPT))
+VBOX_GCC_GC_OPT := $(filter-out -mtune=generic,$(VBOX_GCC_GC_OPT))
+
+#
+# ── Emscripten tool for ring-3 templates ──
+#
+# VBoxXEmscripten is at kBuild/kBuild/tools/VBoxXEmscripten.kmk.
+# BldProg / ring-0 templates stay on native g++.
+#
+TEMPLATE_VBoxR3Exe_TOOL                 := VBoxXEmscripten
+TEMPLATE_VBoxR3Dll_TOOL                 := VBoxXEmscripten
+TEMPLATE_VBoxR3DllNoPic_TOOL            := VBoxXEmscripten
+TEMPLATE_VBoxR3DllWarnNoPic_TOOL        := VBoxXEmscripten
+TEMPLATE_VBoxR3Static_TOOL              := VBoxXEmscripten
+TEMPLATE_VBoxR3StaticExe_TOOL           := VBoxXEmscripten
+TEMPLATE_VBoxR3TstExe_TOOL             := VBoxXEmscripten
+TEMPLATE_VBoxR3RuntimeDllItself_TOOL    := VBoxXEmscripten
+TEMPLATE_VBoxMainExe_TOOL               := VBoxXEmscripten
+TEMPLATE_VBoxMainDll_TOOL               := VBoxXEmscripten
+TEMPLATE_VBoxGuestR3Lib_TOOL            := VBoxXEmscripten
+TEMPLATE_VBoxGuestR3LibShared_TOOL      := VBoxXEmscripten
+TEMPLATE_VBoxGuestR3Exe_TOOL            := VBoxXEmscripten
+TEMPLATE_VBoxR3RuntimeDllNonPedanticFast_TOOL := VBoxXEmscripten
+TEMPLATE_VBoxR3RuntimeDllNonPedantic_TOOL     := VBoxXEmscripten
+TEMPLATE_VBoxR3DllNonPedantic_TOOL            := VBoxXEmscripten
+TEMPLATE_VBoxR3StaticNonPedantic_TOOL         := VBoxXEmscripten
+
+#
+# ── Strip -m64 from amd64 templates (emcc doesn't accept it) ──
+#
+TEMPLATE_VBoxR3Exe_CXXFLAGS.amd64     :=
+TEMPLATE_VBoxR3Exe_CFLAGS.amd64       :=
+TEMPLATE_VBoxR3Exe_OBJCFLAGS.amd64    :=
+TEMPLATE_VBoxR3Exe_OBJCXXFLAGS.amd64  :=
+TEMPLATE_VBoxR3Exe_PCHFLAGS.amd64     :=
+TEMPLATE_VBoxR3DllWarnNoPic_CXXFLAGS.amd64  :=
+TEMPLATE_VBoxR3DllWarnNoPic_CFLAGS.amd64    :=
+
+TEMPLATE_VBoxMainExe_CFLAGS.amd64     :=
+TEMPLATE_VBoxMainExe_OBJCFLAGS.amd64  :=
+TEMPLATE_VBoxMainExe_CXXFLAGS.amd64   :=
+TEMPLATE_VBoxMainExe_OBJCXXFLAGS.amd64 :=
+
+TEMPLATE_VBoxMainDll_CFLAGS.amd64     :=
+TEMPLATE_VBoxMainDll_CXXFLAGS.amd64   :=
+
+TEMPLATE_VBoxR3StaticExe_CXXFLAGS.amd64  :=
+TEMPLATE_VBoxR3StaticExe_CFLAGS.amd64    :=
+
+TEMPLATE_VBoxR3Dll_CFLAGS.amd64       :=
+TEMPLATE_VBoxR3Dll_CXXFLAGS.amd64     :=
+
+TEMPLATE_VBoxGuestR3Lib_CFLAGS.amd64  :=
+TEMPLATE_VBoxGuestR3Lib_CXXFLAGS.amd64 :=
+
+#
+# ── Disable DTrace / SDT probes ──
+#
+# DTrace requires VBoxTpG code generator and kernel headers.
+# Must be in LocalConfig.kmk (AutoConfig.wasm.kmk is NOT auto-loaded).
+#
+VBOX_WITH_DTRACE                      :=
+VBOX_WITH_DTRACE_R3                   :=
+
+#
+# ── Disable ring-0 / kernel modules entirely ──
+#
+VBOX_WITH_R0_MODULES                  :=
+TEMPLATE_VBoxR0_CFLAGS.amd64          :=
+TEMPLATE_VBoxR0_CXXFLAGS.amd64        :=
+TEMPLATE_VBoxR0Drv_CFLAGS.amd64       :=
+TEMPLATE_VBoxR0Drv_CXXFLAGS.amd64     :=
+
+#
+# ── Disable Guest Additions ──
+#
+VBOX_WITH_ADDITIONS                   :=
+
+#
+# ── Provide SVN revision (not in a git checkout) ──
+#
+VBOX_SVN_REV                          := 0
+TEMPLATE_VBoxGuestR3Dll_TOOL           := VBoxXEmscripten
+TEMPLATE_VBoxGuestR3Dll_CFLAGS.amd64   :=
+TEMPLATE_VBoxGuestR3Dll_CXXFLAGS.amd64 :=

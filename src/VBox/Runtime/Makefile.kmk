@@ -2278,6 +2278,46 @@ ifdef VBOX_WITH_NOCRT_STATIC
  endif
 endif
 
+#
+# ── Emscripten/Wasm override ──
+#
+# When building for Wasm, replace the Linux-specific and amd64-specific
+# sources with Wasm stubs.  Common sources from RuntimeBaseR3 are kept.
+#
+# IMPORTANT: Use := (not +=) to override kBuild's _EXTENDS inheritance.
+# Using += would skip RuntimeBaseR3_SOURCES entirely.
+#
+ifdef VBOX_WITH_EMSCRIPTEN
+ RuntimeR3_SOURCES := $(RuntimeBaseR3_SOURCES) \
+ 	r3/wasm/wasm-stubs.cpp \
+ 	generic/RTMpGetDescription-generic-stub.cpp \
+ 	generic/system-page-size-generic.cpp \
+ 	generic/RTSystemIsInsideVM-generic.cpp \
+ 	common/asm/ASMBitFirstClear-generic.cpp \
+ 	common/asm/ASMBitNextClear-generic.cpp \
+ 	common/asm/ASMBitFirstSet-generic.cpp \
+ 	common/asm/ASMBitNextSet-generic.cpp \
+ 	common/asm/ASMMemZero32-generic.cpp \
+ 	common/asm/ASMMemFill32-generic.cpp \
+ 	common/asm/ASMMemFirstMismatchingU8-generic.cpp \
+ 	common/asm/ASMMemFirstNonZero-generic.cpp \
+ 	common/asm/asm-fake.cpp \
+ 	common/string/RTStrMemFind32.cpp
+
+ # Clear platform/arch-specific sources (kernel APIs / x86 asm unavailable in Wasm).
+ RuntimeR3_SOURCES.linux :=
+ RuntimeR3_SOURCES.linux.amd64 :=
+ RuntimeR3_SOURCES.linux.arm64 :=
+ RuntimeR3_SOURCES.linux.arm32 :=
+ RuntimeR3_SOURCES.amd64 :=
+ # Also clear at the base level since _EXTENDS copies these after direct overrides.
+ RuntimeBaseR3_SOURCES.linux :=
+ RuntimeBaseR3_SOURCES.linux.amd64 :=
+ RuntimeBaseR3_SOURCES.linux.arm64 :=
+ RuntimeBaseR3_SOURCES.linux.arm32 :=
+ RuntimeBaseR3_SOURCES.amd64 :=
+endif
+
 
 #
 # Generate RTIsoMaker / VISO help text from the manpage xml.

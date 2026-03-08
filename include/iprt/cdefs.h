@@ -137,7 +137,8 @@
  && !defined(RT_ARCH_SPARC) \
  && !defined(RT_ARCH_SPARC64) \
  && !defined(RT_ARCH_ARM32) \
- && !defined(RT_ARCH_ARM64)
+ && !defined(RT_ARCH_ARM64) \
+ && !defined(RT_ARCH_WASM64)
 # if defined(__amd64__) || defined(__x86_64__) || defined(_M_X64) || defined(__AMD64__)
 #  define RT_ARCH_AMD64
 # elif defined(__i386__) || defined(_M_IX86) || defined(__X86__)
@@ -191,6 +192,25 @@
 # error "RT_ARCH_ARM is now RT_ARCH_ARM32!"
 #endif
 
+/*
+ * Emscripten / WebAssembly compiler override.
+ *
+ * When emcc is used with -sMEMORY64=1 it predefines __EMSCRIPTEN__ and
+ * __wasm64__.  kBuild's DEFS.amd64 still injects -DRT_ARCH_AMD64 -D__AMD64__
+ * on the command line (KBUILD_TARGET_ARCH=amd64 on the host), which would
+ * conflict.  Strip the AMD64 identifiers and assert RT_ARCH_WASM64 instead.
+ * This keeps ARCH_BITS=64 and HC_ARCH_BITS=64 so struct layouts match AMD64.
+ */
+#if defined(__EMSCRIPTEN__) && defined(RT_ARCH_AMD64)
+# undef  RT_ARCH_AMD64
+# ifdef  __AMD64__
+#  undef __AMD64__
+# endif
+# ifndef RT_ARCH_WASM64
+#  define RT_ARCH_WASM64
+# endif
+#endif
+
 /* Final check (PORTME). */
 #if    (defined(RT_ARCH_X86) != 0) \
      + (defined(RT_ARCH_AMD64) != 0) \
@@ -198,6 +218,7 @@
      + (defined(RT_ARCH_SPARC64) != 0) \
      + (defined(RT_ARCH_ARM32) != 0) \
      + (defined(RT_ARCH_ARM64) != 0) \
+     + (defined(RT_ARCH_WASM64) != 0) \
   != 1
 # error "Exactly one RT_ARCH_XXX macro shall be defined"
 #endif
@@ -218,6 +239,7 @@
 #define RT_ARCH_VAL_ARM64         0x00000020
 #define RT_ARCH_VAL_SPARC32       0x00000100
 #define RT_ARCH_VAL_SPARC64       0x00000200
+#define RT_ARCH_VAL_WASM64        0x00001000
 /** @} */
 
 
@@ -235,6 +257,8 @@
 # define RT_ARCH_VAL                    RT_ARCH_VAL_SPARC32
 #elif defined(RT_ARCH_SPARC64)
 # define RT_ARCH_VAL                    RT_ARCH_VAL_SPARC64
+#elif defined(RT_ARCH_WASM64)
+# define RT_ARCH_VAL                    RT_ARCH_VAL_WASM64
 #else
 # error "RT_ARCH_VAL: port me"
 #endif
@@ -260,6 +284,8 @@
 # define RT_ISA_SPARC
 #elif defined(RT_ARCH_ARM32) || defined(RT_ARCH_ARM64)
 # define RT_ISA_ARM
+#elif defined(RT_ARCH_WASM64)
+# define RT_ISA_WASM
 #else
 # error "RT_ISA_XXX: port me"
 #endif
@@ -430,7 +456,7 @@
  * Defined if the architecture is big endian.  */
 /** @def RT_LITTLE_ENDIAN
  * Defined if the architecture is little endian.  */
-#if defined(RT_ARCH_AMD64) || defined(RT_ARCH_X86) || defined(RT_ARCH_ARM32) || defined(RT_ARCH_ARM64)
+#if defined(RT_ARCH_AMD64) || defined(RT_ARCH_X86) || defined(RT_ARCH_ARM32) || defined(RT_ARCH_ARM64) || defined(RT_ARCH_WASM64)
 # define RT_LITTLE_ENDIAN
 #elif defined(RT_ARCH_SPARC) || defined(RT_ARCH_SPARC64)
 # define RT_BIG_ENDIAN
@@ -470,7 +496,7 @@
  * Defines the bit count of the current context.
  */
 #if !defined(ARCH_BITS) || defined(DOXYGEN_RUNNING)
-# if defined(RT_ARCH_AMD64) || defined(RT_ARCH_SPARC64) || defined(RT_ARCH_ARM64) || defined(DOXYGEN_RUNNING)
+# if defined(RT_ARCH_AMD64) || defined(RT_ARCH_SPARC64) || defined(RT_ARCH_ARM64) || defined(RT_ARCH_WASM64) || defined(DOXYGEN_RUNNING)
 #  define ARCH_BITS 64
 # elif !defined(__I86__) || !defined(__WATCOMC__)
 #  define ARCH_BITS 32
@@ -484,7 +510,7 @@
  #if defined(RT_ARCH_X86) || defined(RT_ARCH_SPARC) || defined(RT_ARCH_ARM32)
  # error "ARCH_BITS=64 but non-64-bit RT_ARCH_XXX defined."
  #endif
- #if !defined(RT_ARCH_AMD64) && !defined(RT_ARCH_SPARC64) && !defined(RT_ARCH_ARM64)
+ #if !defined(RT_ARCH_AMD64) && !defined(RT_ARCH_SPARC64) && !defined(RT_ARCH_ARM64) && !defined(RT_ARCH_WASM64)
  # error "ARCH_BITS=64 but no 64-bit RT_ARCH_XXX defined."
  #endif
 
@@ -4235,6 +4261,8 @@
 #  define RT_BREAKPOINT()       __asm__ __volatile__("unimp 0\n\t")     /** @todo Sparc: this is just a wild guess (same as Sparc64, just different name). */
 # elif defined(RT_ARCH_ARM32) || defined(RT_ARCH_ARM64)
 #  define RT_BREAKPOINT()       __asm__ __volatile__("brk #0xf000\n\t")
+# elif defined(RT_ARCH_WASM64)
+#  define RT_BREAKPOINT()       __builtin_trap()
 # endif
 #endif
 #ifdef _MSC_VER
@@ -4762,6 +4790,10 @@
 # elif defined(RT_ARCH_ARM32) || defined(RT_ARCH_ARM64)
 /* ASSUMES that at least the last and first 4K are out of bounds. */
 #  define RT_VALID_PTR(ptr)      ( (uintptr_t)(ptr) + 0x1000U >= 0x2000U )
+
+# elif defined(RT_ARCH_WASM64)
+/* Wasm64: linear memory starts at 0; only address 0 (null) is invalid. */
+#  define RT_VALID_PTR(ptr)      ( (uintptr_t)(ptr) != 0 )
 
 # else
 #  error "Architecture identifier missing / not implemented."

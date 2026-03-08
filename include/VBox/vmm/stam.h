@@ -79,6 +79,9 @@ RT_C_DECLS_BEGIN
          __asm__ __volatile__ ("rdtsc\n\t" : "=a"(low), "=d"(high)); \
          (u64) = ((high << 32) | low); \
     } while (0)
+# elif defined(RT_ARCH_WASM64) || defined(__EMSCRIPTEN__)
+   /* Wasm: no TSC; profiling timestamps are meaningless in sandbox. */
+#  define STAM_GET_TS(u64) do { (u64) = 0; } while (0)
 # endif
 #else
 # if RT_MSC_PREREQ(RT_MSC_VER_VS2005)

@@ -3,7 +3,9 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>VirtualBox/Wasm — IPRT Proof of Concept</title>
+  <title>VirtualBox/Wasm</title>
+  <link rel="icon" type="image/x-icon" href="favicon.ico">
+  <link rel="icon" type="image/png" sizes="32x32" href="favicon-32.png">
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
@@ -38,41 +40,64 @@
     #status.error   { background: #b71c1c; color: #ef9a9a; }
 
     #screen {
-      width: 720px;
-      height: 400px;
-      background: #0d0d1a;
-      border: 2px solid #333;
-      border-radius: 8px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      margin-bottom: 1rem;
+      width: 724px;
+      height: 404px;
+      background: #000;
+      border: 2px solid #444;
+      border-radius: 4px;
+      margin-bottom: 0.5rem;
       position: relative;
       overflow: hidden;
+      cursor: none;
     }
+    #screen.no-vm { cursor: default; }
     #screen canvas {
-      display: none; /* Will be used when VGA emulation is ready */
+      width: 720px;
+      height: 400px;
+      image-rendering: pixelated;
     }
     #screen .placeholder {
-      text-align: center;
+      position: absolute;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      color: #555;
+      pointer-events: none;
+    }
+    #screen .placeholder .icon { font-size: 3rem; margin-bottom: 0.5rem; }
+
+    .toolbar {
+      width: 724px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 1rem;
+      font-size: 0.8rem;
+      color: #666;
+    }
+    .toolbar .input-status span {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 3px;
+      margin-left: 4px;
+      background: #222;
       color: #555;
     }
-    #screen .placeholder .icon {
-      font-size: 3rem;
-      margin-bottom: 0.5rem;
-    }
+    .toolbar .input-status span.active { background: #1b5e20; color: #a5d6a7; }
 
     #console {
-      width: 720px;
-      max-height: 300px;
+      width: 724px;
+      max-height: 200px;
       background: #0d0d1a;
       border: 1px solid #333;
       border-radius: 6px;
-      padding: 1rem;
+      padding: 0.8rem;
       overflow-y: auto;
       font-family: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
-      font-size: 0.85rem;
-      line-height: 1.5;
+      font-size: 0.8rem;
+      line-height: 1.4;
       white-space: pre-wrap;
       word-break: break-all;
     }
@@ -97,7 +122,7 @@
       padding: 1rem 1.5rem;
       border-radius: 6px;
       margin-bottom: 1rem;
-      max-width: 720px;
+      max-width: 724px;
       font-size: 0.9rem;
       line-height: 1.5;
     }
@@ -112,13 +137,21 @@
   <div id="compat-warning" class="compat-warning"></div>
   <div id="status" class="loading">Checking browser support...</div>
 
-  <div id="screen">
+  <div id="screen" class="no-vm" tabindex="0">
     <canvas id="vga" width="720" height="400"></canvas>
-    <div class="placeholder">
+    <div id="placeholder" class="placeholder">
       <div class="icon">&#128187;</div>
       <div>VGA display — awaiting VMM integration</div>
       <div style="margin-top:0.5rem;font-size:0.8rem;">Goal: Puppy Linux booting here</div>
     </div>
+  </div>
+
+  <div class="toolbar">
+    <div class="input-status">
+      Input: <span id="kbd-status">Keyboard</span>
+      <span id="mouse-status">Mouse</span>
+    </div>
+    <div id="mouse-pos">-</div>
   </div>
 
   <div id="console"></div>
@@ -130,8 +163,9 @@
   </div>
 
   <script>
+    // ── Console output ──
     const con = document.getElementById('console');
-    const status = document.getElementById('status');
+    const statusEl = document.getElementById('status');
     const compat = document.getElementById('compat-warning');
 
     function appendLine(text, cls) {
@@ -142,42 +176,216 @@
       con.scrollTop = con.scrollHeight;
     }
 
-    // Check for memory64 (Wasm64) support
+    // ── memory64 feature detection ──
     async function checkMemory64() {
       try {
-        // memory64 uses i64 for memory size instead of i32
-        // Minimal module: (memory (export "m") i64 1)
-        const bytes = new Uint8Array([
-          0x00, 0x61, 0x73, 0x6d,  // magic
-          0x01, 0x00, 0x00, 0x00,  // version
-          0x05, 0x04, 0x01,        // memory section, 4 bytes, 1 entry
-          0x04, 0x01, 0x00,        // limits: flags=4 (i64, no max), min=1, (no max since flag bit 0 is 0... actually flag 0x04 means memory64)
-          // Hmm, let me use a proper encoding
-        ]);
-        // Actually let's just try instantiating with the right flags
-        // A simpler test: try to compile a module that uses memory64
         const testBytes = new Uint8Array([
-          0x00, 0x61, 0x73, 0x6d, // \0asm
-          0x01, 0x00, 0x00, 0x00, // version 1
-          // Memory section
-          0x05, 0x03, 0x01,       // section id=5, size=3, count=1
-          0x04, 0x00,             // flags=0x04 (memory64), initial=0
+          0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,
+          0x05, 0x03, 0x01, 0x04, 0x00,
         ]);
         await WebAssembly.compile(testBytes);
         return true;
-      } catch (e) {
-        return false;
-      }
+      } catch (e) { return false; }
     }
 
-    // Hook console output from Emscripten
+    // ── VGA Display ──
+    const vgaCanvas = document.getElementById('vga');
+    const vgaCtx = vgaCanvas.getContext('2d');
+    const VGA = {
+      width: 720,
+      height: 400,
+      imageData: null,
+      init: function() {
+        this.imageData = vgaCtx.createImageData(this.width, this.height);
+        // Fill with black
+        const d = this.imageData.data;
+        for (let i = 3; i < d.length; i += 4) d[i] = 255;
+        vgaCtx.putImageData(this.imageData, 0, 0);
+      },
+      // Called by VM to update a rectangular region of the framebuffer
+      updateRect: function(x, y, w, h, rgbaData) {
+        const img = this.imageData;
+        for (let row = 0; row < h; row++) {
+          for (let col = 0; col < w; col++) {
+            const srcIdx = (row * w + col) * 4;
+            const dstIdx = ((y + row) * this.width + (x + col)) * 4;
+            img.data[dstIdx]     = rgbaData[srcIdx];
+            img.data[dstIdx + 1] = rgbaData[srcIdx + 1];
+            img.data[dstIdx + 2] = rgbaData[srcIdx + 2];
+            img.data[dstIdx + 3] = 255;
+          }
+        }
+        vgaCtx.putImageData(img, 0, 0, x, y, w, h);
+      },
+      // Full screen update from a flat RGBA buffer
+      updateAll: function(rgbaData) {
+        this.imageData.data.set(rgbaData);
+        vgaCtx.putImageData(this.imageData, 0, 0);
+      },
+      // For text mode: draw a character at col,row (will be used by BIOS text mode)
+      putChar: function(col, row, ch, fg, bg) {
+        vgaCtx.fillStyle = bg;
+        vgaCtx.fillRect(col * 9, row * 16, 9, 16);
+        vgaCtx.fillStyle = fg;
+        vgaCtx.font = '16px monospace';
+        vgaCtx.fillText(ch, col * 9, row * 16 + 13);
+      }
+    };
+
+    // ── Keyboard Input ──
+    // PS/2 Set 1 scancode table (key → make code; break = make | 0x80)
+    const PS2_SCANCODES = {
+      'Escape':0x01,'Digit1':0x02,'Digit2':0x03,'Digit3':0x04,'Digit4':0x05,
+      'Digit5':0x06,'Digit6':0x07,'Digit7':0x08,'Digit8':0x09,'Digit9':0x0A,
+      'Digit0':0x0B,'Minus':0x0C,'Equal':0x0D,'Backspace':0x0E,'Tab':0x0F,
+      'KeyQ':0x10,'KeyW':0x11,'KeyE':0x12,'KeyR':0x13,'KeyT':0x14,
+      'KeyY':0x15,'KeyU':0x16,'KeyI':0x17,'KeyO':0x18,'KeyP':0x19,
+      'BracketLeft':0x1A,'BracketRight':0x1B,'Enter':0x1C,'ControlLeft':0x1D,
+      'KeyA':0x1E,'KeyS':0x1F,'KeyD':0x20,'KeyF':0x21,'KeyG':0x22,
+      'KeyH':0x23,'KeyJ':0x24,'KeyK':0x25,'KeyL':0x26,'Semicolon':0x27,
+      'Quote':0x28,'Backquote':0x29,'ShiftLeft':0x2A,'Backslash':0x2B,
+      'KeyZ':0x2C,'KeyX':0x2D,'KeyC':0x2E,'KeyV':0x2F,'KeyB':0x30,
+      'KeyN':0x31,'KeyM':0x32,'Comma':0x33,'Period':0x34,'Slash':0x35,
+      'ShiftRight':0x36,'NumpadMultiply':0x37,'AltLeft':0x38,'Space':0x39,
+      'CapsLock':0x3A,'F1':0x3B,'F2':0x3C,'F3':0x3D,'F4':0x3E,
+      'F5':0x3F,'F6':0x40,'F7':0x41,'F8':0x42,'F9':0x43,'F10':0x44,
+      'NumLock':0x45,'ScrollLock':0x46,
+      'Numpad7':0x47,'Numpad8':0x48,'Numpad9':0x49,'NumpadSubtract':0x4A,
+      'Numpad4':0x4B,'Numpad5':0x4C,'Numpad6':0x4D,'NumpadAdd':0x4E,
+      'Numpad1':0x4F,'Numpad2':0x50,'Numpad3':0x51,'Numpad0':0x52,
+      'NumpadDecimal':0x53,'F11':0x57,'F12':0x58,
+    };
+    // Extended scancodes (prefixed with 0xE0)
+    const PS2_EXT_SCANCODES = {
+      'ControlRight':0x1D,'AltRight':0x38,'ArrowUp':0x48,'ArrowLeft':0x4B,
+      'ArrowRight':0x4D,'ArrowDown':0x50,'Home':0x47,'End':0x4F,
+      'PageUp':0x49,'PageDown':0x51,'Insert':0x52,'Delete':0x53,
+      'NumpadEnter':0x1C,'NumpadDivide':0x35,
+    };
+
+    const Keyboard = {
+      queue: [],
+      captured: false,
+
+      init: function() {
+        const screen = document.getElementById('screen');
+        screen.addEventListener('keydown', (e) => this.onKey(e, true));
+        screen.addEventListener('keyup', (e) => this.onKey(e, false));
+        screen.addEventListener('click', () => {
+          this.captured = true;
+          document.getElementById('kbd-status').classList.add('active');
+        });
+      },
+
+      onKey: function(e, isDown) {
+        if (!this.captured) return;
+        e.preventDefault();
+        e.stopPropagation();
+
+        const code = e.code;
+        if (PS2_EXT_SCANCODES[code] !== undefined) {
+          const sc = PS2_EXT_SCANCODES[code];
+          this.queue.push(0xE0);
+          this.queue.push(isDown ? sc : (sc | 0x80));
+        } else if (PS2_SCANCODES[code] !== undefined) {
+          const sc = PS2_SCANCODES[code];
+          this.queue.push(isDown ? sc : (sc | 0x80));
+        }
+        // Will be consumed by VM via Keyboard.dequeue()
+      },
+
+      dequeue: function() {
+        return this.queue.length > 0 ? this.queue.shift() : -1;
+      },
+
+      hasData: function() {
+        return this.queue.length > 0;
+      }
+    };
+
+    // ── Mouse Input ──
+    const Mouse = {
+      queue: [],  // PS/2 mouse packets: [buttons, dx, dy]
+      captured: false,
+      x: 0,
+      y: 0,
+      buttons: 0,
+
+      init: function() {
+        const screen = document.getElementById('screen');
+        const posEl = document.getElementById('mouse-pos');
+
+        screen.addEventListener('click', () => {
+          if (!this.captured && document.pointerLockElement !== screen) {
+            screen.requestPointerLock();
+          }
+        });
+
+        document.addEventListener('pointerlockchange', () => {
+          this.captured = document.pointerLockElement === screen;
+          document.getElementById('mouse-status').classList.toggle('active', this.captured);
+          document.getElementById('screen').classList.toggle('no-vm', !this.captured);
+          if (this.captured) {
+            appendLine('Mouse captured (press Esc to release)', 'info');
+          }
+        });
+
+        screen.addEventListener('mousemove', (e) => {
+          if (!this.captured) return;
+          // Clamp deltas to PS/2 range (-128..127)
+          const dx = Math.max(-128, Math.min(127, e.movementX));
+          const dy = Math.max(-128, Math.min(127, -e.movementY)); // PS/2 Y is inverted
+          this.x += e.movementX;
+          this.y += e.movementY;
+          posEl.textContent = Math.round(this.x) + ',' + Math.round(this.y);
+          if (dx !== 0 || dy !== 0) {
+            this.enqueuePacket(this.buttons, dx, dy);
+          }
+        });
+
+        screen.addEventListener('mousedown', (e) => {
+          if (!this.captured) return;
+          this.buttons |= (1 << e.button);
+          this.enqueuePacket(this.buttons, 0, 0);
+        });
+
+        screen.addEventListener('mouseup', (e) => {
+          if (!this.captured) return;
+          this.buttons &= ~(1 << e.button);
+          this.enqueuePacket(this.buttons, 0, 0);
+        });
+
+        // Prevent context menu in screen area
+        screen.addEventListener('contextmenu', (e) => e.preventDefault());
+      },
+
+      enqueuePacket: function(buttons, dx, dy) {
+        // PS/2 3-byte mouse packet
+        let byte0 = 0x08; // bit 3 always set
+        if (buttons & 1) byte0 |= 0x01; // left
+        if (buttons & 2) byte0 |= 0x02; // right
+        if (buttons & 4) byte0 |= 0x04; // middle
+        if (dx < 0) byte0 |= 0x10;      // X sign
+        if (dy < 0) byte0 |= 0x20;      // Y sign
+        this.queue.push(byte0, dx & 0xFF, dy & 0xFF);
+      },
+
+      dequeue: function() {
+        return this.queue.length > 0 ? this.queue.shift() : -1;
+      },
+
+      hasData: function() {
+        return this.queue.length > 0;
+      }
+    };
+
+    // ── Emscripten Module hooks ──
     var Module = {
       print: function(text) {
         appendLine(text, 'log');
         console.log(text);
       },
       printErr: function(text) {
-        // Emscripten info messages go to stderr
         if (text.startsWith('info:') || text.includes('INFO')) {
           appendLine(text, 'info');
         } else {
@@ -190,12 +398,17 @@
       },
       onAbort: function(what) {
         appendLine('ABORT: ' + what, 'err');
-        status.className = 'error';
-        status.textContent = 'Runtime aborted';
+        statusEl.className = 'error';
+        statusEl.textContent = 'Runtime aborted';
       }
     };
 
+    // ── Main ──
     async function main() {
+      VGA.init();
+      Keyboard.init();
+      Mouse.init();
+
       appendLine('Checking browser capabilities...', 'info');
 
       const hasMemory64 = await checkMemory64();
@@ -205,39 +418,40 @@
           '<strong>Browser does not support WebAssembly memory64.</strong><br>' +
           'Required: Chrome 133+, Firefox 134+, or Edge 133+.<br>' +
           'Safari does not yet support memory64.';
-        status.className = 'error';
-        status.textContent = 'memory64 not supported';
+        statusEl.className = 'error';
+        statusEl.textContent = 'memory64 not supported';
         appendLine('ERROR: WebAssembly memory64 not supported in this browser.', 'err');
         return;
       }
 
       appendLine('memory64 support: OK', 'info');
-      status.textContent = 'Loading VirtualBox/Wasm...';
+      appendLine('VGA display: 720x400 canvas ready', 'info');
+      appendLine('Keyboard: PS/2 Set 1 scancodes (click screen to capture)', 'info');
+      appendLine('Mouse: PS/2 3-byte packets with pointer lock', 'info');
+      statusEl.textContent = 'Loading VirtualBox/Wasm...';
 
-      // Load the Emscripten-generated JS (which loads the .wasm)
       try {
         const script = document.createElement('script');
         script.src = 'vbox-wasm.js';
         script.onerror = function() {
-          appendLine('ERROR: Failed to load vbox-wasm.js. Build artifacts may not be deployed yet.', 'err');
-          status.className = 'error';
-          status.textContent = 'Failed to load';
+          appendLine('ERROR: Failed to load vbox-wasm.js.', 'err');
+          statusEl.className = 'error';
+          statusEl.textContent = 'Failed to load';
         };
         document.body.appendChild(script);
 
-        // Watch for completion
         const checkDone = setInterval(function() {
           const text = con.textContent;
           if (text.includes('All basic IPRT tests passed')) {
-            status.className = 'success';
-            status.textContent = 'IPRT running in Wasm64';
+            statusEl.className = 'success';
+            statusEl.textContent = 'IPRT running in Wasm64';
             clearInterval(checkDone);
           }
         }, 200);
       } catch(e) {
         appendLine('ERROR: ' + e.message, 'err');
-        status.className = 'error';
-        status.textContent = 'Load failed';
+        statusEl.className = 'error';
+        statusEl.textContent = 'Load failed';
       }
     }
 

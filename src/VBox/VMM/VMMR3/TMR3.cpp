@@ -1034,6 +1034,12 @@ static uint64_t tmR3CalibrateTSC(void)
 {
     uint64_t u64Hz;
 
+#ifdef RT_ARCH_WASM64
+    /* Wasm64: no hardware TSC — return a synthetic 3 GHz frequency. */
+    u64Hz = UINT64_C(3000000000);
+    return u64Hz;
+#else /* !RT_ARCH_WASM64 */
+
     /*
      * Use GIP when available. Prefere the nominal one, no need to wait for it.
      */
@@ -1107,6 +1113,7 @@ static uint64_t tmR3CalibrateTSC(void)
     u64Hz /= RT_ELEMENTS(au64Samples) - 2;
 
     return u64Hz;
+#endif /* !RT_ARCH_WASM64 */
 }
 
 #ifdef TM_SECONDS_TO_AUTOMATIC_POWER_OFF
@@ -1308,7 +1315,11 @@ VMM_INT_DECL(void) TMR3Reset(PVM pVM)
     switch (pVM->tm.s.enmTSCMode)
     {
         case TMTSCMODE_REAL_TSC_OFFSET:
+#ifndef RT_ARCH_WASM64
             offTscRawSrc = SUPReadTsc() * pVM->tm.s.u8TSCMultiplier;
+#else
+            offTscRawSrc = 0; /* Wasm64: no hardware TSC */
+#endif
             break;
         case TMTSCMODE_DYNAMIC:
         case TMTSCMODE_VIRT_TSC_EMULATED:
@@ -3864,7 +3875,11 @@ static DECLCALLBACK(VBOXSTRICTRC) tmR3CpuTickParavirtEnable(PVM pVM, PVMCPU pVCp
          *  => offTscRawSrcNew  = uRawNewTsc - uOldTsc
          */
         uint64_t uRawOldTsc = tmR3CpuTickGetRawVirtualNoCheck(pVM);
+#ifndef RT_ARCH_WASM64
         uint64_t uRawNewTsc = SUPReadTsc() * pVM->tm.s.u8TSCMultiplier;
+#else
+        uint64_t uRawNewTsc = 0; /* Wasm64: no hardware TSC */
+#endif
         uint32_t cCpus = pVM->cCpus;
         for (uint32_t i = 0; i < cCpus; i++)
         {
@@ -3918,7 +3933,11 @@ static DECLCALLBACK(VBOXSTRICTRC) tmR3CpuTickParavirtDisable(PVM pVM, PVMCPU pVC
         /*
          * See tmR3CpuTickParavirtEnable for an explanation of the conversion math.
          */
+#ifndef RT_ARCH_WASM64
         uint64_t uRawOldTsc = SUPReadTsc() * pVM->tm.s.u8TSCMultiplier;
+#else
+        uint64_t uRawOldTsc = 0; /* Wasm64: no hardware TSC */
+#endif
         uint64_t uRawNewTsc = tmR3CpuTickGetRawVirtualNoCheck(pVM);
         uint32_t cCpus = pVM->cCpus;
         for (uint32_t i = 0; i < cCpus; i++)

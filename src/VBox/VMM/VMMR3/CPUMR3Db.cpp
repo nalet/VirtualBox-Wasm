@@ -39,7 +39,7 @@
 #if defined(VBOX_VMM_TARGET_ARMV8) || defined(RT_ARCH_ARM64)
 # include <iprt/armv8.h>
 #endif
-#if !defined(RT_ARCH_ARM64)
+#if !defined(RT_ARCH_ARM64) && !defined(RT_ARCH_WASM64)
 # include <iprt/asm-amd64-x86.h>
 #endif
 #include <iprt/mem.h>

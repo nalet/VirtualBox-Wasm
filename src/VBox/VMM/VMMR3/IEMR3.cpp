@@ -82,7 +82,7 @@ static const char *iemGetTargetCpuName(uint32_t enmTargetCpu)
 {
     switch (enmTargetCpu)
     {
-#define CASE_RET_STR(enmValue) case enmValue: return #enmValue + (sizeof("IEMTARGETCPU_") - 1)
+#define CASE_RET_STR(enmValue) case enmValue: return &(#enmValue)[sizeof("IEMTARGETCPU_") - 1]
         CASE_RET_STR(IEMTARGETCPU_8086);
         CASE_RET_STR(IEMTARGETCPU_V20);
         CASE_RET_STR(IEMTARGETCPU_186);

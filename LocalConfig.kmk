@@ -28,6 +28,13 @@ VBOX_GCC_R0_OPT := $(filter-out -mtune=generic,$(VBOX_GCC_R0_OPT))
 VBOX_GCC_GC_OPT := $(filter-out -mtune=generic,$(VBOX_GCC_GC_OPT))
 
 #
+# ── Clear linker flags unsupported by wasm-ld ──
+#
+VBOX_LD_as_needed :=
+TEMPLATE_VBoxR3Exe_LDFLAGS.linux   :=
+TEMPLATE_VBoxR3DllBase_LDFLAGS.linux :=
+
+#
 # ── Emscripten tool for ring-3 templates ──
 #
 # VBoxXEmscripten is at kBuild/kBuild/tools/VBoxXEmscripten.kmk.
@@ -109,3 +116,86 @@ VBOX_SVN_REV                          := 0
 TEMPLATE_VBoxGuestR3Dll_TOOL           := VBoxXEmscripten
 TEMPLATE_VBoxGuestR3Dll_CFLAGS.amd64   :=
 TEMPLATE_VBoxGuestR3Dll_CXXFLAGS.amd64 :=
+
+#
+# ── Strip -m64 from VBoxR3DllNoPic (used by VBoxVMM) ──
+#
+TEMPLATE_VBoxR3DllNoPic_CFLAGS.amd64   :=
+TEMPLATE_VBoxR3DllNoPic_CXXFLAGS.amd64 :=
+TEMPLATE_VBoxR3DllNoPic_ASFLAGS.amd64  :=
+
+TEMPLATE_VBoxR3DllNonPedantic_CFLAGS.amd64   :=
+TEMPLATE_VBoxR3DllNonPedantic_CXXFLAGS.amd64 :=
+
+#
+# ── Disable features not applicable to Wasm ──
+#
+# No hardware virtualization (VT-x, AMD-V, Hyper-V KVM)
+VBOX_WITH_NATIVE_NEM                  :=
+VBOX_WITH_HWVIRT                      :=
+VBOX_WITH_NESTED_HWVIRT_SVM           :=
+VBOX_WITH_NESTED_HWVIRT_VMX           :=
+VBOX_WITH_NESTED_HWVIRT_VMX_EPT       :=
+
+# No IEM JIT recompiler (generates native code — not possible in Wasm)
+VBOX_WITH_IEM_RECOMPILER              :=
+VBOX_WITH_IEM_NATIVE_RECOMPILER       :=
+
+# No raw-mode / ring-0
+VBOX_WITH_RAW_MODE                    :=
+VBOX_WITH_R0_LOGGING                  :=
+
+# No VUSB (USB passthrough)
+VBOX_WITH_VUSB                        :=
+
+# No async completion / netshaper (requires pthreads/AIO features)
+VBOX_WITH_PDM_ASYNC_COMPLETION        :=
+VBOX_WITH_NETSHAPER                   :=
+
+# No IOMMU
+VBOX_WITH_IOMMU_AMD                   :=
+VBOX_WITH_IOMMU_INTEL                 :=
+
+# No DBGF tracing
+VBOX_WITH_DBGF_TRACING               :=
+VBOX_WITH_DBGF_FLOW_TRACING          :=
+
+# Disable debugger for now (reduces dependency chain)
+VBOX_WITH_DEBUGGER                    :=
+
+# No REM (recompiler — replaced by IEM interpreter)
+VBOX_WITH_REM                         :=
+
+# IEM: use C implementations only (no x86 asm)
+IEM_WITHOUT_ASSEMBLY                  := 1
+
+#
+# ── Override LIB_RUNTIME to use static RuntimeR3.a ──
+#
+# VBoxVMM normally links against VBoxRT.so (shared library).
+# Emscripten doesn't support shared libraries in the traditional sense,
+# so we redirect to the static RuntimeR3.a that we already build.
+#
+LIB_RUNTIME     = $(PATH_STAGE_LIB)/RuntimeR3$(VBOX_SUFF_LIB)
+LIB_REM         =
+
+#
+# ── Clear VBoxVMM platform-specific sources ──
+#
+# VBoxVMM_SOURCES.amd64 includes host-CPU detection (CPUMR3Host-x86.cpp)
+# and .asm files that are not applicable to Wasm cross-compilation.
+#
+VBoxVMM_SOURCES.amd64  :=
+
+#
+# ── Override VBoxTpG-Disabled to be a true no-op ──
+#
+# VBoxTpG (tracepoint generator) is not built for our Wasm cross-compilation.
+# Even the "Disabled" variant tries to run the VBoxTpG binary to generate
+# empty headers.  Override to just create an empty header file instead.
+#
+TOOL_VBoxTpG-Disabled_DTRACE_DEPORD    :=
+define TOOL_VBoxTpG-Disabled_DTRACE_HDR_CMDS
+	$(QUIET)$(MKDIR) -p "$(dir $(out))"
+	$(QUIET)$(CP) -f "$(PATH_ROOT)/src/VBox/VMM/VBoxVMM-dtrace-noop.h" "$(out)"
+endef

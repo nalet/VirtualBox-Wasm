@@ -125,7 +125,7 @@ RT_C_DECLS_BEGIN
 
 /** @def IEMNATIVE_WITH_SIMD_FP_NATIVE_EMITTERS
  * Enable this to use native emitters for certain SIMD FP operations. */
-#if 1 || defined(DOXYGEN_RUNNING)
+#if (1 || defined(DOXYGEN_RUNNING)) && !defined(RT_ARCH_WASM64)
 # define IEMNATIVE_WITH_SIMD_FP_NATIVE_EMITTERS
 #endif
 

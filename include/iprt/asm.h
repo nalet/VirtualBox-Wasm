@@ -2630,7 +2630,7 @@ DECLINLINE(bool) ASMAtomicCmpXchgExS64(volatile int64_t RT_FAR *pi64, const int6
     return ASMAtomicCmpXchgExU64((volatile uint64_t RT_FAR *)pi64, (uint64_t)i64, (uint64_t)i64Old, (uint64_t RT_FAR *)pi64Old);
 }
 
-#if defined(RT_ARCH_AMD64) || defined(RT_ARCH_ARM64) || defined(DOXYGEN_RUNNING)
+#if defined(RT_ARCH_AMD64) || defined(RT_ARCH_ARM64) || defined(RT_ARCH_WASM64) || defined(DOXYGEN_RUNNING)
 
 /** @def RTASM_HAVE_CMP_XCHG_U128
  * Indicates that we've got ASMAtomicCmpSwapU128(), ASMAtomicCmpSwapU128v2()
@@ -2671,6 +2671,20 @@ DECLINLINE(bool) ASMAtomicCmpXchgU128v2(volatile uint128_t *pu128, const uint64_
     uint128_t const uOld = __sync_val_compare_and_swap(pu128, uCmp, ((uint128_t)u64NewHi << 64) | u64NewLo);
     *pu128Old = uOld;
     return uCmp == uOld;
+
+#  elif defined(RT_ARCH_WASM64)
+    /* Wasm64: single-threaded — non-atomic compare-and-exchange. */
+    RTUINT128U uOld;
+    uOld.s.Lo = ((RTUINT128U volatile *)pu128)->s.Lo;
+    uOld.s.Hi = ((RTUINT128U volatile *)pu128)->s.Hi;
+    *pu128Old = ((uint128_t)uOld.s.Hi << 64) | uOld.s.Lo;
+    if (uOld.s.Lo == u64OldLo && uOld.s.Hi == u64OldHi)
+    {
+        ((RTUINT128U volatile *)pu128)->s.Lo = u64NewLo;
+        ((RTUINT128U volatile *)pu128)->s.Hi = u64NewHi;
+        return true;
+    }
+    return false;
 
 #  elif defined(RT_ARCH_AMD64)
 #   if RT_INLINE_ASM_GNU_STYLE
@@ -9071,6 +9085,17 @@ DECLINLINE(void *) ASMReadStackPointer(void) RT_NOTHROW_DEF
 # undef IPRT_INCLUDED_asm_watcom_x86_32_h
 # include "asm-watcom-x86-32.h"
 #endif
+
+/*
+ * Wasm64: Provide stub for ASMReadTSC which is defined in asm-amd64-x86.h
+ * (not included on Wasm64) but referenced throughout the VMM code.
+ */
+#ifdef RT_ARCH_WASM64
+DECLINLINE(uint64_t) ASMReadTSC(void) RT_NOTHROW_DEF
+{
+    return 0; /* No hardware TSC on Wasm — callers use this for perf stats. */
+}
+#endif /* RT_ARCH_WASM64 */
 
 #endif /* !IPRT_INCLUDED_asm_h */
 

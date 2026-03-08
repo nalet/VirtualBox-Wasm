@@ -1392,6 +1392,7 @@ DECLINLINE(int) pdmR3PowerOnDrv(PPDMDRVINS pDrvIns, const char *pszDevName, uint
  * @returns VBox status code.
  * @param   pUsbIns             The USB device instance.
  */
+#ifdef VBOX_WITH_USB
 DECLINLINE(int) pdmR3PowerOnUsb(PPDMUSBINS pUsbIns)
 {
     Assert(pUsbIns->Internal.s.fVMSuspended);
@@ -1408,6 +1409,7 @@ DECLINLINE(int) pdmR3PowerOnUsb(PPDMUSBINS pUsbIns)
     pUsbIns->Internal.s.fVMSuspended = false;
     return VINF_SUCCESS;
 }
+#endif /* VBOX_WITH_USB */
 
 
 /**
@@ -1671,6 +1673,7 @@ DECLINLINE(bool) pdmR3ResetDrv(PPDMDRVINS pDrvIns, PPDMNOTIFYASYNCSTATS pAsync,
  * @param   pAsync              The structure for recording asynchronous
  *                              notification tasks.
  */
+#ifdef VBOX_WITH_USB
 DECLINLINE(void) pdmR3ResetUsb(PPDMUSBINS pUsbIns, PPDMNOTIFYASYNCSTATS pAsync)
 {
     if (!pUsbIns->Internal.s.fVMReset)
@@ -1698,6 +1701,7 @@ DECLINLINE(void) pdmR3ResetUsb(PPDMUSBINS pUsbIns, PPDMNOTIFYASYNCSTATS pAsync)
         }
     }
 }
+#endif /* VBOX_WITH_USB */
 
 
 /**
@@ -2029,6 +2033,7 @@ DECLINLINE(bool) pdmR3SuspendDrv(PPDMDRVINS pDrvIns, PPDMNOTIFYASYNCSTATS pAsync
  * @param   pAsync              The structure for recording asynchronous
  *                              notification tasks.
  */
+#ifdef VBOX_WITH_USB
 DECLINLINE(void) pdmR3SuspendUsb(PPDMUSBINS pUsbIns, PPDMNOTIFYASYNCSTATS pAsync)
 {
     if (!pUsbIns->Internal.s.fVMSuspended)
@@ -2063,6 +2068,7 @@ DECLINLINE(void) pdmR3SuspendUsb(PPDMUSBINS pUsbIns, PPDMNOTIFYASYNCSTATS pAsync
         }
     }
 }
+#endif /* VBOX_WITH_USB */
 
 
 /**
@@ -2231,6 +2237,7 @@ DECLINLINE(int) pdmR3ResumeDrv(PPDMDRVINS pDrvIns, const char *pszDevName, uint3
  * @returns VBox status code.
  * @param   pUsbIns             The USB device instance.
  */
+#ifdef VBOX_WITH_USB
 DECLINLINE(int) pdmR3ResumeUsb(PPDMUSBINS pUsbIns)
 {
     if (pUsbIns->Internal.s.fVMSuspended)
@@ -2249,6 +2256,7 @@ DECLINLINE(int) pdmR3ResumeUsb(PPDMUSBINS pUsbIns)
     }
     return VINF_SUCCESS;
 }
+#endif /* VBOX_WITH_USB */
 
 
 /**
@@ -2400,6 +2408,7 @@ DECLINLINE(bool) pdmR3PowerOffDrv(PPDMDRVINS pDrvIns, PPDMNOTIFYASYNCSTATS pAsyn
  * @param   pAsync              The structure for recording asynchronous
  *                              notification tasks.
  */
+#ifdef VBOX_WITH_USB
 DECLINLINE(void) pdmR3PowerOffUsb(PPDMUSBINS pUsbIns, PPDMNOTIFYASYNCSTATS pAsync)
 {
     if (!pUsbIns->Internal.s.fVMSuspended)
@@ -2435,6 +2444,7 @@ DECLINLINE(void) pdmR3PowerOffUsb(PPDMUSBINS pUsbIns, PPDMNOTIFYASYNCSTATS pAsyn
         }
     }
 }
+#endif /* VBOX_WITH_USB */
 
 
 /**

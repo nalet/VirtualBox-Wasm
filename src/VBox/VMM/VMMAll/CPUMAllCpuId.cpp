@@ -743,7 +743,7 @@ VMMDECL(const char *) CPUMMicroarchName(CPUMMICROARCH enmMicroarch)
 {
     switch (enmMicroarch)
     {
-#define CASE_RET_STR(enmValue)  case enmValue: return #enmValue + (sizeof("kCpumMicroarch_") - 1)
+#define CASE_RET_STR(enmValue)  case enmValue: return &(#enmValue)[sizeof("kCpumMicroarch_") - 1]
         CASE_RET_STR(kCpumMicroarch_Intel_8086);
         CASE_RET_STR(kCpumMicroarch_Intel_80186);
         CASE_RET_STR(kCpumMicroarch_Intel_80286);

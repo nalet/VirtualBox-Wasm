@@ -391,6 +391,9 @@ DECLCALLBACK(void) cpumR3CpuIdInfoHost(PVM pVM, PCDBGFINFOHLP pHlp, const char *
     CPUMCPUIDINFOSTATEX86   InfoState;
 #elif defined(RT_ARCH_ARM64) || defined(RT_ARCH_ARM32)
     CPUMCPUIDINFOSTATEARMV8 InfoState;
+#elif defined(RT_ARCH_WASM64)
+    /* Wasm64: use x86 info state since we emulate x86 guests. */
+    CPUMCPUIDINFOSTATEX86   InfoState;
 #else
 # error "port me"
 #endif
@@ -439,6 +442,14 @@ DECLCALLBACK(void) cpumR3CpuIdInfoHost(PVM pVM, PCDBGFINFOHLP pHlp, const char *
     }
     CPUMR3CpuIdInfoArmV8(&InfoState);
     RTMemFree(paFree);
+
+#elif defined(RT_ARCH_WASM64)
+    /* Wasm64: synthetic host info — no real CPUID leaves. */
+    InfoState.paLeaves      = NULL;
+    InfoState.cLeaves       = 0;
+    InfoState.cLeaves2      = 0;
+    InfoState.paLeaves2     = NULL;
+    RT_NOREF(pVM);
 
 #else
 # error "port me"

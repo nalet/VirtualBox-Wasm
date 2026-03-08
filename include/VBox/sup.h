@@ -870,7 +870,15 @@ DECLINLINE(uint64_t) SUPReadTsc(void)
     return SUPReadTscWithDelta(pGip);
 }
 
-#endif /* X86 || AMD64 || ARM64 || ARM32 */
+#elif defined(RT_ARCH_WASM64)
+
+/** Wasm64: no hardware TSC — return 0. */
+DECLINLINE(uint64_t) SUPReadTsc(void)
+{
+    return ASMReadTSC();
+}
+
+#endif /* X86 || AMD64 || ARM64 || ARM32 || WASM64 */
 
 /** @internal */
 SUPDECL(int64_t) SUPGetTscDeltaSlow(PSUPGLOBALINFOPAGE pGip);

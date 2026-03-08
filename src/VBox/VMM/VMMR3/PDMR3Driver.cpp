@@ -1808,6 +1808,7 @@ static DECLCALLBACK(int) pdmR3DrvHlp_USBRegisterHub(PPDMDRVINS pDrvIns, uint32_t
     int rc = pdmR3UsbRegisterHub(pDrvIns->Internal.s.pVMR3, pDrvIns, fVersions, cPorts, pUsbHubReg, ppUsbHubHlp);
 #else
     int rc = VERR_NOT_SUPPORTED;
+    RT_NOREF(pDrvIns, fVersions, cPorts, pUsbHubReg, ppUsbHubHlp);
 #endif
 
     LogFlow(("pdmR3DrvHlp_USBRegisterHub: caller='%s'/%d: returns %Rrc\n", pDrvIns->pReg->szName, pDrvIns->iInstance, rc));
@@ -1894,10 +1895,15 @@ static DECLCALLBACK(int) pdmR3DrvHlp_AsyncCompletionTemplateCreate(PPDMDRVINS pD
     LogFlow(("pdmR3DrvHlp_AsyncCompletionTemplateCreate: caller='%s'/%d: ppTemplate=%p pfnCompleted=%p pszDesc=%p:{%s}\n",
              pDrvIns->pReg->szName, pDrvIns->iInstance, ppTemplate, pfnCompleted, pszDesc, pszDesc));
 
+#ifdef VBOX_WITH_PDM_ASYNC_COMPLETION
     int rc = pdmR3AsyncCompletionTemplateCreateDriver(pDrvIns->Internal.s.pVMR3, pDrvIns, ppTemplate, pfnCompleted, pvTemplateUser, pszDesc);
+#else
+    int rc = VERR_NOT_SUPPORTED;
+    RT_NOREF(pDrvIns, ppTemplate, pfnCompleted, pvTemplateUser, pszDesc);
+#endif
 
-    LogFlow(("pdmR3DrvHlp_AsyncCompletionTemplateCreate: caller='%s'/%d: returns %Rrc *ppThread=%p\n", pDrvIns->pReg->szName,
-             pDrvIns->iInstance, rc, *ppTemplate));
+    LogFlow(("pdmR3DrvHlp_AsyncCompletionTemplateCreate: caller='%s'/%d: returns %Rrc\n", pDrvIns->pReg->szName,
+             pDrvIns->iInstance, rc));
     return rc;
 }
 

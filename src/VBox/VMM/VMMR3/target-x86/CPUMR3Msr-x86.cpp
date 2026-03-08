@@ -36,7 +36,7 @@
 #include <VBox/vmm/mm.h>
 
 #include <VBox/err.h>
-#if !defined(RT_ARCH_ARM64)
+#if !defined(RT_ARCH_ARM64) && !defined(RT_ARCH_WASM64)
 # include <iprt/asm-amd64-x86.h>
 #endif
 #include <iprt/mem.h>

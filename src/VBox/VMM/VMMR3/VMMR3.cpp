@@ -2394,6 +2394,9 @@ VMMR3_INT_DECL(void) VMMR3InitR0StackUnwindState(PUVM pUVM, VMCPUID idCpu, struc
 #elif defined(RT_ARCH_ARM64)
     /** @todo PORTME: arm ring-0  */
 
+#elif defined(RT_ARCH_WASM64)
+    /* Wasm64: no ring-0 assert stack to unwind. */
+
 #else
 # error "Port me"
 #endif

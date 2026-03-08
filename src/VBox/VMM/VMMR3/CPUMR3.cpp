@@ -335,6 +335,28 @@ VMMR3DECL(int) CPUMR3Init(PVM pVM)
         rc = CPUMCpuIdExplodeFeaturesArmV8(pVM->cpum.s.paHostIdRegsR3, pVM->cpum.s.cHostIdRegs, &g_CpumHostFeatures.s);
         AssertLogRelRCReturn(rc, rc);
 
+#elif defined(RT_ARCH_WASM64)
+        /* Wasm64: no host CPU to probe — provide synthetic x86 features for the guest emulator. */
+        RT_ZERO(g_CpumHostFeatures.s);
+        g_CpumHostFeatures.s.enmCpuVendor   = CPUMCPUVENDOR_INTEL;
+        g_CpumHostFeatures.s.enmMicroarch    = kCpumMicroarch_Intel_Core7_Skylake;
+        g_CpumHostFeatures.s.fMmx            = 1;
+        g_CpumHostFeatures.s.fSse            = 1;
+        g_CpumHostFeatures.s.fSse2           = 1;
+        g_CpumHostFeatures.s.fTsc            = 1;
+        g_CpumHostFeatures.s.fFxSaveRstor    = 1;
+        g_CpumHostFeatures.s.fCmpXchg8b      = 1;
+        g_CpumHostFeatures.s.fSysEnter       = 1;
+        g_CpumHostFeatures.s.fCmpXchg16b     = 1;
+        g_CpumHostFeatures.s.fLahfSahf       = 1;
+        g_CpumHostFeatures.s.fLongMode       = 1;
+        g_CpumHostFeatures.s.fPae            = 1;
+        g_CpumHostFeatures.s.fPge            = 1;
+        g_CpumHostFeatures.s.fPse            = 1;
+        g_CpumHostFeatures.s.fPse36          = 1;
+        g_CpumHostFeatures.s.fClFlush        = 1;
+        rc = VINF_SUCCESS;
+
 #else
 # error port me
 #endif

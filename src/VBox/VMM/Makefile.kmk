@@ -251,11 +251,13 @@ ifn1of (VBOX_WITH_ONLY_PGM_NEM_MODE, $(VBoxVMM_DEFS))
  	VMMR3/target-x86/PGMR3Pool-x86.cpp \
  	VMMAll/target-x86/PGMAllPool-x86.cpp
 endif
+ifndef VBOX_WITH_EMSCRIPTEN
 VBoxVMM_SOURCES.amd64 += \
 	VMMR3/CPUMR3Host-x86.cpp \
 	VMMR3/PGMR3DbgA.asm \
 	$(if-expr !defined(IEM_WITHOUT_ASSEMBLY),VMMAll/target-x86/IEMAllAImpl-x86-amd64.asm,) \
 	VMMAll/VMMAllA.asm
+endif
 VBoxVMM_SOURCES.arm64 += \
 	VMMAll/target-x86/IEMAllAImpl-x86-arm64.S \
 	VMMR3/CPUMR3CpuIdInfo-armv8.cpp

@@ -1774,7 +1774,7 @@ typedef union CPUHOSTFEATURES
     /** Fields common to all CPU types. */
     CPUMFEATURESCOMMON Common;
     /** The host specific structure. */
-#if defined(RT_ARCH_AMD64) || defined(RT_ARCH_X86)
+#if defined(RT_ARCH_AMD64) || defined(RT_ARCH_X86) || defined(RT_ARCH_WASM64)
     CPUMFEATURESX86
 #elif defined(RT_ARCH_ARM64)
     CPUMFEATURESARMV8

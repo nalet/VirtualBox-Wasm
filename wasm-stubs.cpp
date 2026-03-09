@@ -18,9 +18,36 @@
 #include <iprt/string.h>
 #include <iprt/stream.h>
 
-/* Debug: log any stub returning VERR_NOT_SUPPORTED */
+/*
+ * Debug: shared ring buffer for cross-thread stub logging.
+ * EMT thread output gets lost because Emscripten's printf proxy
+ * can't deliver while the main thread is blocked in VMR3ReqCallU.
+ * This buffer is read by the main thread after VMR3Create returns.
+ */
+#include <stdatomic.h>
+#include <string.h>
+#include <stdio.h>
+
+#define STUB_LOG_SIZE 4096
+static char g_szStubLog[STUB_LOG_SIZE];
+static volatile int g_iStubLogPos = 0;
+
+static void stubLogAppend(const char *pszName)
+{
+    char szMsg[128];
+    int n = snprintf(szMsg, sizeof(szMsg), "STUB: %s\n", pszName);
+    if (n <= 0) return;
+    int pos = __atomic_fetch_add(&g_iStubLogPos, n, __ATOMIC_SEQ_CST);
+    if (pos + n < STUB_LOG_SIZE)
+        memcpy(&g_szStubLog[pos], szMsg, n);
+}
+
+/* Also try RTPrintf in case it works */
 #define STUB_NOT_SUPPORTED(name) \
-    do { RTPrintf("STUB: %s returning VERR_NOT_SUPPORTED\n", name); } while (0)
+    do { stubLogAppend(name); RTPrintf("STUB: %s returning VERR_NOT_SUPPORTED\n", name); } while (0)
+
+/* Exported so wasm-main.cpp can read it */
+extern "C" const char *wasmStubGetLog(void) { return g_szStubLog; }
 #include <iprt/uuid.h>
 #include <iprt/file.h>
 #include <iprt/mp.h>

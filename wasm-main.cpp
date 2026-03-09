@@ -35,6 +35,9 @@
 # include <emscripten/threading.h>
 #endif
 
+/* Defined in wasm-stubs.cpp — cross-thread debug buffer */
+extern "C" const char *wasmStubGetLog(void);
+
 
 /*************************************************************************
  * Globals
@@ -305,6 +308,18 @@ int main(int argc, char **argv)
     if (RT_FAILURE(rc))
     {
         RTPrintf("VMR3Create failed: %Rrc (rc=%d)\n", rc, rc);
+
+        /* Read the cross-thread stub debug log */
+        const char *pszLog = wasmStubGetLog();
+        if (pszLog && *pszLog)
+        {
+            RTPrintf("=== Stub log (from EMT thread) ===\n");
+            RTPrintf("%s", pszLog);
+            RTPrintf("=== End stub log ===\n");
+        }
+        else
+            RTPrintf("(No stubs returning VERR_NOT_SUPPORTED were called)\n");
+
         return 1;
     }
     RTPrintf("VM created successfully!\n");

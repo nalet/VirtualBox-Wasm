@@ -89,6 +89,7 @@ static DECLCALLBACK(int) vboxWasmCfgmConstructor(PUVM pUVM, PVM pVM, PCVMMR3VTAB
     PCFGMNODE pHm;
     INSERT_NODE(pRoot, "HM", &pHm);
     INSERT_INTEGER(pHm, "FallbackToIEM", 1);
+    INSERT_INTEGER(pHm, "FallbackToNEM", 0);
 
     /*
      * PDM — tell it to load builtin device/driver modules.

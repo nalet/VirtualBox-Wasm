@@ -659,13 +659,14 @@
         diskImageData = null;
 
         // Call main() which creates and powers on the VM
+        // With PROXY_TO_PTHREAD, main() runs in a worker thread — callMain returns immediately
         appendLine('Creating VirtualBox VM (IEM driverless mode)...', 'info');
-        statusEl.textContent = 'Creating VM...';
+        statusEl.textContent = 'Starting VM (proxied to worker thread)...';
         Module.callMain([]);
 
         vmRunning = true;
         statusEl.className = 'success';
-        statusEl.textContent = 'VM running (IEM x86 emulation)';
+        statusEl.textContent = 'VM initializing (IEM x86 emulation)';
 
       } catch (err) {
         appendLine('VM start failed: ' + err.message, 'err');

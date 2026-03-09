@@ -6516,17 +6516,46 @@ function wasmCallFuncPtrTrampoline(pfn, cArgs, pArgs) {
     return -1;
   }
   var baseIdx = Number(pArgs) >> 3;
-  var args = [];
+  var bigArgs = [];
   for (var i = 0; i < cArgs; i++) {
-    args.push((growMemViews(), HEAP64)[baseIdx + i]);
+    bigArgs.push((growMemViews(), HEAP64)[baseIdx + i]);
   }
-  try {
-    var result = func(...args);
-    return typeof result === "bigint" ? Number(result) : (result | 0);
-  } catch (e) {
-    err("wasmCallFuncPtrTrampoline: call to index " + idx + " failed: " + e.message);
-    return -1;
+  if (!Module._typeMaskCache) Module._typeMaskCache = {};
+  var cached = Module._typeMaskCache[idx];
+  if (cached !== undefined) {
+    var args = [];
+    for (var i = 0; i < cArgs; i++) {
+      args.push((cached & (1 << i)) ? Number(bigArgs[i]) : bigArgs[i]);
+    }
+    try {
+      var result = func(...args);
+      return typeof result === "bigint" ? Number(result) : (result | 0);
+    } catch (e) {
+      delete Module._typeMaskCache[idx];
+    }
   }
+  var numArgs = bigArgs.map(function(v) {
+    return Number(v);
+  });
+  var combos = 1 << cArgs;
+  for (var mask = 0; mask < combos; mask++) {
+    var args = [];
+    for (var i = 0; i < cArgs; i++) {
+      args.push((mask & (1 << i)) ? numArgs[i] : bigArgs[i]);
+    }
+    try {
+      var result = func(...args);
+      Module._typeMaskCache[idx] = mask;
+      return typeof result === "bigint" ? Number(result) : (result | 0);
+    } catch (e) {
+      if (!(e instanceof TypeError)) {
+        err("wasmCallFuncPtrTrampoline: idx=" + idx + " failed: " + e.message);
+        return -1;
+      }
+    }
+  }
+  err("wasmCallFuncPtrTrampoline: exhausted all type combos for idx " + idx + " (" + cArgs + " args)");
+  return -1;
 }
 
 // Imports from the Wasm binary.

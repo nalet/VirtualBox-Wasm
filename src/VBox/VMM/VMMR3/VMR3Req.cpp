@@ -61,8 +61,6 @@
  * where the JS-to-Wasm boundary automatically coerces argument types.
  */
 EM_JS(int, wasmCallFuncPtrTrampoline, (void *pfn, int cArgs, void *pArgs), {
-    /* Convert function pointer to table index.
-     * In memory64 mode, pfn arrives as BigInt — convert to Number for table index. */
     var idx = Number(pfn);
     var func = wasmTable.get(idx);
     if (!func) {
@@ -70,23 +68,59 @@ EM_JS(int, wasmCallFuncPtrTrampoline, (void *pfn, int cArgs, void *pArgs), {
         return -1;
     }
 
-    /* Read uintptr_t args from the array.
-     * pArgs points to an array of uintptr_t (8 bytes each in wasm64).
-     * In memory64 mode, pArgs arrives as BigInt.
-     * Use HEAP64 (BigInt64Array) — available with -sMEMORY64=1. */
-    var baseIdx = Number(pArgs) >> 3;  /* byte offset to HEAP64 index */
-    var args = [];
+    /* Read uintptr_t args as BigInt from HEAP64. */
+    var baseIdx = Number(pArgs) >> 3;
+    var bigArgs = [];
     for (var i = 0; i < cArgs; i++) {
-        args.push(HEAP64[baseIdx + i]);
+        bigArgs.push(HEAP64[baseIdx + i]);
     }
 
-    try {
-        var result = func(...args);
-        return typeof result === "bigint" ? Number(result) : (result | 0);
-    } catch (e) {
-        err("wasmCallFuncPtrTrampoline: call to index " + idx + " failed: " + e.message);
-        return -1;
+    /* Cache of type masks per function table index.
+     * mask bit=1 means arg[i] should be Number (i32), bit=0 means BigInt (i64).
+     * -1 = not yet determined.
+     * Stored as a module-level variable (persists across calls). */
+    if (!Module._typeMaskCache) Module._typeMaskCache = {};
+    var cached = Module._typeMaskCache[idx];
+
+    if (cached !== undefined) {
+        /* Use cached mask to convert args */
+        var args = [];
+        for (var i = 0; i < cArgs; i++) {
+            args.push((cached & (1 << i)) ? Number(bigArgs[i]) : bigArgs[i]);
+        }
+        try {
+            var result = func(...args);
+            return typeof result === "bigint" ? Number(result) : (result | 0);
+        } catch (e) {
+            /* Cache miss (different arg count?) — fall through to probe */
+            delete Module._typeMaskCache[idx];
+        }
     }
+
+    /* Probe: try all-BigInt first, then all-Number, then mixed combos.
+     * Cache the working mask on success. */
+    var numArgs = bigArgs.map(function(v) { return Number(v); });
+    var combos = 1 << cArgs;
+
+    for (var mask = 0; mask < combos; mask++) {
+        var args = [];
+        for (var i = 0; i < cArgs; i++) {
+            args.push((mask & (1 << i)) ? numArgs[i] : bigArgs[i]);
+        }
+        try {
+            var result = func(...args);
+            Module._typeMaskCache[idx] = mask;  /* Cache for future calls */
+            return typeof result === "bigint" ? Number(result) : (result | 0);
+        } catch (e) {
+            if (!(e instanceof TypeError)) {
+                err("wasmCallFuncPtrTrampoline: idx=" + idx + " failed: " + e.message);
+                return -1;
+            }
+        }
+    }
+
+    err("wasmCallFuncPtrTrampoline: exhausted all type combos for idx " + idx + " (" + cArgs + " args)");
+    return -1;
 });
 #endif /* __EMSCRIPTEN__ */
 

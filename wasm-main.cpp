@@ -21,6 +21,10 @@
 #include <iprt/buildconfig.h>
 #include <iprt/path.h>
 #include <iprt/file.h>
+#include <iprt/thread.h>
+#include <iprt/semaphore.h>
+#include <iprt/critsect.h>
+/* iprt/tls.h doesn't exist — RTTlsAllocEx is in iprt/thread.h */
 
 #include <VBox/vmm/vmapi.h>
 #include <VBox/vmm/cfgm.h>
@@ -259,6 +263,13 @@ static DECLCALLBACK(void) vboxWasmVMAtError(PUVM pUVM, void *pvUser,
 /*************************************************************************
  * Main
  *************************************************************************/
+static DECLCALLBACK(int) testEMTThread(RTTHREAD hSelf, void *pvUser)
+{
+    RT_NOREF(hSelf);
+    *(volatile int *)pvUser = 99;
+    return VINF_SUCCESS;
+}
+
 int main(int argc, char **argv)
 {
     /*
@@ -300,25 +311,55 @@ int main(int argc, char **argv)
      * This is exactly what we want for WebAssembly.
      */
     /*
-     * Quick pthread sanity check.
+     * Test IPRT infrastructure used by vmR3CreateUVM to find the failure.
      */
     {
-        #include <pthread.h>
-        struct PthreadTest { int val; };
-        static auto testFn = [](void *arg) -> void * {
-            ((PthreadTest *)arg)->val = 42;
-            return NULL;
-        };
-        PthreadTest pt = { 0 };
-        pthread_t th;
-        int prc = pthread_create(&th, NULL, testFn, &pt);
-        if (prc == 0)
+        RTPrintf("--- vmR3CreateUVM sub-function tests ---\n");
+
+        /* 1. RTMemPageAllocZ */
+        void *pPage = RTMemPageAllocZ(4096);
+        RTPrintf("RTMemPageAllocZ: %s\n", pPage ? "OK" : "FAILED");
+        if (pPage) RTMemPageFree(pPage, 4096);
+
+        /* 2. RTTlsAllocEx */
+        RTTLS idxTLS;
+        rc = RTTlsAllocEx(&idxTLS, NULL);
+        RTPrintf("RTTlsAllocEx: %Rrc\n", rc);
+        if (RT_SUCCESS(rc)) RTTlsFree(idxTLS);
+
+        /* 3. RTSemEventCreate */
+        RTSEMEVENT hSem;
+        rc = RTSemEventCreate(&hSem);
+        RTPrintf("RTSemEventCreate: %Rrc\n", rc);
+        if (RT_SUCCESS(rc)) RTSemEventDestroy(hSem);
+
+        /* 4. RTCritSectInit */
+        RTCRITSECT CritSect;
+        rc = RTCritSectInit(&CritSect);
+        RTPrintf("RTCritSectInit: %Rrc\n", rc);
+        if (RT_SUCCESS(rc)) RTCritSectDelete(&CritSect);
+
+        /* 5. RTSemRWCreate (used by STAMR3InitUVM) */
+        RTSEMRW hRWSem;
+        rc = RTSemRWCreate(&hRWSem);
+        RTPrintf("RTSemRWCreate: %Rrc\n", rc);
+        if (RT_SUCCESS(rc)) RTSemRWDestroy(hRWSem);
+
+        /* 6. RTThreadCreate (the EMT thread creation) */
+        volatile int testVal = 0;
+        RTTHREAD hThread;
+        rc = RTThreadCreate(&hThread, testEMTThread, (void *)&testVal,
+                           _1M, RTTHREADTYPE_EMULATION,
+                           RTTHREADFLAGS_WAITABLE | RTTHREADFLAGS_COM_MTA | RTTHREADFLAGS_NO_SIGNALS,
+                           "TestEMT");
+        RTPrintf("RTThreadCreate(EMT flags): %Rrc\n", rc);
+        if (RT_SUCCESS(rc))
         {
-            pthread_join(th, NULL);
-            RTPrintf("pthread test: OK (val=%d)\n", pt.val);
+            RTThreadWait(hThread, RT_INDEFINITE_WAIT, NULL);
+            RTPrintf("RTThreadCreate result: val=%d\n", testVal);
         }
-        else
-            RTPrintf("pthread test: FAILED (errno=%d)\n", prc);
+
+        RTPrintf("--- end tests ---\n");
     }
 
     RTPrintf("Creating VM...\n");

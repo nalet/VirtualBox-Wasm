@@ -215,9 +215,9 @@ static DECLCALLBACK(void) vboxWasmVMAtError(PUVM pUVM, void *pvUser,
                                             int rc, RT_SRC_POS_DECL,
                                             const char *pszFormat, va_list args)
 {
-    RT_NOREF(pUVM, pvUser, pszFile, iLine, pszFunction);
-    RTPrintf("VM Error: rc=%Rrc\n", rc);
-    char szMsg[512];
+    RT_NOREF(pUVM, pvUser);
+    RTPrintf("VM Error: rc=%Rrc at %s:%d (%s)\n", rc, pszFile, iLine, pszFunction);
+    char szMsg[1024];
     RTStrPrintfV(szMsg, sizeof(szMsg), pszFormat, args);
     RTPrintf("  %s\n", szMsg);
 }

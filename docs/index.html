@@ -469,7 +469,7 @@
             if (cached) {
               appendLine('Using cached compiled module (' + Math.round(performance.now() - t0) + 'ms)', 'info');
               const instance = await WebAssembly.instantiate(cached, imports);
-              successCallback(instance);
+              successCallback(instance, cached);
               return;
             }
 
@@ -479,7 +479,7 @@
               const instance = await WebAssembly.instantiate(module, imports);
               appendLine('Compiled in ' + Math.round(performance.now() - t0) + 'ms', 'info');
               setCachedModule(wasmUrl, module);
-              successCallback(instance);
+              successCallback(instance, module);
             } else {
               const resp = await fetch(wasmUrl);
               const bytes = await resp.arrayBuffer();
@@ -487,7 +487,7 @@
               const instance = await WebAssembly.instantiate(module, imports);
               appendLine('Compiled in ' + Math.round(performance.now() - t0) + 'ms', 'info');
               setCachedModule(wasmUrl, module);
-              successCallback(instance);
+              successCallback(instance, module);
             }
           } catch (e) {
             appendLine('Wasm instantiation failed: ' + e.message, 'err');

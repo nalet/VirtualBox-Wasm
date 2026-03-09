@@ -211,7 +211,7 @@ RUN . /opt/emsdk/emsdk_env.sh 2>/dev/null \
         -sINVOKE_RUN=0 \
         -sMODULARIZE=0 \
         -pthread \
-        -sPTHREAD_POOL_SIZE=4 \
+        -sPTHREAD_POOL_SIZE=8 \
         -sEXIT_RUNTIME=0 \
         -sALLOW_BLOCKING_ON_MAIN_THREAD=1 \
         -Wno-unused-command-line-argument \

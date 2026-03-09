@@ -1846,10 +1846,14 @@ static void *wasmThreadNativeMain(void *pvArgs)
     PRTTHREADINT pThread = (PRTTHREADINT)pvArgs;
     pthread_t Self = pthread_self();
 
+    RTPrintf("[WASM-THREAD] wasmThreadNativeMain entered: name=%s self=%p\n", pThread->szName, (void*)Self);
+
     if (g_fWasmSelfKeyInit)
         pthread_setspecific(g_WasmSelfKey, pThread);
 
+    RTPrintf("[WASM-THREAD] calling rtThreadMain for '%s'\n", pThread->szName);
     int rc = rtThreadMain(pThread, (uintptr_t)Self, &pThread->szName[0]);
+    RTPrintf("[WASM-THREAD] rtThreadMain returned rc=%d for '%s'\n", rc, pThread->szName);
 
     if (g_fWasmSelfKeyInit)
         pthread_setspecific(g_WasmSelfKey, NULL);
@@ -1902,6 +1906,8 @@ DECLHIDDEN(void) rtThreadNativeDestroy(PRTTHREADINT pThread)
 
 DECLHIDDEN(int) rtThreadNativeCreate(PRTTHREADINT pThreadInt, PRTNATIVETHREAD pNativeThread)
 {
+    RTPrintf("[WASM-THREAD] rtThreadNativeCreate: name=%s cbStack=%zu\n", pThreadInt->szName, pThreadInt->cbStack);
+
     if (!pThreadInt->cbStack)
         pThreadInt->cbStack = 512 * 1024;
 
@@ -1917,6 +1923,7 @@ DECLHIDDEN(int) rtThreadNativeCreate(PRTTHREADINT pThreadInt, PRTNATIVETHREAD pN
             {
                 pthread_t ThreadId;
                 rc = pthread_create(&ThreadId, &ThreadAttr, wasmThreadNativeMain, pThreadInt);
+                RTPrintf("[WASM-THREAD] pthread_create for '%s': rc=%d id=%p\n", pThreadInt->szName, rc, (void*)(uintptr_t)ThreadId);
                 if (!rc)
                 {
                     pthread_attr_destroy(&ThreadAttr);
@@ -1927,6 +1934,7 @@ DECLHIDDEN(int) rtThreadNativeCreate(PRTTHREADINT pThreadInt, PRTNATIVETHREAD pN
         }
         pthread_attr_destroy(&ThreadAttr);
     }
+    RTPrintf("[WASM-THREAD] rtThreadNativeCreate FAILED for '%s': errno=%d\n", pThreadInt->szName, rc);
     return RTErrConvertFromErrno(rc);
 }
 

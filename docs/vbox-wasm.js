@@ -1035,7 +1035,7 @@ var PThread = {
     }
   },
   initMainThread() {
-    var pthreadPoolSize = 4;
+    var pthreadPoolSize = 8;
     // Start loading up the Worker pool, if requested.
     while (pthreadPoolSize--) {
       PThread.allocateUnusedWorker();

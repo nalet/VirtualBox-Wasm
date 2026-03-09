@@ -150,9 +150,19 @@
 
   <div class="controls">
     <button id="btn-start" class="btn btn-start" disabled>Start VM</button>
-    <button id="btn-upload" class="btn btn-upload">Upload Disk Image</button>
-    <span id="disk-info">No disk image loaded</span>
+    <button id="btn-upload" class="btn btn-upload">Upload Custom ISO</button>
+    <span id="disk-info">Default: FossaPup64 9.5 (409 MB)</span>
     <input type="file" id="file-input" accept=".img,.iso,.raw,.vdi,.vmdk,.qcow2">
+  </div>
+
+  <div id="download-progress" style="display:none; width:724px; margin-bottom:0.8rem;">
+    <div style="display:flex; justify-content:space-between; font-size:0.8rem; color:#888; margin-bottom:4px;">
+      <span id="dl-label">Downloading FossaPup64 9.5...</span>
+      <span id="dl-percent">0%</span>
+    </div>
+    <div style="height:6px; background:#333; border-radius:3px; overflow:hidden;">
+      <div id="dl-bar" style="height:100%; width:0%; background:#4fc3f7; transition:width 0.2s;"></div>
+    </div>
   </div>
 
   <div id="screen" class="no-vm" tabindex="0">
@@ -160,7 +170,7 @@
     <div id="placeholder" class="placeholder">
       <div style="font-size:3rem;">&#128187;</div>
       <div>VGA display</div>
-      <div style="margin-top:0.5rem;font-size:0.8rem;">Upload a disk image and click Start VM</div>
+      <div style="margin-top:0.5rem;font-size:0.8rem;">Click Start VM to boot FossaPup64, or upload a custom ISO</div>
     </div>
   </div>
 
@@ -193,8 +203,15 @@
     const fileInput = document.getElementById('file-input');
     const placeholder = document.getElementById('placeholder');
 
+    const DEFAULT_ISO_MANIFEST = 'iso/manifest.json';
+    const DEFAULT_ISO_NAME = 'FossaPup64 9.5';
+    const ISO_CACHE_DB = 'vbox-iso-cache';
+    const ISO_CACHE_STORE = 'isos';
+
     let diskImageData = null;
     let vmRunning = false;
+    let runtimeReady = false;
+    let useCustomImage = false;
 
     function appendLine(text, cls) {
       const span = document.createElement('span');
@@ -447,9 +464,10 @@
       },
       onRuntimeInitialized() {
         appendLine('Emscripten runtime initialized.', 'info');
+        runtimeReady = true;
         statusEl.className = 'success';
         statusEl.textContent = 'Runtime loaded — ready to start VM';
-        if (diskImageData) btnStart.disabled = false;
+        btnStart.disabled = false;
       },
       onAbort(what) {
         appendLine('ABORT: ' + what, 'err');
@@ -498,54 +516,151 @@
       }
     };
 
-    // ── Disk Image Upload ──
+    // ── ISO caching (IndexedDB) ──
+    function openIsoCacheDB() {
+      return new Promise((resolve, reject) => {
+        const req = indexedDB.open(ISO_CACHE_DB, 1);
+        req.onupgradeneeded = () => req.result.createObjectStore(ISO_CACHE_STORE);
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+      });
+    }
+
+    async function getCachedISO(url) {
+      try {
+        const db = await openIsoCacheDB();
+        return await new Promise((resolve, reject) => {
+          const tx = db.transaction(ISO_CACHE_STORE, 'readonly');
+          const req = tx.objectStore(ISO_CACHE_STORE).get(url);
+          req.onsuccess = () => resolve(req.result || null);
+          req.onerror = () => reject(req.error);
+        });
+      } catch { return null; }
+    }
+
+    async function setCachedISO(url, data) {
+      try {
+        const db = await openIsoCacheDB();
+        const tx = db.transaction(ISO_CACHE_STORE, 'readwrite');
+        tx.objectStore(ISO_CACHE_STORE).put(data, url);
+      } catch { /* best-effort */ }
+    }
+
+    // ── Download ISO with progress (chunked) ──
+    async function downloadDefaultISO() {
+      const dlProgress = document.getElementById('download-progress');
+      const dlLabel = document.getElementById('dl-label');
+      const dlPercent = document.getElementById('dl-percent');
+      const dlBar = document.getElementById('dl-bar');
+
+      // Check cache first
+      appendLine('Checking ISO cache...', 'info');
+      const cached = await getCachedISO(DEFAULT_ISO_MANIFEST);
+      if (cached) {
+        appendLine('Using cached ' + DEFAULT_ISO_NAME + ' (' + (cached.byteLength / (1024*1024)).toFixed(1) + ' MB)', 'info');
+        return new Uint8Array(cached);
+      }
+
+      // Fetch manifest
+      const manifestResp = await fetch(DEFAULT_ISO_MANIFEST);
+      if (!manifestResp.ok) throw new Error('Failed to fetch ISO manifest');
+      const manifest = await manifestResp.json();
+
+      const total = manifest.totalSize;
+      const parts = manifest.parts;
+
+      dlProgress.style.display = 'block';
+      dlLabel.textContent = 'Downloading ' + manifest.name + '...';
+      appendLine('Downloading ' + manifest.name + ' (' + parts.length + ' parts, ' + (total / (1024*1024)).toFixed(0) + ' MB)...', 'info');
+
+      const buffer = new ArrayBuffer(total);
+      const result = new Uint8Array(buffer);
+      let received = 0;
+
+      for (let i = 0; i < parts.length; i++) {
+        const partUrl = 'iso/' + parts[i];
+        appendLine('  Part ' + (i + 1) + '/' + parts.length + ': ' + parts[i], 'log');
+
+        const resp = await fetch(partUrl);
+        if (!resp.ok) throw new Error('Failed to download ' + parts[i] + ': HTTP ' + resp.status);
+
+        const reader = resp.body.getReader();
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          result.set(value, received);
+          received += value.length;
+          const pct = Math.min(100, Math.round((received / total) * 100));
+          dlBar.style.width = pct + '%';
+          dlPercent.textContent = pct + '% (' + (received / (1024*1024)).toFixed(0) + ' / ' + (total / (1024*1024)).toFixed(0) + ' MB)';
+        }
+      }
+
+      dlProgress.style.display = 'none';
+      appendLine(manifest.name + ' downloaded: ' + (received / (1024*1024)).toFixed(1) + ' MB', 'info');
+
+      // Cache for next time
+      appendLine('Caching ISO for future visits...', 'info');
+      await setCachedISO(DEFAULT_ISO_MANIFEST, buffer);
+
+      return result;
+    }
+
+    // ── Custom ISO Upload ──
     btnUpload.addEventListener('click', () => fileInput.click());
 
     fileInput.addEventListener('change', async (e) => {
       const file = e.target.files[0];
       if (!file) return;
 
-      appendLine('Loading disk image: ' + file.name + ' (' + (file.size / (1024*1024)).toFixed(1) + ' MB)...', 'info');
+      appendLine('Loading custom ISO: ' + file.name + ' (' + (file.size / (1024*1024)).toFixed(1) + ' MB)...', 'info');
       diskInfo.textContent = 'Loading...';
 
       try {
         const buffer = await file.arrayBuffer();
         diskImageData = new Uint8Array(buffer);
+        useCustomImage = true;
         diskInfo.textContent = file.name + ' (' + (file.size / (1024*1024)).toFixed(1) + ' MB)';
-        appendLine('Disk image loaded: ' + diskImageData.length + ' bytes', 'info');
-
-        // Enable Start VM if runtime is ready
-        if (Module.calledRun !== undefined || Module.asm) {
-          btnStart.disabled = false;
-        }
+        appendLine('Custom ISO loaded: ' + diskImageData.length + ' bytes', 'info');
+        if (runtimeReady) btnStart.disabled = false;
       } catch (err) {
-        appendLine('Failed to load disk image: ' + err.message, 'err');
+        appendLine('Failed to load ISO: ' + err.message, 'err');
         diskInfo.textContent = 'Load failed';
       }
     });
 
     // ── Start VM ──
     btnStart.addEventListener('click', async () => {
-      if (!diskImageData) {
-        appendLine('No disk image loaded!', 'err');
-        return;
-      }
-
       btnStart.disabled = true;
       btnUpload.disabled = true;
       statusEl.className = 'loading';
       statusEl.textContent = 'Starting VM...';
       placeholder.style.display = 'none';
 
-      appendLine('Writing disk image to Emscripten FS...', 'info');
-
       try {
-        // Write disk image to Emscripten virtual filesystem
-        Module.FS.writeFile('/disk.img', diskImageData);
-        appendLine('Disk image written to /disk.img (' + diskImageData.length + ' bytes)', 'info');
+        // Get ISO data (download default or use custom)
+        if (!useCustomImage) {
+          appendLine('Preparing ' + DEFAULT_ISO_NAME + '...', 'info');
+          statusEl.textContent = 'Downloading ' + DEFAULT_ISO_NAME + '...';
+          diskImageData = await downloadDefaultISO();
+        }
+
+        if (!diskImageData) {
+          throw new Error('No ISO image available');
+        }
+
+        // Write ISO to Emscripten virtual filesystem
+        appendLine('Writing ISO to Emscripten FS (' + (diskImageData.length / (1024*1024)).toFixed(1) + ' MB)...', 'info');
+        statusEl.textContent = 'Writing ISO to virtual filesystem...';
+        Module.FS.writeFile('/cdrom.iso', diskImageData);
+        appendLine('ISO written to /cdrom.iso', 'info');
+
+        // Free the JS-side copy to save memory
+        diskImageData = null;
 
         // Call main() which creates and powers on the VM
-        appendLine('Starting VirtualBox VM...', 'info');
+        appendLine('Creating VirtualBox VM (IEM driverless mode)...', 'info');
+        statusEl.textContent = 'Creating VM...';
         Module.callMain([]);
 
         vmRunning = true;
@@ -555,7 +670,7 @@
       } catch (err) {
         appendLine('VM start failed: ' + err.message, 'err');
         statusEl.className = 'error';
-        statusEl.textContent = 'VM start failed';
+        statusEl.textContent = 'VM start failed: ' + err.message;
         btnStart.disabled = false;
         btnUpload.disabled = false;
       }

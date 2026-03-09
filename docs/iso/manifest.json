@@ -1,0 +1,17 @@
+{
+  "name": "FossaPup64 9.5",
+  "filename": "fossapup64-9.5.iso",
+  "totalSize": 428867584,
+  "chunkSize": 52428800,
+  "parts": [
+    "fossapup64.part00",
+    "fossapup64.part01",
+    "fossapup64.part02",
+    "fossapup64.part03",
+    "fossapup64.part04",
+    "fossapup64.part05",
+    "fossapup64.part06",
+    "fossapup64.part07",
+    "fossapup64.part08"
+  ]
+}

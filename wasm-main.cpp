@@ -42,8 +42,8 @@
 static PUVM g_pUVM = NULL;
 static PVM  g_pVM  = NULL;
 
-/** Path to the disk image (embedded in Emscripten virtual FS). */
-static const char *g_pszDiskImage = "/disk.img";
+/** Path to the CD-ROM ISO (written to Emscripten virtual FS by JS). */
+static const char *g_pszCdImage = "/cdrom.iso";
 
 
 /*************************************************************************
@@ -118,11 +118,12 @@ static DECLCALLBACK(int) vboxWasmCfgmConstructor(PUVM pUVM, PVM pVM, PCVMMR3VTAB
     INSERT_NODE(pDev, "0", &pInst);
     INSERT_INTEGER(pInst, "Trusted", 1);
     INSERT_NODE(pInst, "Config", &pCfg);
-    INSERT_STRING(pCfg, "BootDevice0", "IDE");
-    INSERT_STRING(pCfg, "BootDevice1", "NONE");
+    INSERT_STRING(pCfg, "BootDevice0", "DVD");
+    INSERT_STRING(pCfg, "BootDevice1", "IDE");
     INSERT_STRING(pCfg, "BootDevice2", "NONE");
     INSERT_STRING(pCfg, "BootDevice3", "NONE");
     INSERT_STRING(pCfg, "HardDiskDevice", "piix3ide");
+    INSERT_STRING(pCfg, "CdromDevice",    "piix3ide");
     INSERT_STRING(pCfg, "FloppyDevice", "");
     RTUUID Uuid;
     RTUuidClear(&Uuid);
@@ -174,30 +175,23 @@ static DECLCALLBACK(int) vboxWasmCfgmConstructor(PUVM pUVM, PVM pVM, PCVMMR3VTAB
     INSERT_NODE(pInst, "Config", &pCfg);
 
     /*
-     * Attach a disk image to the IDE primary master (LUN#0).
+     * Attach a CD-ROM ISO to the IDE secondary master (LUN#2).
      *
-     * Config tree for drive attachment:
-     *   LUN#0/
-     *     Driver = "Block"
-     *     Config/
-     *       Type = "HardDisk"
-     *     AttachedDriver/
-     *       Driver = "VD"
-     *       Config/
-     *         Path   = "/disk.img"
-     *         Format = "RAW"
-     *         ReadOnly = false
+     * LUN numbering for piix3ide:
+     *   LUN#0 = Primary Master    LUN#1 = Primary Slave
+     *   LUN#2 = Secondary Master  LUN#3 = Secondary Slave
      */
-    PCFGMNODE pLun0, pLun0Cfg, pAtt, pAttCfg;
-    INSERT_NODE(pInst, "LUN#0", &pLun0);
-    INSERT_STRING(pLun0, "Driver", "Block");
-    INSERT_NODE(pLun0, "Config", &pLun0Cfg);
-    INSERT_STRING(pLun0Cfg, "Type", "HardDisk");
-    INSERT_NODE(pLun0, "AttachedDriver", &pAtt);
+    PCFGMNODE pLun2, pLun2Cfg, pAtt, pAttCfg;
+    INSERT_NODE(pInst, "LUN#2", &pLun2);
+    INSERT_STRING(pLun2, "Driver", "Block");
+    INSERT_NODE(pLun2, "Config", &pLun2Cfg);
+    INSERT_STRING(pLun2Cfg, "Type", "DVD");
+    INSERT_NODE(pLun2, "AttachedDriver", &pAtt);
     INSERT_STRING(pAtt, "Driver", "VD");
     INSERT_NODE(pAtt, "Config", &pAttCfg);
-    INSERT_STRING(pAttCfg, "Path",   g_pszDiskImage);
-    INSERT_STRING(pAttCfg, "Format", "RAW");
+    INSERT_STRING(pAttCfg, "Path",     g_pszCdImage);
+    INSERT_STRING(pAttCfg, "Format",   "RAW");
+    INSERT_INTEGER(pAttCfg, "ReadOnly", 1);
 
     /* ── VMMDev ── */
     INSERT_NODE(pDevices, "VMMDev", &pDev);
@@ -253,18 +247,18 @@ int main(int argc, char **argv)
     RTPrintf("\n");
 
     /*
-     * Check if disk image exists.
+     * Check if CD-ROM image exists.
      */
-    if (!RTFileExists(g_pszDiskImage))
+    if (!RTFileExists(g_pszCdImage))
     {
-        RTPrintf("No disk image found at %s\n", g_pszDiskImage);
-        RTPrintf("Upload a disk image to start the VM.\n");
+        RTPrintf("No CD-ROM image found at %s\n", g_pszCdImage);
+        RTPrintf("Upload an ISO image to start the VM.\n");
         return 0;
     }
 
     uint64_t cbDisk = 0;
-    RTFileQuerySizeByPath(g_pszDiskImage, &cbDisk);
-    RTPrintf("Disk image: %s (%llu MB)\n", g_pszDiskImage, cbDisk / (1024 * 1024));
+    RTFileQuerySizeByPath(g_pszCdImage, &cbDisk);
+    RTPrintf("CD-ROM image: %s (%llu MB)\n", g_pszCdImage, cbDisk / (1024 * 1024));
 
     /*
      * Create the VM.

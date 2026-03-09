@@ -1623,10 +1623,9 @@ int rtMemPageNativeApplyFlags(void *pv, size_t cb, uint32_t fFlags)
     return VINF_SUCCESS;
 }
 
-int rtMemPageNativeRevertFlags(void *pv, size_t cb, uint32_t fFlags)
+void rtMemPageNativeRevertFlags(void *pv, size_t cb, uint32_t fFlags)
 {
     RT_NOREF(pv, cb, fFlags);
-    return VINF_SUCCESS;
 }
 
 
@@ -1694,11 +1693,10 @@ RTDECL(int) RTCrCipherRelease(void *hCipher)
 RTDECL(int) RTCrCipherEncrypt(void *hCipher, const void *pvKey, size_t cbKey,
                                const void *pvInitVector, size_t cbInitVector,
                                const void *pvPlainText, size_t cbPlainText,
-                               void *pvEncrypted, size_t cbEncrypted, size_t *pcbEncrypted,
-                               void *pvTag, size_t cbTag, size_t *pcbTag)
+                               void *pvEncrypted, size_t cbEncrypted, size_t *pcbEncrypted)
 {
     RT_NOREF(hCipher, pvKey, cbKey, pvInitVector, cbInitVector, pvPlainText, cbPlainText,
-             pvEncrypted, cbEncrypted, pcbEncrypted, pvTag, cbTag, pcbTag);
+             pvEncrypted, cbEncrypted, pcbEncrypted);
     STUB_NOT_SUPPORTED("RTCrCipherEncrypt");
     return VERR_NOT_SUPPORTED;
 }
@@ -1706,19 +1704,18 @@ RTDECL(int) RTCrCipherEncrypt(void *hCipher, const void *pvKey, size_t cbKey,
 RTDECL(int) RTCrCipherDecrypt(void *hCipher, const void *pvKey, size_t cbKey,
                                const void *pvInitVector, size_t cbInitVector,
                                const void *pvEncrypted, size_t cbEncrypted,
-                               void *pvPlainText, size_t cbPlainText, size_t *pcbPlainText,
-                               void *pvTag, size_t cbTag)
+                               void *pvPlainText, size_t cbPlainText, size_t *pcbPlainText)
 {
     RT_NOREF(hCipher, pvKey, cbKey, pvInitVector, cbInitVector, pvEncrypted, cbEncrypted,
-             pvPlainText, cbPlainText, pcbPlainText, pvTag, cbTag);
+             pvPlainText, cbPlainText, pcbPlainText);
     STUB_NOT_SUPPORTED("RTCrCipherDecrypt");
     return VERR_NOT_SUPPORTED;
 }
 
-RTDECL(int) RTCrPkcs5Pbkdf2Hmac(void *pvOutput, size_t cbOutput, const void *pvInput, size_t cbInput,
-                                  const void *pvSalt, size_t cbSalt, uint32_t cIterations, uint32_t enmDigestType)
+RTDECL(int) RTCrPkcs5Pbkdf2Hmac(const void *pvInput, size_t cbInput, const void *pvSalt, size_t cbSalt,
+                                  uint32_t cIterations, uint32_t enmDigestType, size_t cbKeyLen, void *pvOutput)
 {
-    RT_NOREF(pvOutput, cbOutput, pvInput, cbInput, pvSalt, cbSalt, cIterations, enmDigestType);
+    RT_NOREF(pvInput, cbInput, pvSalt, cbSalt, cIterations, enmDigestType, cbKeyLen, pvOutput);
     STUB_NOT_SUPPORTED("RTCrPkcs5Pbkdf2Hmac");
     return VERR_NOT_SUPPORTED;
 }

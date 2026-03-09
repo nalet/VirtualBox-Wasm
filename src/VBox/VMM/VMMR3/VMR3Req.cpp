@@ -46,6 +46,50 @@
 #include <iprt/semaphore.h>
 #include <iprt/thread.h>
 
+#ifdef __EMSCRIPTEN__
+#include <emscripten.h>
+
+/*
+ * Wasm64 call_indirect type-mismatch workaround.
+ *
+ * In Wasm64, call_indirect strictly validates function signatures at runtime.
+ * VBox's request dispatch casts all args to uintptr_t (i64) and calls through
+ * a function pointer union — but if the actual function has int/uint32_t/bool
+ * params (i32 in Wasm), the types don't match and the VM traps.
+ *
+ * This JS trampoline bypasses call_indirect by calling through JavaScript,
+ * where the JS-to-Wasm boundary automatically coerces argument types.
+ */
+EM_JS(int, wasmCallFuncPtrTrampoline, (void *pfn, int cArgs, void *pArgs), {
+    /* Convert function pointer to table index.
+     * In memory64 mode, pfn arrives as BigInt — convert to Number for table index. */
+    var idx = Number(pfn);
+    var func = wasmTable.get(idx);
+    if (!func) {
+        err("wasmCallFuncPtrTrampoline: no function at table index " + idx);
+        return -1;
+    }
+
+    /* Read uintptr_t args from the array.
+     * pArgs points to an array of uintptr_t (8 bytes each in wasm64).
+     * In memory64 mode, pArgs arrives as BigInt.
+     * Use HEAP64 (BigInt64Array) — available with -sMEMORY64=1. */
+    var baseIdx = Number(pArgs) >> 3;  /* byte offset to HEAP64 index */
+    var args = [];
+    for (var i = 0; i < cArgs; i++) {
+        args.push(HEAP64[baseIdx + i]);
+    }
+
+    try {
+        var result = func(...args);
+        return typeof result === "bigint" ? Number(result) : (result | 0);
+    } catch (e) {
+        err("wasmCallFuncPtrTrampoline: call to index " + idx + " failed: " + e.message);
+        return -1;
+    }
+});
+#endif /* __EMSCRIPTEN__ */
+
 
 /*********************************************************************************************************************************
 *   Internal Functions                                                                                                           *
@@ -1286,6 +1330,16 @@ static int  vmR3ReqProcessOne(PVMREQ pReq)
                 DECLCALLBACKMEMBER(int, pfn15,(uintptr_t, uintptr_t, uintptr_t, uintptr_t, uintptr_t, uintptr_t, uintptr_t, uintptr_t, uintptr_t, uintptr_t, uintptr_t, uintptr_t, uintptr_t, uintptr_t, uintptr_t));
             } u;
             u.pfn = pReq->u.Internal.pfn;
+#ifdef __EMSCRIPTEN__
+            /* Wasm64: Use JS trampoline to avoid call_indirect type mismatches */
+            if (pReq->u.Internal.cArgs <= 15)
+                rcRet = wasmCallFuncPtrTrampoline((void *)u.pfn, pReq->u.Internal.cArgs, pauArgs);
+            else
+            {
+                AssertReleaseMsgFailed(("cArgs=%d\n", pReq->u.Internal.cArgs));
+                rcRet = rcReq = VERR_VM_REQUEST_TOO_MANY_ARGS_IPE;
+            }
+#else
             switch (pReq->u.Internal.cArgs)
             {
                 case 0:  rcRet = u.pfn00(); break;
@@ -1309,6 +1363,7 @@ static int  vmR3ReqProcessOne(PVMREQ pReq)
                     rcRet = rcReq = VERR_VM_REQUEST_TOO_MANY_ARGS_IPE;
                     break;
             }
+#endif
 
             if ((pReq->fFlags & (VMREQFLAGS_RETURN_MASK)) == VMREQFLAGS_VOID)
                 rcRet = VINF_SUCCESS;

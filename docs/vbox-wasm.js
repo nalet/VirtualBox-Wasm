@@ -6508,6 +6508,27 @@ function checkIncomingModuleAPI() {
   ignoredModuleProp("loadSplitModule");
 }
 
+function wasmCallFuncPtrTrampoline(pfn, cArgs, pArgs) {
+  var idx = Number(pfn);
+  var func = wasmTable.get(idx);
+  if (!func) {
+    err("wasmCallFuncPtrTrampoline: no function at table index " + idx);
+    return -1;
+  }
+  var baseIdx = Number(pArgs) >> 3;
+  var args = [];
+  for (var i = 0; i < cArgs; i++) {
+    args.push((growMemViews(), HEAP64)[baseIdx + i]);
+  }
+  try {
+    var result = func(...args);
+    return typeof result === "bigint" ? Number(result) : (result | 0);
+  } catch (e) {
+    err("wasmCallFuncPtrTrampoline: call to index " + idx + " failed: " + e.message);
+    return -1;
+  }
+}
+
 // Imports from the Wasm binary.
 var _main = Module["_main"] = makeInvalidEarlyAccess("_main");
 
@@ -6748,7 +6769,8 @@ function assignWasmImports() {
     /** @export */ invoke_vjji,
     /** @export */ memory: wasmMemory,
     /** @export */ proc_exit: _proc_exit,
-    /** @export */ rtPipePollGetHandle: _rtPipePollGetHandle
+    /** @export */ rtPipePollGetHandle: _rtPipePollGetHandle,
+    /** @export */ wasmCallFuncPtrTrampoline
   };
 }
 

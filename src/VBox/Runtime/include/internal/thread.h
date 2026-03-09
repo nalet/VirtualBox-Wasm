@@ -287,7 +287,7 @@ DECLHIDDEN(void)         rtThreadWinTlsDestruction(void); /* in tls-win.cpp */
 
 /* thread-posix.cpp */
 #ifdef IN_RING3
-# if !defined(RT_OS_WINDOWS) && !defined(RT_OS_OS2) && !defined(RT_OS_DARWIN)
+# if !defined(RT_OS_WINDOWS) && !defined(RT_OS_OS2) && !defined(RT_OS_DARWIN) && !defined(__EMSCRIPTEN__)
 #  define RTTHREAD_POSIX_WITH_CREATE_PRIORITY_PROXY
 # endif
 # ifdef RTTHREAD_POSIX_WITH_CREATE_PRIORITY_PROXY

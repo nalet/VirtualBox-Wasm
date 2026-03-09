@@ -34,6 +34,8 @@
 #include <VBox/version.h>
 #include <VBox/log.h>
 
+#include <pthread.h>
+
 #ifdef __EMSCRIPTEN__
 # include <emscripten.h>
 # include <emscripten/threading.h>
@@ -263,6 +265,12 @@ static DECLCALLBACK(void) vboxWasmVMAtError(PUVM pUVM, void *pvUser,
 /*************************************************************************
  * Main
  *************************************************************************/
+static void *rawPthreadFunc(void *arg)
+{
+    *(volatile int *)arg = 42;
+    return NULL;
+}
+
 static DECLCALLBACK(int) testEMTThread(RTTHREAD hSelf, void *pvUser)
 {
     RT_NOREF(hSelf);
@@ -345,40 +353,71 @@ int main(int argc, char **argv)
         RTPrintf("RTSemRWCreate: %Rrc\n", rc);
         if (RT_SUCCESS(rc)) RTSemRWDestroy(hRWSem);
 
-        /* 6. RTThreadCreate tests — find which parameter causes VERR_NOT_SUPPORTED */
+        /* 6. Raw pthread tests — isolate Emscripten vs IPRT failure */
         volatile int testVal = 0;
-        RTTHREAD hThread;
+        int prc;
 
-        /* 6a. Minimal flags */
-        rc = RTThreadCreate(&hThread, testEMTThread, (void *)&testVal,
-                           0, RTTHREADTYPE_DEFAULT,
-                           RTTHREADFLAGS_WAITABLE,
-                           "Test1");
-        RTPrintf("RTThreadCreate(minimal): %Rrc\n", rc);
-        if (RT_SUCCESS(rc)) { RTThreadWait(hThread, RT_INDEFINITE_WAIT, NULL); }
+        /* 6a. Raw pthread_create — no attributes */
+        {
+            pthread_t tid;
+            testVal = 0;
+            prc = pthread_create(&tid, NULL, rawPthreadFunc, (void *)&testVal);
+            RTPrintf("pthread_create(no attr): rc=%d\n", prc);
+            if (!prc) { pthread_join(tid, NULL); RTPrintf("  joined, val=%d\n", (int)testVal); }
+        }
 
-        /* 6b. With EMULATION type */
-        rc = RTThreadCreate(&hThread, testEMTThread, (void *)&testVal,
-                           0, RTTHREADTYPE_EMULATION,
-                           RTTHREADFLAGS_WAITABLE,
-                           "Test2");
-        RTPrintf("RTThreadCreate(EMULATION): %Rrc\n", rc);
-        if (RT_SUCCESS(rc)) { RTThreadWait(hThread, RT_INDEFINITE_WAIT, NULL); }
+        /* 6b. Raw pthread_create — DETACHED */
+        {
+            pthread_t tid;
+            pthread_attr_t attr;
+            pthread_attr_init(&attr);
+            pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+            testVal = 0;
+            prc = pthread_create(&tid, &attr, rawPthreadFunc, (void *)&testVal);
+            pthread_attr_destroy(&attr);
+            RTPrintf("pthread_create(DETACHED): rc=%d\n", prc);
+            if (!prc) RTThreadSleep(100);
+            RTPrintf("  val=%d\n", (int)testVal);
+        }
 
-        /* 6c. With 1MB stack */
-        rc = RTThreadCreate(&hThread, testEMTThread, (void *)&testVal,
-                           _1M, RTTHREADTYPE_DEFAULT,
-                           RTTHREADFLAGS_WAITABLE,
-                           "Test3");
-        RTPrintf("RTThreadCreate(1MB stack): %Rrc\n", rc);
-        if (RT_SUCCESS(rc)) { RTThreadWait(hThread, RT_INDEFINITE_WAIT, NULL); }
+        /* 6c. Raw pthread_create — 512KB stack */
+        {
+            pthread_t tid;
+            pthread_attr_t attr;
+            pthread_attr_init(&attr);
+            pthread_attr_setstacksize(&attr, 512*1024);
+            testVal = 0;
+            prc = pthread_create(&tid, &attr, rawPthreadFunc, (void *)&testVal);
+            pthread_attr_destroy(&attr);
+            RTPrintf("pthread_create(512K stack): rc=%d\n", prc);
+            if (!prc) { pthread_join(tid, NULL); RTPrintf("  joined, val=%d\n", (int)testVal); }
+        }
 
-        /* 6d. Full EMT flags */
-        rc = RTThreadCreate(&hThread, testEMTThread, (void *)&testVal,
-                           _1M, RTTHREADTYPE_EMULATION,
-                           RTTHREADFLAGS_WAITABLE | RTTHREADFLAGS_COM_MTA | RTTHREADFLAGS_NO_SIGNALS,
-                           "Test4");
-        RTPrintf("RTThreadCreate(full EMT): %Rrc\n", rc);
+        /* 6d. Raw pthread_create — DETACHED + 512KB stack */
+        {
+            pthread_t tid;
+            pthread_attr_t attr;
+            pthread_attr_init(&attr);
+            pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+            pthread_attr_setstacksize(&attr, 512*1024);
+            testVal = 0;
+            prc = pthread_create(&tid, &attr, rawPthreadFunc, (void *)&testVal);
+            pthread_attr_destroy(&attr);
+            RTPrintf("pthread_create(DETACHED+512K): rc=%d\n", prc);
+            if (!prc) RTThreadSleep(100);
+            RTPrintf("  val=%d\n", (int)testVal);
+        }
+
+        /* 6e. RTThreadCreate — minimal (for comparison) */
+        {
+            RTTHREAD hThread;
+            rc = RTThreadCreate(&hThread, testEMTThread, (void *)&testVal,
+                               0, RTTHREADTYPE_DEFAULT,
+                               RTTHREADFLAGS_WAITABLE,
+                               "Test1");
+            RTPrintf("RTThreadCreate(minimal): %Rrc (rc=%d)\n", rc, rc);
+            if (RT_SUCCESS(rc)) { RTThreadWait(hThread, RT_INDEFINITE_WAIT, NULL); }
+        }
 
         RTPrintf("--- end tests ---\n");
     }

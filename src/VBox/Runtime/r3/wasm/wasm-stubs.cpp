@@ -37,6 +37,9 @@
 #include <string.h>
 #include <time.h>
 #include <errno.h>
+#include <pthread.h>
+#include <sched.h>
+#include <iprt/asm.h>
 
 
 /*
@@ -337,30 +340,60 @@ RTDECL(int) RTSemRWReleaseWrite(RTSEMRW hRWSem)
 
 
 /*
- * ── Thread stubs ──
+ * ── Thread implementation (pthread-based for Emscripten with pthreads) ──
  *
- * Wasm is single-threaded. Provide minimal thread identity.
+ * Emscripten supports pthreads via Web Workers when compiled with -pthread.
+ * This provides real thread creation using pthread_create, unlike the old
+ * single-threaded stubs that returned VERR_NOT_SUPPORTED.
  */
+
+/** TLS key for storing the PRTTHREADINT pointer for the current thread. */
+static pthread_key_t g_SelfKey;
+
+/**
+ * Thread entry point wrapper.  Called by pthread_create.
+ * Sets up TLS and calls the common IPRT rtThreadMain().
+ */
+static void *rtThreadNativeMain(void *pvArgs)
+{
+    PRTTHREADINT pThread = (PRTTHREADINT)pvArgs;
+    pthread_t Self = pthread_self();
+
+    int rc = pthread_setspecific(g_SelfKey, pThread);
+    AssertReleaseMsg(!rc, ("failed to set self TLS. rc=%d thread '%s'\n", rc, pThread->szName));
+
+    rc = rtThreadMain(pThread, (uintptr_t)Self, &pThread->szName[0]);
+
+    pthread_setspecific(g_SelfKey, NULL);
+    return (void *)(intptr_t)rc;
+}
+
 DECLHIDDEN(int) rtThreadNativeInit(void)
 {
+    int rc = pthread_key_create(&g_SelfKey, NULL);
+    if (rc)
+        return VERR_NO_TLS_FOR_SELF;
     return VINF_SUCCESS;
 }
 
 RTDECL(RTNATIVETHREAD) RTThreadNativeSelf(void)
 {
-    return (RTNATIVETHREAD)1;
+    return (RTNATIVETHREAD)pthread_self();
 }
 
 DECLHIDDEN(int) rtThreadNativeSetPriority(PRTTHREADINT pThread, RTTHREADTYPE enmType)
 {
+    /* Thread priorities not meaningful in Emscripten/Wasm. */
     RT_NOREF(pThread, enmType);
     return VINF_SUCCESS;
 }
 
 DECLHIDDEN(int) rtThreadNativeAdopt(PRTTHREADINT pThread)
 {
-    RT_NOREF_PV(pThread);
-    return VINF_SUCCESS;
+    int rc = pthread_setspecific(g_SelfKey, pThread);
+    if (!rc)
+        return VINF_SUCCESS;
+    return VERR_FAILED_TO_SET_SELF_TLS;
 }
 
 DECLHIDDEN(void) rtThreadNativeWaitKludge(PRTTHREADINT pThread)
@@ -370,13 +403,39 @@ DECLHIDDEN(void) rtThreadNativeWaitKludge(PRTTHREADINT pThread)
 
 DECLHIDDEN(void) rtThreadNativeDestroy(PRTTHREADINT pThread)
 {
-    RT_NOREF_PV(pThread);
+    if (pThread == (PRTTHREADINT)pthread_getspecific(g_SelfKey))
+        pthread_setspecific(g_SelfKey, NULL);
 }
 
 DECLHIDDEN(int) rtThreadNativeCreate(PRTTHREADINT pThreadInt, PRTNATIVETHREAD pNativeThread)
 {
-    RT_NOREF(pThreadInt, pNativeThread);
-    return VERR_NOT_SUPPORTED;
+    /* Default stack size if not specified. */
+    if (!pThreadInt->cbStack)
+        pThreadInt->cbStack = 512 * 1024;
+
+    pthread_attr_t ThreadAttr;
+    int rc = pthread_attr_init(&ThreadAttr);
+    if (!rc)
+    {
+        rc = pthread_attr_setdetachstate(&ThreadAttr, PTHREAD_CREATE_DETACHED);
+        if (!rc)
+        {
+            rc = pthread_attr_setstacksize(&ThreadAttr, pThreadInt->cbStack);
+            if (!rc)
+            {
+                pthread_t ThreadId;
+                rc = pthread_create(&ThreadId, &ThreadAttr, rtThreadNativeMain, pThreadInt);
+                if (!rc)
+                {
+                    pthread_attr_destroy(&ThreadAttr);
+                    *pNativeThread = (uintptr_t)ThreadId;
+                    return VINF_SUCCESS;
+                }
+            }
+        }
+        pthread_attr_destroy(&ThreadAttr);
+    }
+    return RTErrConvertFromErrno(rc);
 }
 
 
@@ -425,25 +484,30 @@ DECLHIDDEN(int) rtldrNativeLoadSystem(const char *pszFilename, const char *pszEx
 
 /*
  * ── Thread identity ──
- *
- * RTThreadSelf is complex (returns RTTHREAD handle, not native).
- * For single-threaded Wasm we return NIL since no threads are created.
  */
 RTDECL(RTTHREAD) RTThreadSelf(void)
 {
-    return NIL_RTTHREAD;
+    PRTTHREADINT pThread = (PRTTHREADINT)pthread_getspecific(g_SelfKey);
+    return pThread;
 }
 
 RTDECL(int) RTThreadSleep(RTMSINTERVAL cMillies)
 {
-    RT_NOREF_PV(cMillies);
+    if (!cMillies)
+    {
+        sched_yield();
+        return VINF_SUCCESS;
+    }
+    struct timespec ts;
+    ts.tv_sec  = cMillies / 1000;
+    ts.tv_nsec = (cMillies % 1000) * 1000000;
+    nanosleep(&ts, NULL);
     return VINF_SUCCESS;
 }
 
 RTDECL(int) RTThreadSleepNoLog(RTMSINTERVAL cMillies)
 {
-    RT_NOREF_PV(cMillies);
-    return VINF_SUCCESS;
+    return RTThreadSleep(cMillies);
 }
 
 DECLHIDDEN(void) rtThreadNativeReInitObtrusive(void)

@@ -402,7 +402,7 @@ static void *rtThreadNativeMain(void *pvArgs)
     /* Set the stack top to the best value we can. */
     pThread->pvStackTop = ASMReadStackPointer();
 
-#if defined(RT_OS_LINUX)
+#if defined(RT_OS_LINUX) && !defined(__EMSCRIPTEN__)
     /*
      * Set the TID.
      */
@@ -410,7 +410,9 @@ static void *rtThreadNativeMain(void *pvArgs)
     ASMMemoryFence();
 #endif
 
+#ifndef __EMSCRIPTEN__
     rtThreadPosixBlockSignals(pThread);
+#endif
 
     /*
      * Set the TLS entry and, if possible, the thread name.
@@ -603,7 +605,7 @@ static DECLCALLBACK(int) rtThreadNativeInternalCreate(PRTTHREADINT pThread, PRTN
     if (!pThread->cbStack)
         pThread->cbStack = 512*1024;
 
-#ifdef RT_OS_LINUX
+#if defined(RT_OS_LINUX) && !defined(__EMSCRIPTEN__)
     pThread->tid = -1;
 #endif
 

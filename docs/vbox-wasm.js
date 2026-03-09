@@ -6596,13 +6596,13 @@ function checkIncomingModuleAPI() {
 // Imports from the Wasm binary.
 var _main = Module["_main"] = makeInvalidEarlyAccess("_main");
 
+var _pthread_self = makeInvalidEarlyAccess("_pthread_self");
+
 var _fflush = makeInvalidEarlyAccess("_fflush");
 
 var _malloc = makeInvalidEarlyAccess("_malloc");
 
 var __emscripten_tls_init = makeInvalidEarlyAccess("__emscripten_tls_init");
-
-var _pthread_self = makeInvalidEarlyAccess("_pthread_self");
 
 var __emscripten_thread_init = makeInvalidEarlyAccess("__emscripten_thread_init");
 
@@ -6650,10 +6650,10 @@ var wasmTable = makeInvalidEarlyAccess("wasmTable");
 
 function assignWasmExports(wasmExports) {
   assert(typeof wasmExports["__main_argc_argv"] != "undefined", "missing Wasm export: __main_argc_argv");
+  assert(typeof wasmExports["pthread_self"] != "undefined", "missing Wasm export: pthread_self");
   assert(typeof wasmExports["fflush"] != "undefined", "missing Wasm export: fflush");
   assert(typeof wasmExports["malloc"] != "undefined", "missing Wasm export: malloc");
   assert(typeof wasmExports["_emscripten_tls_init"] != "undefined", "missing Wasm export: _emscripten_tls_init");
-  assert(typeof wasmExports["pthread_self"] != "undefined", "missing Wasm export: pthread_self");
   assert(typeof wasmExports["_emscripten_thread_init"] != "undefined", "missing Wasm export: _emscripten_thread_init");
   assert(typeof wasmExports["_emscripten_thread_crashed"] != "undefined", "missing Wasm export: _emscripten_thread_crashed");
   assert(typeof wasmExports["emscripten_stack_get_end"] != "undefined", "missing Wasm export: emscripten_stack_get_end");
@@ -6676,10 +6676,10 @@ function assignWasmExports(wasmExports) {
   assert(typeof wasmExports["emscripten_stack_get_current"] != "undefined", "missing Wasm export: emscripten_stack_get_current");
   assert(typeof wasmExports["__indirect_function_table"] != "undefined", "missing Wasm export: __indirect_function_table");
   _main = Module["_main"] = createExportWrapper("__main_argc_argv", 2);
+  _pthread_self = createExportWrapper("pthread_self", 0);
   _fflush = createExportWrapper("fflush", 1);
   _malloc = createExportWrapper("malloc", 1);
   __emscripten_tls_init = createExportWrapper("_emscripten_tls_init", 0);
-  _pthread_self = createExportWrapper("pthread_self", 0);
   __emscripten_thread_init = createExportWrapper("_emscripten_thread_init", 6);
   __emscripten_thread_crashed = createExportWrapper("_emscripten_thread_crashed", 0);
   _emscripten_stack_get_end = wasmExports["emscripten_stack_get_end"];
@@ -7042,18 +7042,18 @@ function applySignatureConversions(wasmExports) {
   // First, make a copy of the incoming exports object
   wasmExports = Object.assign({}, wasmExports);
   var makeWrapper___PP = f => (a0, a1, a2) => f(a0, BigInt(a1 ? a1 : 0), BigInt(a2 ? a2 : 0));
+  var makeWrapper_p = f => () => Number(f());
   var makeWrapper__p = f => a0 => f(BigInt(a0));
   var makeWrapper_pp = f => a0 => Number(f(BigInt(a0)));
-  var makeWrapper_p = f => () => Number(f());
   var makeWrapper__p_____ = f => (a0, a1, a2, a3, a4, a5) => f(BigInt(a0), a1, a2, a3, a4, a5);
   var makeWrapper__pp_ = f => (a0, a1, a2) => f(BigInt(a0), BigInt(a1), a2);
   var makeWrapper___p_p_ = f => (a0, a1, a2, a3, a4) => f(a0, BigInt(a1), a2, BigInt(a3), a4);
   var makeWrapper_p_ = f => a0 => Number(f(a0));
   var makeWrapper__pp = f => (a0, a1) => f(BigInt(a0), BigInt(a1));
   wasmExports["__main_argc_argv"] = makeWrapper___PP(wasmExports["__main_argc_argv"]);
+  wasmExports["pthread_self"] = makeWrapper_p(wasmExports["pthread_self"]);
   wasmExports["fflush"] = makeWrapper__p(wasmExports["fflush"]);
   wasmExports["malloc"] = makeWrapper_pp(wasmExports["malloc"]);
-  wasmExports["pthread_self"] = makeWrapper_p(wasmExports["pthread_self"]);
   wasmExports["_emscripten_thread_init"] = makeWrapper__p_____(wasmExports["_emscripten_thread_init"]);
   wasmExports["emscripten_stack_get_end"] = makeWrapper_p(wasmExports["emscripten_stack_get_end"]);
   wasmExports["emscripten_stack_get_base"] = makeWrapper_p(wasmExports["emscripten_stack_get_base"]);

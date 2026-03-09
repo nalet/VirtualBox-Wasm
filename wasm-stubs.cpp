@@ -1795,3 +1795,148 @@ void xmlSetExternalEntityLoader(xmlExternalEntityLoader loader)
 }
 
 } /* extern "C" */
+
+
+/*************************************************************************
+ * Thread implementation — overrides the stubs in RuntimeR3/VBoxVMM.so
+ *
+ * These MUST be in the top-level .cpp (linked as .o before .so/.a)
+ * so that --allow-multiple-definition picks them up first.
+ *************************************************************************/
+
+#include "src/VBox/Runtime/include/internal/thread.h"
+#include <iprt/semaphore.h>
+#include <iprt/asm.h>
+#include <sched.h>
+
+/** TLS key for storing the PRTTHREADINT pointer for the current thread. */
+static pthread_key_t g_WasmSelfKey;
+static bool g_fWasmSelfKeyInit = false;
+
+/**
+ * Thread entry point wrapper. Sets up TLS and calls rtThreadMain().
+ */
+static void *wasmThreadNativeMain(void *pvArgs)
+{
+    PRTTHREADINT pThread = (PRTTHREADINT)pvArgs;
+    pthread_t Self = pthread_self();
+
+    if (g_fWasmSelfKeyInit)
+        pthread_setspecific(g_WasmSelfKey, pThread);
+
+    int rc = rtThreadMain(pThread, (uintptr_t)Self, &pThread->szName[0]);
+
+    if (g_fWasmSelfKeyInit)
+        pthread_setspecific(g_WasmSelfKey, NULL);
+
+    return (void *)(intptr_t)rc;
+}
+
+DECLHIDDEN(int) rtThreadNativeInit(void)
+{
+    int rc = pthread_key_create(&g_WasmSelfKey, NULL);
+    if (rc)
+        return VERR_NO_TLS_FOR_SELF;
+    g_fWasmSelfKeyInit = true;
+    return VINF_SUCCESS;
+}
+
+RTDECL(RTNATIVETHREAD) RTThreadNativeSelf(void)
+{
+    return (RTNATIVETHREAD)pthread_self();
+}
+
+DECLHIDDEN(int) rtThreadNativeSetPriority(PRTTHREADINT pThread, RTTHREADTYPE enmType)
+{
+    RT_NOREF(pThread, enmType);
+    return VINF_SUCCESS;
+}
+
+DECLHIDDEN(int) rtThreadNativeAdopt(PRTTHREADINT pThread)
+{
+    if (g_fWasmSelfKeyInit)
+    {
+        int rc = pthread_setspecific(g_WasmSelfKey, pThread);
+        if (!rc)
+            return VINF_SUCCESS;
+        return VERR_FAILED_TO_SET_SELF_TLS;
+    }
+    return VINF_SUCCESS;
+}
+
+DECLHIDDEN(void) rtThreadNativeWaitKludge(PRTTHREADINT pThread)
+{
+    RT_NOREF_PV(pThread);
+}
+
+DECLHIDDEN(void) rtThreadNativeDestroy(PRTTHREADINT pThread)
+{
+    if (g_fWasmSelfKeyInit && pThread == (PRTTHREADINT)pthread_getspecific(g_WasmSelfKey))
+        pthread_setspecific(g_WasmSelfKey, NULL);
+}
+
+DECLHIDDEN(int) rtThreadNativeCreate(PRTTHREADINT pThreadInt, PRTNATIVETHREAD pNativeThread)
+{
+    if (!pThreadInt->cbStack)
+        pThreadInt->cbStack = 512 * 1024;
+
+    pthread_attr_t ThreadAttr;
+    int rc = pthread_attr_init(&ThreadAttr);
+    if (!rc)
+    {
+        rc = pthread_attr_setdetachstate(&ThreadAttr, PTHREAD_CREATE_DETACHED);
+        if (!rc)
+        {
+            rc = pthread_attr_setstacksize(&ThreadAttr, pThreadInt->cbStack);
+            if (!rc)
+            {
+                pthread_t ThreadId;
+                rc = pthread_create(&ThreadId, &ThreadAttr, wasmThreadNativeMain, pThreadInt);
+                if (!rc)
+                {
+                    pthread_attr_destroy(&ThreadAttr);
+                    *pNativeThread = (uintptr_t)ThreadId;
+                    return VINF_SUCCESS;
+                }
+            }
+        }
+        pthread_attr_destroy(&ThreadAttr);
+    }
+    return RTErrConvertFromErrno(rc);
+}
+
+RTDECL(RTTHREAD) RTThreadSelf(void)
+{
+    if (g_fWasmSelfKeyInit)
+        return (RTTHREAD)pthread_getspecific(g_WasmSelfKey);
+    return NIL_RTTHREAD;
+}
+
+RTDECL(int) RTThreadSleep(RTMSINTERVAL cMillies)
+{
+    if (!cMillies)
+    {
+        sched_yield();
+        return VINF_SUCCESS;
+    }
+    struct timespec ts;
+    ts.tv_sec  = cMillies / 1000;
+    ts.tv_nsec = (cMillies % 1000) * 1000000;
+    nanosleep(&ts, NULL);
+    return VINF_SUCCESS;
+}
+
+RTDECL(int) RTThreadSleepNoLog(RTMSINTERVAL cMillies)
+{
+    return RTThreadSleep(cMillies);
+}
+
+DECLHIDDEN(void) rtThreadNativeReInitObtrusive(void)
+{
+}
+
+RTDECL(bool) RTThreadYield(void)
+{
+    sched_yield();
+    return true;
+}

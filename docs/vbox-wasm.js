@@ -6509,12 +6509,12 @@ function checkIncomingModuleAPI() {
 }
 
 function wasmCallFuncPtrTrampoline(pfn, cArgs, pArgs) {
-  var idx = Number(pfn);
-  var func = wasmTable.get(idx);
+  var func = wasmTable.get(pfn);
   if (!func) {
-    err("wasmCallFuncPtrTrampoline: no function at table index " + idx);
+    err("wasmCallFuncPtrTrampoline: no function at table index " + pfn);
     return -1;
   }
+  var idx = Number(pfn);
   var baseIdx = Number(pArgs) >> 3;
   var bigArgs = [];
   for (var i = 0; i < cArgs; i++) {

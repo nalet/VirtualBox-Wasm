@@ -61,12 +61,13 @@
  * where the JS-to-Wasm boundary automatically coerces argument types.
  */
 EM_JS(int, wasmCallFuncPtrTrampoline, (void *pfn, int cArgs, void *pArgs), {
-    var idx = Number(pfn);
-    var func = wasmTable.get(idx);
+    /* In memory64, pfn is BigInt; wasmTable.get() also needs BigInt. */
+    var func = wasmTable.get(pfn);
     if (!func) {
-        err("wasmCallFuncPtrTrampoline: no function at table index " + idx);
+        err("wasmCallFuncPtrTrampoline: no function at table index " + pfn);
         return -1;
     }
+    var idx = Number(pfn);  /* for cache key and error messages */
 
     /* Read uintptr_t args as BigInt from HEAP64. */
     var baseIdx = Number(pArgs) >> 3;

@@ -139,7 +139,6 @@ static DECLCALLBACK(int) vboxWasmCfgmConstructor(PUVM pUVM, PVM pVM, PCVMMR3VTAB
     INSERT_STRING(pCfg, "BootDevice2", "NONE");
     INSERT_STRING(pCfg, "BootDevice3", "NONE");
     INSERT_STRING(pCfg, "HardDiskDevice", "piix3ide");
-    INSERT_STRING(pCfg, "CdromDevice",    "piix3ide");
     INSERT_STRING(pCfg, "FloppyDevice", "");
     RTUUID Uuid;
     RTUuidClear(&Uuid);

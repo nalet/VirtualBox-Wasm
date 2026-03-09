@@ -1702,6 +1702,12 @@ function _RTEnvExist(...args) {
 
 _RTEnvExist.stub = true;
 
+function _RTEnvPut(...args) {
+  abort("missing function: RTEnvPut");
+}
+
+_RTEnvPut.stub = true;
+
 function _RTLinuxConstructPath(...args) {
   abort("missing function: RTLinuxConstructPath");
 }
@@ -6715,6 +6721,7 @@ function assignWasmImports() {
     /** @export */ PDMR3UsbQueryDriverOnLun: _PDMR3UsbQueryDriverOnLun,
     /** @export */ PDMR3UsbQueryLun: _PDMR3UsbQueryLun,
     /** @export */ RTEnvExist: _RTEnvExist,
+    /** @export */ RTEnvPut: _RTEnvPut,
     /** @export */ RTLinuxConstructPath: _RTLinuxConstructPath,
     /** @export */ RTLinuxSysFsReadDevNumFile: _RTLinuxSysFsReadDevNumFile,
     /** @export */ RTLinuxSysFsReadIntFile: _RTLinuxSysFsReadIntFile,

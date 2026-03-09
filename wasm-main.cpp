@@ -29,6 +29,8 @@
 #include <VBox/err.h>
 #include <VBox/version.h>
 #include <VBox/log.h>
+#include <VBox/sup.h>
+#include <iprt/env.h>
 
 #ifdef __EMSCRIPTEN__
 # include <emscripten.h>
@@ -265,6 +267,10 @@ int main(int argc, char **argv)
      * VMCREATE_F_DRIVERLESS: No kernel driver needed (pure IEM emulation).
      * This is exactly what we want for WebAssembly.
      */
+    /* Set VBOX_SUPLIB_FAKE so vmR3InitRing0 skips the R0 call. */
+    RTEnvPut("VBOX_SUPLIB_FAKE=fake");
+
+    RTPrintf("SUPR3IsDriverless: %s\n", SUPR3IsDriverless() ? "true" : "false");
     RTPrintf("Creating VM...\n");
     rc = VMR3Create(1 /*cCpus*/,
                     NULL /*pVmm2UserMethods*/,

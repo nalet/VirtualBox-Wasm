@@ -27,6 +27,7 @@
 #include <stdatomic.h>
 #include <string.h>
 #include <stdio.h>
+#include <stdlib.h>
 
 #define STUB_LOG_SIZE 4096
 static char g_szStubLog[STUB_LOG_SIZE];
@@ -1194,145 +1195,8 @@ RTDECL(int) RTPathQueryInfoEx(const char *pszPath, PRTFSOBJINFO pObjInfo, RTFSOB
 }
 
 
-/*************************************************************************
- * RTFile — Extended file ops stubs
- *************************************************************************/
-
-#include <fcntl.h>
-#include <unistd.h>
-#include <stdlib.h>
-
-RTDECL(int) RTFileOpenEx(const char *pszFilename, uint64_t fOpen, PRTFILE phFile, PRTFILEACTION penmActionTaken)
-{
-    RT_NOREF(pszFilename, fOpen, phFile, penmActionTaken);
-    STUB_NOT_SUPPORTED("RTFileOpenEx");
-    return VERR_NOT_SUPPORTED;
-}
-
-RTDECL(bool) RTFileIsValid(RTFILE hFile)
-{
-    RT_NOREF(hFile);
-    return false;
-}
-
-RTDECL(int) RTFileRead(RTFILE hFile, void *pvBuf, size_t cbToRead, size_t *pcbRead)
-{
-    RT_NOREF(hFile, pvBuf, cbToRead, pcbRead);
-    STUB_NOT_SUPPORTED("RTFileRead");
-    return VERR_NOT_SUPPORTED;
-}
-
-RTDECL(int) RTFileReadAt(RTFILE hFile, RTFOFF off, void *pvBuf, size_t cbToRead, size_t *pcbRead)
-{
-    RT_NOREF(hFile, off, pvBuf, cbToRead, pcbRead);
-    STUB_NOT_SUPPORTED("RTFileReadAt");
-    return VERR_NOT_SUPPORTED;
-}
-
-RTDECL(int) RTFileWriteAt(RTFILE hFile, RTFOFF off, const void *pvBuf, size_t cbToWrite, size_t *pcbWritten)
-{
-    RT_NOREF(hFile, off, pvBuf, cbToWrite, pcbWritten);
-    STUB_NOT_SUPPORTED("RTFileWriteAt");
-    return VERR_NOT_SUPPORTED;
-}
-
-RTDECL(int) RTFileSeek(RTFILE hFile, int64_t offSeek, unsigned uMethod, uint64_t *poffActual)
-{
-    RT_NOREF(hFile, offSeek, uMethod, poffActual);
-    STUB_NOT_SUPPORTED("RTFileSeek");
-    return VERR_NOT_SUPPORTED;
-}
-
-RTDECL(int) RTFileQueryInfo(RTFILE hFile, PRTFSOBJINFO pObjInfo, RTFSOBJATTRADD enmAdditionalAttribs)
-{
-    RT_NOREF(hFile, pObjInfo, enmAdditionalAttribs);
-    STUB_NOT_SUPPORTED("RTFileQueryInfo");
-    return VERR_NOT_SUPPORTED;
-}
-
-RTDECL(int) RTFileSetSize(RTFILE hFile, uint64_t cbSize)
-{
-    RT_NOREF(hFile, cbSize);
-    STUB_NOT_SUPPORTED("RTFileSetSize");
-    return VERR_NOT_SUPPORTED;
-}
-
-RTDECL(int) RTFileSetTimes(RTFILE hFile, PCRTTIMESPEC pAccessTime, PCRTTIMESPEC pModificationTime,
-                            PCRTTIMESPEC pChangeTime, PCRTTIMESPEC pBirthTime)
-{
-    RT_NOREF(hFile, pAccessTime, pModificationTime, pChangeTime, pBirthTime);
-    return VINF_SUCCESS;
-}
-
-RTDECL(int) RTFileSetMode(RTFILE hFile, RTFMODE fMode)
-{
-    RT_NOREF(hFile, fMode);
-    return VINF_SUCCESS;
-}
-
-RTDECL(int) RTFileSetAllocationSize(RTFILE hFile, uint64_t cbSize, uint32_t fFlags)
-{
-    RT_NOREF(hFile, cbSize, fFlags);
-    STUB_NOT_SUPPORTED("RTFileSetAllocationSize");
-    return VERR_NOT_SUPPORTED;
-}
-
-RTDECL(int) RTFileQueryFsSizes(RTFILE hFile, PRTFOFF pcbTotal, RTFOFF *pcbFree, uint32_t *pcbBlock, uint32_t *pcbSector)
-{
-    RT_NOREF(hFile);
-    if (pcbTotal) *pcbTotal = 1024*1024*1024;
-    if (pcbFree) *pcbFree = 512*1024*1024;
-    if (pcbBlock) *pcbBlock = 4096;
-    if (pcbSector) *pcbSector = 512;
-    return VINF_SUCCESS;
-}
-
-RTDECL(int) RTFileQueryMaxSizeEx(RTFILE hFile, PRTFOFF pcbMax)
-{
-    RT_NOREF(hFile);
-    if (pcbMax) *pcbMax = INT64_MAX;
-    return VINF_SUCCESS;
-}
-
-RTDECL(int) RTFileQuerySectorSize(RTFILE hFile, uint32_t *pcbSector)
-{
-    RT_NOREF(hFile);
-    if (pcbSector) *pcbSector = 512;
-    return VINF_SUCCESS;
-}
-
-RTDECL(int) RTFileMove(const char *pszSrc, const char *pszDst, unsigned fMove)
-{
-    RT_NOREF(pszSrc, pszDst, fMove);
-    STUB_NOT_SUPPORTED("RTFileMove");
-    return VERR_NOT_SUPPORTED;
-}
-
-RTDECL(RTHCINTPTR) RTFileToNative(RTFILE hFile)
-{
-    return (RTHCINTPTR)hFile;
-}
-
-RTDECL(int) RTFileCopyPartPrep(PRTFILECOPYPARTBUFSTATE pBufState, uint64_t cbToCopy)
-{
-    RT_NOREF(pBufState, cbToCopy);
-    STUB_NOT_SUPPORTED("RTFileCopyPartPrep");
-    return VERR_NOT_SUPPORTED;
-}
-
-RTDECL(int) RTFileCopyPartEx(RTFILE hFileSrc, RTFOFF offSrc, RTFILE hFileDst, RTFOFF offDst,
-                              uint64_t cbToCopy, uint32_t fFlags, PRTFILECOPYPARTBUFSTATE pBufState,
-                              uint64_t *pcbCopied)
-{
-    RT_NOREF(hFileSrc, offSrc, hFileDst, offDst, cbToCopy, fFlags, pBufState, pcbCopied);
-    STUB_NOT_SUPPORTED("RTFileCopyPartEx");
-    return VERR_NOT_SUPPORTED;
-}
-
-RTDECL(void) RTFileCopyPartCleanup(PRTFILECOPYPARTBUFSTATE pBufState)
-{
-    RT_NOREF(pBufState);
-}
+/* RTFile I/O stubs removed — real POSIX implementations from RuntimeR3.a
+ * (fileio-posix.cpp) work with Emscripten's MEMFS virtual filesystem. */
 
 
 /*************************************************************************

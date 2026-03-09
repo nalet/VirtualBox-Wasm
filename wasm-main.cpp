@@ -345,19 +345,40 @@ int main(int argc, char **argv)
         RTPrintf("RTSemRWCreate: %Rrc\n", rc);
         if (RT_SUCCESS(rc)) RTSemRWDestroy(hRWSem);
 
-        /* 6. RTThreadCreate (the EMT thread creation) */
+        /* 6. RTThreadCreate tests — find which parameter causes VERR_NOT_SUPPORTED */
         volatile int testVal = 0;
         RTTHREAD hThread;
+
+        /* 6a. Minimal flags */
+        rc = RTThreadCreate(&hThread, testEMTThread, (void *)&testVal,
+                           0, RTTHREADTYPE_DEFAULT,
+                           RTTHREADFLAGS_WAITABLE,
+                           "Test1");
+        RTPrintf("RTThreadCreate(minimal): %Rrc\n", rc);
+        if (RT_SUCCESS(rc)) { RTThreadWait(hThread, RT_INDEFINITE_WAIT, NULL); }
+
+        /* 6b. With EMULATION type */
+        rc = RTThreadCreate(&hThread, testEMTThread, (void *)&testVal,
+                           0, RTTHREADTYPE_EMULATION,
+                           RTTHREADFLAGS_WAITABLE,
+                           "Test2");
+        RTPrintf("RTThreadCreate(EMULATION): %Rrc\n", rc);
+        if (RT_SUCCESS(rc)) { RTThreadWait(hThread, RT_INDEFINITE_WAIT, NULL); }
+
+        /* 6c. With 1MB stack */
+        rc = RTThreadCreate(&hThread, testEMTThread, (void *)&testVal,
+                           _1M, RTTHREADTYPE_DEFAULT,
+                           RTTHREADFLAGS_WAITABLE,
+                           "Test3");
+        RTPrintf("RTThreadCreate(1MB stack): %Rrc\n", rc);
+        if (RT_SUCCESS(rc)) { RTThreadWait(hThread, RT_INDEFINITE_WAIT, NULL); }
+
+        /* 6d. Full EMT flags */
         rc = RTThreadCreate(&hThread, testEMTThread, (void *)&testVal,
                            _1M, RTTHREADTYPE_EMULATION,
                            RTTHREADFLAGS_WAITABLE | RTTHREADFLAGS_COM_MTA | RTTHREADFLAGS_NO_SIGNALS,
-                           "TestEMT");
-        RTPrintf("RTThreadCreate(EMT flags): %Rrc\n", rc);
-        if (RT_SUCCESS(rc))
-        {
-            RTThreadWait(hThread, RT_INDEFINITE_WAIT, NULL);
-            RTPrintf("RTThreadCreate result: val=%d\n", testVal);
-        }
+                           "Test4");
+        RTPrintf("RTThreadCreate(full EMT): %Rrc\n", rc);
 
         RTPrintf("--- end tests ---\n");
     }

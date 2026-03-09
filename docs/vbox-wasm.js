@@ -1703,96 +1703,6 @@ function _PDMR3UsbQueryLun(...args) {
 
 _PDMR3UsbQueryLun.stub = true;
 
-function _RTEnvExist(...args) {
-  abort("missing function: RTEnvExist");
-}
-
-_RTEnvExist.stub = true;
-
-function _RTLinuxConstructPath(...args) {
-  abort("missing function: RTLinuxConstructPath");
-}
-
-_RTLinuxConstructPath.stub = true;
-
-function _RTLinuxSysFsReadDevNumFile(...args) {
-  abort("missing function: RTLinuxSysFsReadDevNumFile");
-}
-
-_RTLinuxSysFsReadDevNumFile.stub = true;
-
-function _RTLinuxSysFsReadIntFile(...args) {
-  abort("missing function: RTLinuxSysFsReadIntFile");
-}
-
-_RTLinuxSysFsReadIntFile.stub = true;
-
-function _RTPipeClose(...args) {
-  abort("missing function: RTPipeClose");
-}
-
-_RTPipeClose.stub = true;
-
-function _RTPipeCreate(...args) {
-  abort("missing function: RTPipeCreate");
-}
-
-_RTPipeCreate.stub = true;
-
-function _RTPipeFromNative(...args) {
-  abort("missing function: RTPipeFromNative");
-}
-
-_RTPipeFromNative.stub = true;
-
-function _RTPipeRead(...args) {
-  abort("missing function: RTPipeRead");
-}
-
-_RTPipeRead.stub = true;
-
-function _RTPipeReadBlocking(...args) {
-  abort("missing function: RTPipeReadBlocking");
-}
-
-_RTPipeReadBlocking.stub = true;
-
-function _RTPipeWrite(...args) {
-  abort("missing function: RTPipeWrite");
-}
-
-_RTPipeWrite.stub = true;
-
-function _RTPipeWriteBlocking(...args) {
-  abort("missing function: RTPipeWriteBlocking");
-}
-
-_RTPipeWriteBlocking.stub = true;
-
-function _RTSystemQueryDmiString(...args) {
-  abort("missing function: RTSystemQueryDmiString");
-}
-
-_RTSystemQueryDmiString.stub = true;
-
-function _RTSystemQueryOSInfo(...args) {
-  abort("missing function: RTSystemQueryOSInfo");
-}
-
-_RTSystemQueryOSInfo.stub = true;
-
-function _RTTimeLocalExplode(...args) {
-  abort("missing function: RTTimeLocalExplode");
-}
-
-_RTTimeLocalExplode.stub = true;
-
-function _RTUuidCompare2Strs(...args) {
-  abort("missing function: RTUuidCompare2Strs");
-}
-
-_RTUuidCompare2Strs.stub = true;
-
 function __Z15rtDirNativeOpenP13RTDIRINTERNALmPv(...args) {
   abort("missing function: _Z15rtDirNativeOpenP13RTDIRINTERNALmPv");
 }
@@ -6771,21 +6681,6 @@ function assignWasmImports() {
     /** @export */ PDMR3UsbQueryDeviceLun: _PDMR3UsbQueryDeviceLun,
     /** @export */ PDMR3UsbQueryDriverOnLun: _PDMR3UsbQueryDriverOnLun,
     /** @export */ PDMR3UsbQueryLun: _PDMR3UsbQueryLun,
-    /** @export */ RTEnvExist: _RTEnvExist,
-    /** @export */ RTLinuxConstructPath: _RTLinuxConstructPath,
-    /** @export */ RTLinuxSysFsReadDevNumFile: _RTLinuxSysFsReadDevNumFile,
-    /** @export */ RTLinuxSysFsReadIntFile: _RTLinuxSysFsReadIntFile,
-    /** @export */ RTPipeClose: _RTPipeClose,
-    /** @export */ RTPipeCreate: _RTPipeCreate,
-    /** @export */ RTPipeFromNative: _RTPipeFromNative,
-    /** @export */ RTPipeRead: _RTPipeRead,
-    /** @export */ RTPipeReadBlocking: _RTPipeReadBlocking,
-    /** @export */ RTPipeWrite: _RTPipeWrite,
-    /** @export */ RTPipeWriteBlocking: _RTPipeWriteBlocking,
-    /** @export */ RTSystemQueryDmiString: _RTSystemQueryDmiString,
-    /** @export */ RTSystemQueryOSInfo: _RTSystemQueryOSInfo,
-    /** @export */ RTTimeLocalExplode: _RTTimeLocalExplode,
-    /** @export */ RTUuidCompare2Strs: _RTUuidCompare2Strs,
     /** @export */ _Z15rtDirNativeOpenP13RTDIRINTERNALmPv: __Z15rtDirNativeOpenP13RTDIRINTERNALmPv,
     /** @export */ _Z24rtDirNativeGetStructSizePKc: __Z24rtDirNativeGetStructSizePKc,
     /** @export */ __assert_fail: ___assert_fail,

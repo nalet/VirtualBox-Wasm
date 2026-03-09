@@ -1973,3 +1973,154 @@ RTDECL(bool) RTThreadYield(void)
     sched_yield();
     return true;
 }
+
+
+/*************************************************************************
+ * Linux-specific stubs — not available in Wasm/Emscripten
+ *************************************************************************/
+
+#include <iprt/linux/sysfs.h>
+
+RTDECL(int) RTLinuxSysFsReadIntFile(unsigned uBase, int64_t *pi64, const char *pszFormat, ...)
+{
+    RT_NOREF(uBase, pszFormat);
+    *pi64 = 0;
+    return VERR_FILE_NOT_FOUND;
+}
+
+RTDECL(int) RTLinuxSysFsReadDevNumFile(dev_t *pDevNum, const char *pszFormat, ...)
+{
+    RT_NOREF(pszFormat);
+    *pDevNum = 0;
+    return VERR_FILE_NOT_FOUND;
+}
+
+RTDECL(int) RTLinuxConstructPath(char *pszPath, size_t cbPath, const char *pszFormat, ...)
+{
+    RT_NOREF(pszFormat);
+    if (cbPath) pszPath[0] = '\0';
+    return VERR_FILE_NOT_FOUND;
+}
+
+
+/*************************************************************************
+ * Environment stubs
+ *************************************************************************/
+
+#include <iprt/env.h>
+
+RTDECL(bool) RTEnvExist(const char *pszVar)
+{
+    RT_NOREF(pszVar);
+    return false;
+}
+
+RTDECL(bool) RTEnvExistEx(RTENV Env, const char *pszVar)
+{
+    RT_NOREF(Env, pszVar);
+    return false;
+}
+
+
+/*************************************************************************
+ * Pipe stubs — not needed in Wasm
+ *************************************************************************/
+
+#include <iprt/pipe.h>
+
+RTDECL(int) RTPipeCreate(PRTPIPE phPipeRead, PRTPIPE phPipeWrite, uint32_t fFlags)
+{
+    RT_NOREF(phPipeRead, phPipeWrite, fFlags);
+    return VERR_NOT_SUPPORTED;
+}
+
+RTDECL(int) RTPipeClose(RTPIPE hPipe)
+{
+    RT_NOREF(hPipe);
+    return VERR_NOT_SUPPORTED;
+}
+
+RTDECL(int) RTPipeFromNative(PRTPIPE phPipe, RTHCINTPTR hNativePipe, uint32_t fFlags)
+{
+    RT_NOREF(phPipe, hNativePipe, fFlags);
+    return VERR_NOT_SUPPORTED;
+}
+
+RTDECL(int) RTPipeRead(RTPIPE hPipe, void *pvBuf, size_t cbToRead, size_t *pcbRead)
+{
+    RT_NOREF(hPipe, pvBuf, cbToRead, pcbRead);
+    return VERR_NOT_SUPPORTED;
+}
+
+RTDECL(int) RTPipeReadBlocking(RTPIPE hPipe, void *pvBuf, size_t cbToRead, size_t *pcbRead)
+{
+    RT_NOREF(hPipe, pvBuf, cbToRead, pcbRead);
+    return VERR_NOT_SUPPORTED;
+}
+
+RTDECL(int) RTPipeWrite(RTPIPE hPipe, const void *pvBuf, size_t cbToWrite, size_t *pcbWritten)
+{
+    RT_NOREF(hPipe, pvBuf, cbToWrite, pcbWritten);
+    return VERR_NOT_SUPPORTED;
+}
+
+RTDECL(int) RTPipeWriteBlocking(RTPIPE hPipe, const void *pvBuf, size_t cbToWrite, size_t *pcbWritten)
+{
+    RT_NOREF(hPipe, pvBuf, cbToWrite, pcbWritten);
+    return VERR_NOT_SUPPORTED;
+}
+
+RTDECL(uint32_t) rtPipePollGetHandle(RTPIPE hPipe, uint32_t fEvents)
+{
+    RT_NOREF(hPipe, fEvents);
+    return UINT32_MAX;
+}
+
+
+/*************************************************************************
+ * System query stubs
+ *************************************************************************/
+
+#include <iprt/system.h>
+
+RTDECL(int) RTSystemQueryDmiString(RTSYSDMISTR enmString, char *pszBuf, size_t cbBuf)
+{
+    RT_NOREF(enmString);
+    if (cbBuf) pszBuf[0] = '\0';
+    return VERR_NOT_SUPPORTED;
+}
+
+RTDECL(int) RTSystemQueryOSInfo(RTSYSOSINFO enmInfo, char *pszInfo, size_t cchInfo)
+{
+    RT_NOREF(enmInfo);
+    if (cchInfo) pszInfo[0] = '\0';
+    return VERR_NOT_SUPPORTED;
+}
+
+
+/*************************************************************************
+ * Time stubs
+ *************************************************************************/
+
+#include <iprt/time.h>
+
+RTDECL(PRTTIME) RTTimeLocalExplode(PRTTIME pTime, PCRTTIMESPEC pTimeSpec)
+{
+    /* Fall back to UTC */
+    return RTTimeExplode(pTime, pTimeSpec);
+}
+
+
+/*************************************************************************
+ * UUID stubs
+ *************************************************************************/
+
+#include <iprt/uuid.h>
+
+RTDECL(int) RTUuidCompare2Strs(const char *pszUuid1, const char *pszUuid2)
+{
+    return RTStrCmp(pszUuid1, pszUuid2);
+}
+
+
+/* rtDirNativeOpen/rtDirNativeGetStructSize already defined above */

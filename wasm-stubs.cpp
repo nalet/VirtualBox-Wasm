@@ -1599,8 +1599,15 @@ RTDECL(int) RTDirRelSymlinkRead(RTDIR hDir, const char *pszSymlink, char *pszTar
 int rtMemPageNativeAlloc(size_t cb, uint32_t fFlags, void **ppv)
 {
     RT_NOREF(fFlags);
-    *ppv = calloc(1, cb);
-    return *ppv ? VINF_SUCCESS : VERR_NO_MEMORY;
+    /* Must be page-aligned — VM_IS_VALID_EXT checks RT_VALID_ALIGNED_PTR(pVM, PAGE_SIZE). */
+    size_t cbAligned = (cb + 4095) & ~(size_t)4095;
+    *ppv = aligned_alloc(4096, cbAligned);
+    if (*ppv)
+    {
+        memset(*ppv, 0, cbAligned);
+        return VINF_SUCCESS;
+    }
+    return VERR_NO_MEMORY;
 }
 
 int rtMemPageNativeFree(void *pv, size_t cb)

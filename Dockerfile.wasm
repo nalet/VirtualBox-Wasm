@@ -184,6 +184,7 @@ RUN . /opt/emsdk/emsdk_env.sh 2>/dev/null \
         -DRT_ARCH_AMD64 -D__AMD64__ \
         -DIN_RING3 -DARCH_BITS=64 -DHC_ARCH_BITS=64 \
         -DRT_OS_LINUX -DVBOX -DVBOX_OSE \
+        -DVBOX_VMM_TARGET_X86 \
         -DVBOX_WITH_HARDENING \
         out/linux.amd64/release/bin/VBoxVMM.so \
         out/linux.amd64/release/bin/VBoxDD.so \
@@ -212,7 +213,7 @@ RUN . /opt/emsdk/emsdk_env.sh 2>/dev/null \
         -pthread \
         -sPTHREAD_POOL_SIZE=4 \
         -sEXIT_RUNTIME=0 \
-        -sALLOW_BLOCKING_ON_MAIN_THREAD=0 \
+        -sALLOW_BLOCKING_ON_MAIN_THREAD=1 \
         -Wno-unused-command-line-argument \
         -sERROR_ON_UNDEFINED_SYMBOLS=0 \
         2>&1 | tail -40 \

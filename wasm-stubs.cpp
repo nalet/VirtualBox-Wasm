@@ -1653,8 +1653,10 @@ int rtldrNativeClose(uintptr_t hLdrMod)
 }
 
 
+} /* extern "C" — close before C++ linkage stubs */
+
 /*************************************************************************
- * rtDirNative stubs
+ * rtDirNative stubs (C++ linkage — matches dir.h declarations)
  *************************************************************************/
 
 struct RTDIRINTERNAL;
@@ -1668,9 +1670,10 @@ size_t rtDirNativeGetStructSize(const char *pszPath)
 int rtDirNativeOpen(struct RTDIRINTERNAL *pDir, uintptr_t hRelativeDir, void *pvNativeRelative)
 {
     RT_NOREF(pDir, hRelativeDir, pvNativeRelative);
-    STUB_NOT_SUPPORTED("rtDirNativeOpen");
     return VERR_NOT_SUPPORTED;
 }
+
+extern "C" { /* reopen for remaining C stubs */
 
 
 /*************************************************************************
@@ -2120,10 +2123,10 @@ RTDECL(int) RTPipeWriteBlocking(RTPIPE hPipe, const void *pvBuf, size_t cbToWrit
     return VERR_NOT_SUPPORTED;
 }
 
-RTDECL(uint32_t) rtPipePollGetHandle(RTPIPE hPipe, uint32_t fEvents)
+extern "C" int rtPipePollGetHandle(RTPIPE hPipe, uint32_t fEvents, PRTHCINTPTR phNative)
 {
-    RT_NOREF(hPipe, fEvents);
-    return UINT32_MAX;
+    RT_NOREF(hPipe, fEvents, phNative);
+    return VERR_NOT_SUPPORTED;
 }
 
 

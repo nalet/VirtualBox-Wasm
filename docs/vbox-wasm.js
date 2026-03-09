@@ -1703,18 +1703,6 @@ function _PDMR3UsbQueryLun(...args) {
 
 _PDMR3UsbQueryLun.stub = true;
 
-function __Z15rtDirNativeOpenP13RTDIRINTERNALmPv(...args) {
-  abort("missing function: _Z15rtDirNativeOpenP13RTDIRINTERNALmPv");
-}
-
-__Z15rtDirNativeOpenP13RTDIRINTERNALmPv.stub = true;
-
-function __Z24rtDirNativeGetStructSizePKc(...args) {
-  abort("missing function: _Z24rtDirNativeGetStructSizePKc");
-}
-
-__Z24rtDirNativeGetStructSizePKc.stub = true;
-
 var INT53_MAX = 9007199254740992;
 
 var INT53_MIN = -9007199254740992;
@@ -6419,12 +6407,6 @@ function _fd_write(fd, iov, iovcnt, pnum) {
   }
 }
 
-function _rtPipePollGetHandle(...args) {
-  abort("missing function: rtPipePollGetHandle");
-}
-
-_rtPipePollGetHandle.stub = true;
-
 var stringToUTF8OnStack = str => {
   var size = lengthBytesUTF8(str) + 1;
   var ret = stackAlloc(size);
@@ -6731,8 +6713,6 @@ function assignWasmImports() {
     /** @export */ PDMR3UsbQueryDeviceLun: _PDMR3UsbQueryDeviceLun,
     /** @export */ PDMR3UsbQueryDriverOnLun: _PDMR3UsbQueryDriverOnLun,
     /** @export */ PDMR3UsbQueryLun: _PDMR3UsbQueryLun,
-    /** @export */ _Z15rtDirNativeOpenP13RTDIRINTERNALmPv: __Z15rtDirNativeOpenP13RTDIRINTERNALmPv,
-    /** @export */ _Z24rtDirNativeGetStructSizePKc: __Z24rtDirNativeGetStructSizePKc,
     /** @export */ __assert_fail: ___assert_fail,
     /** @export */ __call_sighandler: ___call_sighandler,
     /** @export */ __cxa_throw: ___cxa_throw,
@@ -6798,7 +6778,6 @@ function assignWasmImports() {
     /** @export */ invoke_vjji,
     /** @export */ memory: wasmMemory,
     /** @export */ proc_exit: _proc_exit,
-    /** @export */ rtPipePollGetHandle: _rtPipePollGetHandle,
     /** @export */ wasmCallFuncPtrTrampoline
   };
 }

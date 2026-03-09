@@ -63,6 +63,33 @@ extern "C" DECLEXPORT(int) VBoxDevicesRegister(PPDMDEVREGCB pCallbacks, uint32_t
     AssertReleaseMsg(u32Version == VBOX_VERSION, ("u32Version=%#x VBOX_VERSION=%#x\n", u32Version, VBOX_VERSION));
     int rc;
 
+#ifdef __EMSCRIPTEN__
+    /*
+     * Emscripten/Wasm: Register only the minimal set of devices needed
+     * for a basic PC boot (matching wasm-main.cpp CFGM configuration).
+     * Network, audio, USB, and other optional devices are excluded
+     * because their source files are not compiled for Wasm.
+     */
+#define REGISTER_DEVICE(dev) \
+    do { rc = pCallbacks->pfnRegister(pCallbacks, &dev); if (RT_FAILURE(rc)) return rc; } while (0)
+
+    REGISTER_DEVICE(g_DevicePCI);
+    REGISTER_DEVICE(g_DevicePcArch);
+    REGISTER_DEVICE(g_DevicePcBios);
+    REGISTER_DEVICE(g_DevicePS2KeyboardMouse);
+    REGISTER_DEVICE(g_DevicePIIX3IDE);
+    REGISTER_DEVICE(g_DeviceI8254);
+    REGISTER_DEVICE(g_DeviceI8259);
+    REGISTER_DEVICE(g_DeviceMC146818);
+    REGISTER_DEVICE(g_DeviceVga);
+    REGISTER_DEVICE(g_DeviceVMMDev);
+    REGISTER_DEVICE(g_DeviceDMA);
+    REGISTER_DEVICE(g_DeviceACPI);
+
+#undef REGISTER_DEVICE
+
+#else /* !__EMSCRIPTEN__ */
+
     rc = pCallbacks->pfnRegister(pCallbacks, &g_DevicePCI);
     if (RT_FAILURE(rc))
         return rc;
@@ -285,6 +312,8 @@ extern "C" DECLEXPORT(int) VBoxDevicesRegister(PPDMDEVREGCB pCallbacks, uint32_t
         return rc;
 #endif
 
+#endif /* !__EMSCRIPTEN__ */
+
     return VINF_SUCCESS;
 }
 
@@ -301,7 +330,29 @@ extern "C" DECLEXPORT(int) VBoxDriversRegister(PCPDMDRVREGCB pCallbacks, uint32_
     LogFlow(("VBoxDriversRegister: u32Version=%#x\n", u32Version));
     AssertReleaseMsg(u32Version == VBOX_VERSION, ("u32Version=%#x VBOX_VERSION=%#x\n", u32Version, VBOX_VERSION));
 
-    int rc = pCallbacks->pfnRegister(pCallbacks, &g_DrvMouseQueue);
+    int rc;
+
+#ifdef __EMSCRIPTEN__
+    /*
+     * Emscripten/Wasm: Register only the minimal set of drivers needed
+     * for basic PC boot with IDE disk and PS/2 input.
+     */
+#define REGISTER_DRIVER(drv) \
+    do { rc = pCallbacks->pfnRegister(pCallbacks, &drv); if (RT_FAILURE(rc)) return rc; } while (0)
+
+    REGISTER_DRIVER(g_DrvMouseQueue);
+    REGISTER_DRIVER(g_DrvKeyboardQueue);
+    REGISTER_DRIVER(g_DrvVD);
+    REGISTER_DRIVER(g_DrvACPI);
+    REGISTER_DRIVER(g_DrvAcpiCpu);
+    REGISTER_DRIVER(g_DrvChar);
+    REGISTER_DRIVER(g_DrvIfTrace);
+
+#undef REGISTER_DRIVER
+
+#else /* !__EMSCRIPTEN__ */
+
+    rc = pCallbacks->pfnRegister(pCallbacks, &g_DrvMouseQueue);
     if (RT_FAILURE(rc))
         return rc;
     rc = pCallbacks->pfnRegister(pCallbacks, &g_DrvKeyboardQueue);
@@ -497,6 +548,8 @@ extern "C" DECLEXPORT(int) VBoxDriversRegister(PCPDMDRVREGCB pCallbacks, uint32_
         return rc;
 #endif
 
+#endif /* !__EMSCRIPTEN__ */
+
     return VINF_SUCCESS;
 }
 
@@ -512,6 +565,7 @@ extern "C" DECLEXPORT(int) VBoxUsbRegister(PCPDMUSBREGCB pCallbacks, uint32_t u3
 {
     int rc = VINF_SUCCESS;
     RT_NOREF1(u32Version);
+    RT_NOREF1(pCallbacks);
 
 #ifdef VBOX_WITH_USB
     rc = pCallbacks->pfnRegister(pCallbacks, &g_UsbDevProxy);

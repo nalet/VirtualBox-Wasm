@@ -2829,6 +2829,7 @@ static int vmmdevReqHandler_GetHostGraphicsCapability(PVMMDEVCC pThisCC, VMMDevR
 }
 
 
+#ifdef VBOX_WITH_HGCM
 /**
  * Sets request status to VINF_HGCM_ASYNC_EXECUTE.
  *
@@ -2847,6 +2848,7 @@ DECLINLINE(void) vmmdevReqHdrSetHgcmAsyncExecute(PPDMDEVINS pDevIns, RTGCPHYS GC
         PDMDevHlpPhysWrite(pDevIns, GCPhysReqHdr + RT_UOFFSETOF(VMMDevRequestHeader, rc), &rcReq, sizeof(rcReq));
     }
 }
+#endif /* VBOX_WITH_HGCM */
 
 
 /** @name VMMDEVREQDISP_POST_F_XXX - post dispatcher optimizations.
@@ -2875,7 +2877,11 @@ static VBOXSTRICTRC vmmdevReqDispatcher(PPDMDEVINS pDevIns, PVMMDEV pThis, PVMMD
                                         PVMMDEVREQLOCK *ppLock)
 {
     int rcRet = VINF_SUCCESS;
+#ifdef VBOX_WITH_HGCM
     Assert(*pfPostOptimize == 0);
+#else
+    RT_NOREF(GCPhysReqHdr, tsArrival, pfPostOptimize, ppLock);
+#endif
     switch (pReqHdr->requestType)
     {
         case VMMDevReq_ReportGuestInfo:
@@ -3243,11 +3249,14 @@ static VBOXSTRICTRC vmmdevRequestHandler(PPDMDEVINS pDevIns, RTGCPHYS GCPhysReqH
 
                 /* Try lock the request if it's a HGCM call and not crossing a page boundrary.
                    Saves on PGM interaction. */
+#ifdef VBOX_WITH_HGCM
                 VMMDEVREQLOCK   Lock   = { NULL, { 0, NULL } };
+#endif
                 PVMMDEVREQLOCK  pLock  = NULL;
                 size_t          cbLeft = requestHeader.size - sizeof(VMMDevRequestHeader);
                 if (cbLeft)
                 {
+#ifdef VBOX_WITH_HGCM
                     if (   (   requestHeader.requestType == VMMDevReq_HGCMCall32
                             || requestHeader.requestType == VMMDevReq_HGCMCall64)
                         && ((GCPhysReqHdr + requestHeader.size) >> VMMDEV_PAGE_SHIFT) == (GCPhysReqHdr >> VMMDEV_PAGE_SHIFT)
@@ -3258,6 +3267,7 @@ static VBOXSTRICTRC vmmdevRequestHandler(PPDMDEVINS pDevIns, RTGCPHYS GCPhysReqH
                         pLock = &Lock;
                     }
                     else
+#endif
                         PDMDevHlpPhysRead(pDevIns,
                                           GCPhysReqHdr              + sizeof(VMMDevRequestHeader),
                                           (uint8_t *)pRequestHeader + sizeof(VMMDevRequestHeader),

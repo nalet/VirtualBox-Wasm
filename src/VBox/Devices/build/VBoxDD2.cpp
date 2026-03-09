@@ -66,7 +66,13 @@ const void *g_apvVBoxDDDependencies2[] =
  * @param   pCallbacks      Pointer to the callback table.
  * @param   u32Version      VBox version number.
  */
+#ifdef __EMSCRIPTEN__
+/* Emscripten: renamed to avoid collision with VBoxDD's VBoxDevicesRegister
+   when statically linking (FAKE_DYLIBS). This function is a no-op anyway. */
+extern "C" DECLEXPORT(int) VBoxDD2DevicesRegister(PPDMDEVREGCB pCallbacks, uint32_t u32Version)
+#else
 extern "C" DECLEXPORT(int) VBoxDevicesRegister(PPDMDEVREGCB pCallbacks, uint32_t u32Version)
+#endif
 {
     LogFlow(("VBoxDevicesRegister: u32Version=%#x\n", u32Version));
     AssertReleaseMsg(u32Version == VBOX_VERSION, ("u32Version=%#x VBOX_VERSION=%#x\n", u32Version, VBOX_VERSION));

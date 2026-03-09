@@ -96,6 +96,11 @@ static DECLCALLBACK(int)    pdmR3DevReg_Register(PPDMDEVREGCB pCallbacks, PCPDMD
 static int                  pdmR3DevLoadModules(PVM pVM);
 static int                  pdmR3DevLoad(PVM pVM, PPDMDEVREGCBINT pRegCB, const char *pszFilename, const char *pszName);
 
+#ifdef __EMSCRIPTEN__
+/* Forward declarations for statically linked registration functions (FAKE_DYLIBS). */
+extern "C" int VBoxDevicesRegister(PPDMDEVREGCB pCallbacks, uint32_t u32Version);
+#endif
+
 
 
 
@@ -748,6 +753,16 @@ static int pdmR3DevLoadModules(PVM pVM)
     }
     if (fLoadBuiltin)
     {
+#ifdef __EMSCRIPTEN__
+        /* Emscripten: VBoxDD/VBoxDD2 are statically linked (FAKE_DYLIBS).
+           Call registration functions directly instead of dynamic loading. */
+        Log(("PDM: Calling VBoxDevicesRegister (static, Emscripten)\n"));
+        rc = VBoxDevicesRegister(&RegCB.Core, VBOX_VERSION);
+        if (RT_FAILURE(rc))
+            return rc;
+        /* VBoxDD2's VBoxDD2DevicesRegister is a no-op (only contains firmware
+           blobs linked as static libraries), so we skip it. */
+#else
         /* make filename */
         char *pszFilename = pdmR3FileR3("VBoxDD", true /*fShared*/);
         if (!pszFilename)
@@ -765,6 +780,7 @@ static int pdmR3DevLoadModules(PVM pVM)
         RTMemTmpFree(pszFilename);
         if (RT_FAILURE(rc))
             return rc;
+#endif
     }
 
     /*

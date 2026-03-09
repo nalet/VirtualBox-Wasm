@@ -31,6 +31,11 @@ ENV PATH="/opt/emsdk:/opt/emsdk/upstream/emscripten:${PATH}"
 ENV EMSDK="/opt/emsdk"
 ENV EM_CONFIG="/opt/emsdk/.emscripten"
 
+# NOTE: Open Watcom intentionally NOT installed.
+# Open Watcom's wasm assembler hangs in an infinite loop on vberom.asm.
+# Instead we use the pre-built VBoxVgaBiosAlternative / VBoxBiosAlternative
+# .asm files assembled with YASM (the !VBOX_WITH_OPEN_WATCOM path).
+
 COPY . /build/vbox
 WORKDIR /build/vbox
 
@@ -67,6 +72,35 @@ RUN . /opt/emsdk/emsdk_env.sh 2>/dev/null \
     && export PATH="/build/vbox/kBuild/bin/linux.amd64:${PATH}" \
     && echo "=== Phase 1: Full kmk pass (native helpers) ==" \
     && kmk VBOX_WITH_NO_GCC_WARNING_POLICY=1 2>&1 | tail -20 || true
+
+# Phase 1b: Build native BldProg tools (bin2c, biossums)
+# Must happen before Phase 2e deletes obj/RuntimeBldProg/
+RUN . /opt/emsdk/emsdk_env.sh 2>/dev/null \
+    && export PATH="/build/vbox/kBuild/bin/linux.amd64:${PATH}" \
+    && echo "=== Phase 1b: Building BldProg tools ==" \
+    && kmk -C src/bldprogs bin2c biossums 2>&1 | tail -10 \
+    && ls -la out/linux.amd64/release/obj/bin2c/bin2c out/linux.amd64/release/obj/biossums/biossums
+
+# Phase 1c: Generate ACPI hex using system iasl + bin2c (bldRTIasl has link issues)
+RUN export PATH="/build/vbox/kBuild/bin/linux.amd64:${PATH}" \
+    && BIN2C=out/linux.amd64/release/obj/bin2c/bin2c \
+    && mkdir -p out/linux.amd64/release/obj/VBoxDD \
+    && iasl -tc -p /tmp/vboxaml src/VBox/Devices/PC/vbox.dsl 2>&1 | tail -5 \
+    && (test -f /tmp/vboxaml.hex \
+        && sed 's/vboxaml_aml_code/AmlCode/g' /tmp/vboxaml.hex > out/linux.amd64/release/obj/VBoxDD/vboxaml.hex \
+        || $BIN2C -ascii AmlCode /tmp/vboxaml.aml out/linux.amd64/release/obj/VBoxDD/vboxaml.hex) \
+    && head -20 out/linux.amd64/release/obj/VBoxDD/vboxaml.hex \
+    && echo "vboxaml.hex generated OK"
+
+# Phase 1d: Build BIOS libraries (using YASM + pre-built alternative .asm files)
+# No Open Watcom needed — kBuild uses the VBoxBiosAlternative*.asm path
+RUN . /opt/emsdk/emsdk_env.sh 2>/dev/null \
+    && export PATH="/build/vbox/kBuild/bin/linux.amd64:${PATH}" \
+    && echo "=== Phase 1d: Building BIOS libraries (YASM path) ==" \
+    && kmk -C src/VBox/Devices/PC/BIOS PcBiosBin 2>&1 | tail -20 \
+    && kmk -C src/VBox/Devices/Graphics/BIOS VgaBiosBin VgaDefBiosLogo vbetables-gen 2>&1 | tail -20 \
+    && ls -la out/linux.amd64/release/lib/PcBiosBin.a out/linux.amd64/release/lib/VgaBiosBin.a \
+    && echo "BIOS libraries built OK"
 
 # Phase 2a: OpenSSL crypto headers
 RUN . /opt/emsdk/emsdk_env.sh 2>/dev/null \
@@ -114,49 +148,73 @@ RUN . /opt/emsdk/emsdk_env.sh 2>/dev/null \
     && echo "=== Phase 3c: Building VBoxVMM ==" \
     && kmk -C src/VBox/VMM VBoxVMM 2>&1 | tail -80
 
-# PoC: Link browser-compatible build
+# Phase 4a: StorageLib (VBoxDD dependency)
 RUN . /opt/emsdk/emsdk_env.sh 2>/dev/null \
-    && echo "=== PoC: Linking vbox-wasm.js (browser target) ==" \
-    && em++ -o docs/vbox-wasm.js wasm-main.cpp \
-        -I include -I out/linux.amd64/release \
-        -I src/VBox/Runtime/include \
-        -DRT_ARCH_AMD64 -D__AMD64__ \
-        -DIN_RING3 -DARCH_BITS=64 -DHC_ARCH_BITS=64 \
-        -DRT_OS_LINUX -DVBOX -DVBOX_OSE \
-        out/linux.amd64/release/lib/RuntimeR3.a \
-        out/linux.amd64/release/lib/RuntimeEFCPP.a \
-        out/linux.amd64/release/lib/VBox-zlib.a \
-        out/linux.amd64/release/lib/VBox-liblzma.a \
-        out/linux.amd64/release/lib/VBox-liblzf.a \
-        -sMEMORY64=1 \
-        -sALLOW_MEMORY_GROWTH=1 \
-        -msimd128 \
-        -sINITIAL_MEMORY=134217728 \
-        -sSTACK_SIZE=1048576 \
-        -sENVIRONMENT=web \
-        -sEXPORTED_RUNTIME_METHODS='["callMain"]' \
-        -sINVOKE_RUN=1 \
-        -sMODULARIZE=0 \
-        2>&1 | tail -20 \
-    && ls -lh docs/vbox-wasm.js docs/vbox-wasm.wasm
+    && export PATH="/build/vbox/kBuild/bin/linux.amd64:${PATH}" \
+    && echo "=== Phase 4a: Building StorageLib ==" \
+    && kmk -C src/VBox/Storage StorageLib 2>&1 | tail -20 || true
 
-# Node.js verification
+# Phase 4b: VBoxDDU (device utilities)
 RUN . /opt/emsdk/emsdk_env.sh 2>/dev/null \
-    && em++ -o /tmp/vbox-wasm-node.js wasm-main.cpp \
+    && export PATH="/build/vbox/kBuild/bin/linux.amd64:${PATH}" \
+    && echo "=== Phase 4b: Building VBoxDDU ==" \
+    && kmk -C src/VBox/Devices VBoxDDU 2>&1 | tail -20 || true
+
+# Phase 4c: VBoxDD2 (firmware/BIOS container)
+# BIOS libraries already built in Phase 1d
+RUN . /opt/emsdk/emsdk_env.sh 2>/dev/null \
+    && export PATH="/build/vbox/kBuild/bin/linux.amd64:${PATH}" \
+    && echo "=== Phase 4c: Building VBoxDD2 ==" \
+    && kmk -C src/VBox/Devices VBoxDD2 2>&1 | tail -20 || true
+
+# Phase 4d: VBoxDD (devices - VGA, PS/2, PCI, BIOS, IDE, etc.)
+RUN . /opt/emsdk/emsdk_env.sh 2>/dev/null \
+    && export PATH="/build/vbox/kBuild/bin/linux.amd64:${PATH}" \
+    && echo "=== Phase 4d: Building VBoxDD ==" \
+    && kmk -C src/VBox/Devices VBoxDD 2>&1 | tail -80
+
+
+# Phase 5: Link VM harness (browser target with pthreads)
+RUN . /opt/emsdk/emsdk_env.sh 2>/dev/null \
+    && echo "=== Phase 5: Linking vbox-wasm.js (full VM harness) ==" \
+    && mkdir -p docs \
+    && em++ -o docs/vbox-wasm.js wasm-main.cpp wasm-stubs.cpp \
         -I include -I out/linux.amd64/release \
         -I src/VBox/Runtime/include \
         -DRT_ARCH_AMD64 -D__AMD64__ \
         -DIN_RING3 -DARCH_BITS=64 -DHC_ARCH_BITS=64 \
         -DRT_OS_LINUX -DVBOX -DVBOX_OSE \
+        -DVBOX_WITH_HARDENING \
+        out/linux.amd64/release/bin/VBoxVMM.so \
+        out/linux.amd64/release/bin/VBoxDD.so \
+        out/linux.amd64/release/bin/VBoxDDU.so \
+        out/linux.amd64/release/lib/StorageLib.a \
+        out/linux.amd64/release/lib/DisasmR3.a \
+        out/linux.amd64/release/lib/VBox-SoftFloat.a \
+        out/linux.amd64/release/lib/PcBiosBin.a \
+        out/linux.amd64/release/lib/VgaBiosBin.a \
+        out/linux.amd64/release/lib/VgaDefBiosLogo.a \
         out/linux.amd64/release/lib/RuntimeR3.a \
         out/linux.amd64/release/lib/RuntimeEFCPP.a \
         out/linux.amd64/release/lib/VBox-zlib.a \
         out/linux.amd64/release/lib/VBox-liblzma.a \
         out/linux.amd64/release/lib/VBox-liblzf.a \
+        -Wl,--allow-multiple-definition \
         -sMEMORY64=1 \
         -sALLOW_MEMORY_GROWTH=1 \
         -msimd128 \
-        -sINITIAL_MEMORY=134217728 \
-        -sSTACK_SIZE=1048576 \
-        2>&1 | tail -5 \
-    && node --experimental-wasm-memory64 /tmp/vbox-wasm-node.js 2>&1 || true
+        -sINITIAL_MEMORY=536870912 \
+        -sSTACK_SIZE=2097152 \
+        -sENVIRONMENT=web,worker \
+        -sEXPORTED_RUNTIME_METHODS='["callMain","FS"]' \
+        -sINVOKE_RUN=0 \
+        -sMODULARIZE=0 \
+        -pthread \
+        -sPTHREAD_POOL_SIZE=4 \
+        -sEXIT_RUNTIME=0 \
+        -sALLOW_BLOCKING_ON_MAIN_THREAD=0 \
+        -Wno-unused-command-line-argument \
+        -sERROR_ON_UNDEFINED_SYMBOLS=0 \
+        2>&1 | tail -40 \
+    && ls -lh docs/vbox-wasm.js docs/vbox-wasm.wasm \
+    && echo "=== Full VM harness linked OK ==="

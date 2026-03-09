@@ -82,6 +82,11 @@ typedef const PDMDRVREGCBINT *PCPDMDRVREGCBINT;
 static DECLCALLBACK(int) pdmR3DrvRegister(PCPDMDRVREGCB pCallbacks, PCPDMDRVREG pReg);
 static int pdmR3DrvLoad(PVM pVM, PPDMDRVREGCBINT pRegCB, const char *pszFilename, const char *pszName);
 
+#ifdef __EMSCRIPTEN__
+/* Forward declaration for statically linked registration function (FAKE_DYLIBS). */
+extern "C" int VBoxDriversRegister(PCPDMDRVREGCB pCallbacks, uint32_t u32Version);
+#endif
+
 
 /**
  * Register drivers in a statically linked environment.
@@ -152,6 +157,14 @@ int pdmR3DrvInit(PVM pVM)
     }
     if (fLoadBuiltin)
     {
+#ifdef __EMSCRIPTEN__
+        /* Emscripten: VBoxDD is statically linked (FAKE_DYLIBS).
+           Call registration function directly instead of dynamic loading. */
+        Log(("PDM: Calling VBoxDriversRegister (static, Emscripten)\n"));
+        rc = VBoxDriversRegister(&RegCB.Core, VBOX_VERSION);
+        if (RT_FAILURE(rc))
+            return rc;
+#else
         /* make filename */
         char *pszFilename = pdmR3FileR3("VBoxDD", true /*fShared*/);
         if (!pszFilename)
@@ -160,6 +173,7 @@ int pdmR3DrvInit(PVM pVM)
         RTMemTmpFree(pszFilename);
         if (RT_FAILURE(rc))
             return rc;
+#endif
     }
 
     /*

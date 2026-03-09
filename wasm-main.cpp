@@ -219,16 +219,39 @@ static DECLCALLBACK(int) vboxWasmCfgmConstructor(PUVM pUVM, PVM pVM, PCVMMR3VTAB
 
 
 /*************************************************************************
- * Error callback
+ * Error callback — writes to shared buffer (EMT output lost in Emscripten)
  *************************************************************************/
+#include <stdio.h>
+#include <string.h>
+#include <stdatomic.h>
+
+#define ERR_BUF_SIZE 4096
+static char g_szErrBuf[ERR_BUF_SIZE];
+static volatile int g_iErrBufPos = 0;
+
+static void errBufAppend(const char *psz)
+{
+    int len = (int)strlen(psz);
+    int pos = __atomic_fetch_add(&g_iErrBufPos, len, __ATOMIC_SEQ_CST);
+    if (pos + len < ERR_BUF_SIZE)
+        memcpy(&g_szErrBuf[pos], psz, len);
+}
+
 static DECLCALLBACK(void) vboxWasmVMAtError(PUVM pUVM, void *pvUser,
                                             int rc, RT_SRC_POS_DECL,
                                             const char *pszFormat, va_list args)
 {
     RT_NOREF(pUVM, pvUser);
-    RTPrintf("VM Error: rc=%Rrc at %s:%d (%s)\n", rc, pszFile, iLine, pszFunction);
+    char szLine[512];
+    snprintf(szLine, sizeof(szLine), "VM Error: rc=%d at %s:%d (%s)\n", rc, pszFile, iLine, pszFunction);
+    errBufAppend(szLine);
+    RTPrintf("%s", szLine);
+
     char szMsg[1024];
     RTStrPrintfV(szMsg, sizeof(szMsg), pszFormat, args);
+    errBufAppend("  ");
+    errBufAppend(szMsg);
+    errBufAppend("\n");
     RTPrintf("  %s\n", szMsg);
 }
 
@@ -319,6 +342,16 @@ int main(int argc, char **argv)
         }
         else
             RTPrintf("(No stubs returning VERR_NOT_SUPPORTED were called)\n");
+
+        /* Read the cross-thread error buffer */
+        if (g_szErrBuf[0])
+        {
+            RTPrintf("=== VM Error details (from EMT thread) ===\n");
+            RTPrintf("%s", g_szErrBuf);
+            RTPrintf("=== End VM Error ===\n");
+        }
+        else
+            RTPrintf("(No VM error callback was triggered)\n");
 
         return 1;
     }

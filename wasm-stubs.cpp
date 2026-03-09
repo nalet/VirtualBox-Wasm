@@ -1417,33 +1417,44 @@ RTDECL(int) RTFsQuerySizes(const char *pszFsPath, RTFOFF *pcbTotal, RTFOFF *pcbF
 
 
 /*************************************************************************
- * RTTls stubs
+ * RTTls — pthread_key based (thread-safe, needed for EMT threads)
  *************************************************************************/
 
-static void *g_aTlsSlots[64] = {0};
+RTDECL(int) RTTlsAllocEx(PRTTLS piTls, PFNRTTLSDTOR pfnDestructor)
+{
+    pthread_key_t key;
+    int rc = pthread_key_create(&key, (void (*)(void *))pfnDestructor);
+    if (rc != 0)
+        return RTErrConvertFromErrno(rc);
+    *piTls = (RTTLS)key;
+    return VINF_SUCCESS;
+}
 
 RTDECL(int) RTTlsFree(RTTLS iTls)
 {
-    if (iTls < 64)
-        g_aTlsSlots[iTls] = NULL;
+    RT_NOREF(iTls);
     return VINF_SUCCESS;
 }
 
 RTDECL(void *) RTTlsGet(RTTLS iTls)
 {
-    if (iTls < 64)
-        return g_aTlsSlots[iTls];
-    return NULL;
+    return pthread_getspecific((pthread_key_t)iTls);
+}
+
+RTDECL(int) RTTlsGetEx(RTTLS iTls, void **ppvValue)
+{
+    if (RT_UNLIKELY(iTls == NIL_RTTLS))
+        return VERR_INVALID_PARAMETER;
+    *ppvValue = pthread_getspecific((pthread_key_t)iTls);
+    return VINF_SUCCESS;
 }
 
 RTDECL(int) RTTlsSet(RTTLS iTls, void *pvValue)
 {
-    if (iTls < 64)
-    {
-        g_aTlsSlots[iTls] = pvValue;
-        return VINF_SUCCESS;
-    }
-    return VERR_INVALID_PARAMETER;
+    int rc = pthread_setspecific((pthread_key_t)iTls, pvValue);
+    if (RT_UNLIKELY(rc != 0))
+        return RTErrConvertFromErrno(rc);
+    return VINF_SUCCESS;
 }
 
 
@@ -1796,6 +1807,13 @@ void xmlSetExternalEntityLoader(xmlExternalEntityLoader loader)
 
 } /* extern "C" */
 
+
+/*************************************************************************
+ * TLS implementation — tls-posix.cpp was excluded from the build
+ *
+ * Uses pthread_key as the underlying TLS mechanism (same as tls-posix.cpp).
+ * RTTlsAllocEx is in the in-tree wasm-stubs but RTTlsSet/Get/Free are missing.
+ *************************************************************************/
 
 /*************************************************************************
  * Thread implementation — overrides the stubs in RuntimeR3/VBoxVMM.so

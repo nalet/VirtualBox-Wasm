@@ -346,7 +346,6 @@ extern "C" DECLEXPORT(int) VBoxDriversRegister(PCPDMDRVREGCB pCallbacks, uint32_
     REGISTER_DRIVER(g_DrvACPI);
     REGISTER_DRIVER(g_DrvAcpiCpu);
     REGISTER_DRIVER(g_DrvChar);
-    REGISTER_DRIVER(g_DrvIfTrace);
 
 #undef REGISTER_DRIVER
 

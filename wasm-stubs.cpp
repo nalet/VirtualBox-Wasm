@@ -1305,4 +1305,87 @@ RTDECL(int) RTCrRandBytes(void *pvBuf, size_t cbBuf)
     return VINF_SUCCESS;
 }
 
+
+/*************************************************************************
+ * VBoxDD driver stubs — symbols for drivers not compiled in Wasm
+ *************************************************************************/
+#include <VBox/vmm/pdmdrv.h>
+
+extern const PDMDRVREG g_DrvIfTrace;
+const PDMDRVREG g_DrvIfTrace = {0};
+
+
+/*************************************************************************
+ * libxml2 stubs — VBox OVF/settings code links against libxml2
+ *************************************************************************/
+
+void xmlCheckVersion(int version)
+{
+    RT_NOREF(version);
+}
+
+void xmlInitParser(void)
+{
+}
+
+void xmlCleanupParser(void)
+{
+}
+
+void *xmlNewParserCtxt(void)
+{
+    return NULL;
+}
+
+void xmlFreeParserCtxt(void *ctxt)
+{
+    RT_NOREF(ctxt);
+}
+
+void *xmlCtxtReadMemory(void *ctxt, const char *buffer, int size, const char *URL,
+                         const char *encoding, int options)
+{
+    RT_NOREF(ctxt, buffer, size, URL, encoding, options);
+    return NULL;
+}
+
+void *xmlCtxtGetLastError(void *ctxt)
+{
+    RT_NOREF(ctxt);
+    return NULL;
+}
+
+void *xmlDocGetRootElement(void *doc)
+{
+    RT_NOREF(doc);
+    return NULL;
+}
+
+void xmlFreeDoc(void *doc)
+{
+    RT_NOREF(doc);
+}
+
+void xmlSetGenericErrorFunc(void *ctx, void *handler)
+{
+    RT_NOREF(ctx, handler);
+}
+
+void xmlSetStructuredErrorFunc(void *ctx, void *handler)
+{
+    RT_NOREF(ctx, handler);
+}
+
+typedef void *(*xmlExternalEntityLoader)(const char *, const char *, void *);
+
+xmlExternalEntityLoader xmlGetExternalEntityLoader(void)
+{
+    return NULL;
+}
+
+void xmlSetExternalEntityLoader(xmlExternalEntityLoader loader)
+{
+    RT_NOREF(loader);
+}
+
 } /* extern "C" */

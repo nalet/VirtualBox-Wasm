@@ -16,6 +16,11 @@
 #include <iprt/err.h>
 #include <iprt/assert.h>
 #include <iprt/string.h>
+#include <iprt/stream.h>
+
+/* Debug: log any stub returning VERR_NOT_SUPPORTED */
+#define STUB_NOT_SUPPORTED(name) \
+    do { RTPrintf("STUB: %s returning VERR_NOT_SUPPORTED\n", name); } while (0)
 #include <iprt/uuid.h>
 #include <iprt/file.h>
 #include <iprt/mp.h>
@@ -132,6 +137,7 @@ SUPR3DECL(int) SUPR3PageProtect(void *pvStart, RTR0PTR R0Ptrstart, uint32_t offS
 SUPR3DECL(int) SUPR3HardenedLdrLoadPlugIn(const char *pszFilename, PRTLDRMOD phLdrMod, PRTERRINFO pErrInfo)
 {
     RT_NOREF(pszFilename, phLdrMod, pErrInfo);
+    STUB_NOT_SUPPORTED("SUPR3HardenedLdrLoadPlugIn");
     return VERR_NOT_SUPPORTED; /* Dynamic loading not supported in Wasm */
 }
 
@@ -150,6 +156,7 @@ SUPR3DECL(int) SUPR3CallVMMR0(PVMR0 pVMR0, VMCPUID idCpu, unsigned uOperation,
                                 void *pvArg)
 {
     RT_NOREF(pVMR0, idCpu, uOperation, pvArg);
+    STUB_NOT_SUPPORTED("SUPR3CallVMMR0");
     return VERR_NOT_SUPPORTED;
 }
 
@@ -157,6 +164,7 @@ SUPR3DECL(int) SUPR3CallVMMR0Ex(PVMR0 pVMR0, VMCPUID idCpu, unsigned uOperation,
                                  uint64_t u64Arg, PSUPVMMR0REQHDR pReqHdr)
 {
     RT_NOREF(pVMR0, idCpu, uOperation, u64Arg, pReqHdr);
+    STUB_NOT_SUPPORTED("SUPR3CallVMMR0Ex");
     return VERR_NOT_SUPPORTED;
 }
 
@@ -169,6 +177,7 @@ SUPR3DECL(int) SUPR3SetVMForFastIOCtl(PVMR0 pVMR0)
 SUPR3DECL(int) SUPR3GipMap(PSUPGLOBALINFOPAGE *ppGip)
 {
     RT_NOREF(ppGip);
+    STUB_NOT_SUPPORTED("SUPR3GipMap");
     return VERR_NOT_SUPPORTED;
 }
 
@@ -619,6 +628,7 @@ SUPR3DECL(int) SUPR3HardenedVerifyPlugIn(const char *pszFilename, PRTERRINFO pEr
 SUPR3DECL(int) SUPR3LoadModule(const char *pszFilename, const char *pszModule, void **ppvImageBase, PRTERRINFO pErrInfo)
 {
     RT_NOREF(pszFilename, pszModule, ppvImageBase, pErrInfo);
+    STUB_NOT_SUPPORTED("SUPR3LoadModule");
     return VERR_NOT_SUPPORTED;
 }
 
@@ -631,6 +641,7 @@ SUPR3DECL(int) SUPR3FreeModule(void *pvImageBase)
 SUPR3DECL(int) SUPR3GetSymbolR0(void *pvImageBase, const char *pszSymbol, void **ppvValue)
 {
     RT_NOREF(pvImageBase, pszSymbol, ppvValue);
+    STUB_NOT_SUPPORTED("SUPR3GetSymbolR0");
     return VERR_NOT_SUPPORTED;
 }
 
@@ -1013,6 +1024,7 @@ RTDECL(int) RTTimerCreate(PRTTIMER *ppTimer, unsigned uMilliesInterval, PFNRTTIM
     if (pthread_create(&pThis->hThread, NULL, rtTimerThread, pThis) != 0)
     {
         RTMemFree(pThis);
+        STUB_NOT_SUPPORTED("RTTimerCreate");
         return VERR_NOT_SUPPORTED;
     }
     *ppTimer = (PRTTIMER)pThis;
@@ -1034,6 +1046,7 @@ RTDECL(int) RTTimerCreateEx(PRTTIMER *ppTimer, uint64_t u64NanoInterval, uint32_
     if (pthread_create(&pThis->hThread, NULL, rtTimerThread, pThis) != 0)
     {
         RTMemFree(pThis);
+        STUB_NOT_SUPPORTED("RTTimerCreateEx");
         return VERR_NOT_SUPPORTED;
     }
     *ppTimer = (PRTTIMER)pThis;
@@ -1102,6 +1115,7 @@ RTDECL(int) RTMemProtect(void *pv, size_t cb, unsigned fProtect)
 RTDECL(int) RTRandAdvCreateSystemFaster(PRTRAND phRand)
 {
     RT_NOREF(phRand);
+    STUB_NOT_SUPPORTED("RTRandAdvCreateSystemFaster");
     return VERR_NOT_SUPPORTED;
 }
 
@@ -1164,6 +1178,7 @@ RTDECL(int) RTPathQueryInfoEx(const char *pszPath, PRTFSOBJINFO pObjInfo, RTFSOB
 RTDECL(int) RTFileOpenEx(const char *pszFilename, uint64_t fOpen, PRTFILE phFile, PRTFILEACTION penmActionTaken)
 {
     RT_NOREF(pszFilename, fOpen, phFile, penmActionTaken);
+    STUB_NOT_SUPPORTED("RTFileOpenEx");
     return VERR_NOT_SUPPORTED;
 }
 
@@ -1176,36 +1191,42 @@ RTDECL(bool) RTFileIsValid(RTFILE hFile)
 RTDECL(int) RTFileRead(RTFILE hFile, void *pvBuf, size_t cbToRead, size_t *pcbRead)
 {
     RT_NOREF(hFile, pvBuf, cbToRead, pcbRead);
+    STUB_NOT_SUPPORTED("RTFileRead");
     return VERR_NOT_SUPPORTED;
 }
 
 RTDECL(int) RTFileReadAt(RTFILE hFile, RTFOFF off, void *pvBuf, size_t cbToRead, size_t *pcbRead)
 {
     RT_NOREF(hFile, off, pvBuf, cbToRead, pcbRead);
+    STUB_NOT_SUPPORTED("RTFileReadAt");
     return VERR_NOT_SUPPORTED;
 }
 
 RTDECL(int) RTFileWriteAt(RTFILE hFile, RTFOFF off, const void *pvBuf, size_t cbToWrite, size_t *pcbWritten)
 {
     RT_NOREF(hFile, off, pvBuf, cbToWrite, pcbWritten);
+    STUB_NOT_SUPPORTED("RTFileWriteAt");
     return VERR_NOT_SUPPORTED;
 }
 
 RTDECL(int) RTFileSeek(RTFILE hFile, int64_t offSeek, unsigned uMethod, uint64_t *poffActual)
 {
     RT_NOREF(hFile, offSeek, uMethod, poffActual);
+    STUB_NOT_SUPPORTED("RTFileSeek");
     return VERR_NOT_SUPPORTED;
 }
 
 RTDECL(int) RTFileQueryInfo(RTFILE hFile, PRTFSOBJINFO pObjInfo, RTFSOBJATTRADD enmAdditionalAttribs)
 {
     RT_NOREF(hFile, pObjInfo, enmAdditionalAttribs);
+    STUB_NOT_SUPPORTED("RTFileQueryInfo");
     return VERR_NOT_SUPPORTED;
 }
 
 RTDECL(int) RTFileSetSize(RTFILE hFile, uint64_t cbSize)
 {
     RT_NOREF(hFile, cbSize);
+    STUB_NOT_SUPPORTED("RTFileSetSize");
     return VERR_NOT_SUPPORTED;
 }
 
@@ -1225,6 +1246,7 @@ RTDECL(int) RTFileSetMode(RTFILE hFile, RTFMODE fMode)
 RTDECL(int) RTFileSetAllocationSize(RTFILE hFile, uint64_t cbSize, uint32_t fFlags)
 {
     RT_NOREF(hFile, cbSize, fFlags);
+    STUB_NOT_SUPPORTED("RTFileSetAllocationSize");
     return VERR_NOT_SUPPORTED;
 }
 
@@ -1255,6 +1277,7 @@ RTDECL(int) RTFileQuerySectorSize(RTFILE hFile, uint32_t *pcbSector)
 RTDECL(int) RTFileMove(const char *pszSrc, const char *pszDst, unsigned fMove)
 {
     RT_NOREF(pszSrc, pszDst, fMove);
+    STUB_NOT_SUPPORTED("RTFileMove");
     return VERR_NOT_SUPPORTED;
 }
 
@@ -1266,6 +1289,7 @@ RTDECL(RTHCINTPTR) RTFileToNative(RTFILE hFile)
 RTDECL(int) RTFileCopyPartPrep(PRTFILECOPYPARTBUFSTATE pBufState, uint64_t cbToCopy)
 {
     RT_NOREF(pBufState, cbToCopy);
+    STUB_NOT_SUPPORTED("RTFileCopyPartPrep");
     return VERR_NOT_SUPPORTED;
 }
 
@@ -1274,6 +1298,7 @@ RTDECL(int) RTFileCopyPartEx(RTFILE hFileSrc, RTFOFF offSrc, RTFILE hFileDst, RT
                               uint64_t *pcbCopied)
 {
     RT_NOREF(hFileSrc, offSrc, hFileDst, offDst, cbToCopy, fFlags, pBufState, pcbCopied);
+    STUB_NOT_SUPPORTED("RTFileCopyPartEx");
     return VERR_NOT_SUPPORTED;
 }
 
@@ -1298,6 +1323,7 @@ RTDECL(int) RTDirClose(RTDIR hDir)
 RTDECL(int) RTDirCreate(const char *pszPath, RTFMODE fMode, uint32_t fCreate)
 {
     RT_NOREF(pszPath, fMode, fCreate);
+    STUB_NOT_SUPPORTED("RTDirCreate");
     return VERR_NOT_SUPPORTED;
 }
 
@@ -1310,6 +1336,7 @@ RTDECL(bool) RTDirExists(const char *pszPath)
 RTDECL(int) RTDirQueryInfo(RTDIR hDir, PRTFSOBJINFO pObjInfo, RTFSOBJATTRADD enmAdditionalAttribs)
 {
     RT_NOREF(hDir, pObjInfo, enmAdditionalAttribs);
+    STUB_NOT_SUPPORTED("RTDirQueryInfo");
     return VERR_NOT_SUPPORTED;
 }
 
@@ -1438,12 +1465,14 @@ RTDECL(int) RTProcCreate(const char *pszExec, const char * const *papszArgs,
                           RTENV hEnv, unsigned fFlags, PRTPROCESS phProcess)
 {
     RT_NOREF(pszExec, papszArgs, hEnv, fFlags, phProcess);
+    STUB_NOT_SUPPORTED("RTProcCreate");
     return VERR_NOT_SUPPORTED;
 }
 
 RTDECL(int) RTProcWait(RTPROCESS hProcess, unsigned fFlags, PRTPROCSTATUS pProcStatus)
 {
     RT_NOREF(hProcess, fFlags, pProcStatus);
+    STUB_NOT_SUPPORTED("RTProcWait");
     return VERR_NOT_SUPPORTED;
 }
 
@@ -1455,6 +1484,7 @@ RTDECL(int) RTProcWait(RTPROCESS hProcess, unsigned fFlags, PRTPROCSTATUS pProcS
 RTDECL(int) RTDirRelDirCreate(RTDIR hDir, const char *pszRelPath, RTFMODE fMode, uint32_t fFlags, RTDIR *phSubDir)
 {
     RT_NOREF(hDir, pszRelPath, fMode, fFlags, phSubDir);
+    STUB_NOT_SUPPORTED("RTDirRelDirCreate");
     return VERR_NOT_SUPPORTED;
 }
 
@@ -1462,18 +1492,21 @@ RTDECL(int) RTDirRelDirOpenFiltered(RTDIR hDir, const char *pszFilter, RTDIRFILT
                                      uint32_t fFlags, RTDIR *phSubDir)
 {
     RT_NOREF(hDir, pszFilter, enmFilter, fFlags, phSubDir);
+    STUB_NOT_SUPPORTED("RTDirRelDirOpenFiltered");
     return VERR_NOT_SUPPORTED;
 }
 
 RTDECL(int) RTDirRelDirRemove(RTDIR hDir, const char *pszRelPath)
 {
     RT_NOREF(hDir, pszRelPath);
+    STUB_NOT_SUPPORTED("RTDirRelDirRemove");
     return VERR_NOT_SUPPORTED;
 }
 
 RTDECL(int) RTDirRelFileOpen(RTDIR hDir, const char *pszRelFilename, uint64_t fOpen, PRTFILE phFile)
 {
     RT_NOREF(hDir, pszRelFilename, fOpen, phFile);
+    STUB_NOT_SUPPORTED("RTDirRelFileOpen");
     return VERR_NOT_SUPPORTED;
 }
 
@@ -1487,18 +1520,21 @@ RTDECL(int) RTDirRelPathQueryInfo(RTDIR hDir, const char *pszRelPath, PRTFSOBJIN
 RTDECL(int) RTDirRelPathRename(RTDIR hDirSrc, const char *pszSrc, RTDIR hDirDst, const char *pszDst, unsigned fRename)
 {
     RT_NOREF(hDirSrc, pszSrc, hDirDst, pszDst, fRename);
+    STUB_NOT_SUPPORTED("RTDirRelPathRename");
     return VERR_NOT_SUPPORTED;
 }
 
 RTDECL(int) RTDirRelPathSetOwner(RTDIR hDir, const char *pszRelPath, uint32_t uid, uint32_t gid, uint32_t fFlags)
 {
     RT_NOREF(hDir, pszRelPath, uid, gid, fFlags);
+    STUB_NOT_SUPPORTED("RTDirRelPathSetOwner");
     return VERR_NOT_SUPPORTED;
 }
 
 RTDECL(int) RTDirRelPathUnlink(RTDIR hDir, const char *pszRelPath, uint32_t fUnlink)
 {
     RT_NOREF(hDir, pszRelPath, fUnlink);
+    STUB_NOT_SUPPORTED("RTDirRelPathUnlink");
     return VERR_NOT_SUPPORTED;
 }
 
@@ -1506,12 +1542,14 @@ RTDECL(int) RTDirRelSymlinkCreate(RTDIR hDir, const char *pszSymlink, const char
                                     RTSYMLINKTYPE enmType, uint32_t fCreate)
 {
     RT_NOREF(hDir, pszSymlink, pszTarget, enmType, fCreate);
+    STUB_NOT_SUPPORTED("RTDirRelSymlinkCreate");
     return VERR_NOT_SUPPORTED;
 }
 
 RTDECL(int) RTDirRelSymlinkRead(RTDIR hDir, const char *pszSymlink, char *pszTarget, size_t cbTarget, uint32_t fRead)
 {
     RT_NOREF(hDir, pszSymlink, pszTarget, cbTarget, fRead);
+    STUB_NOT_SUPPORTED("RTDirRelSymlinkRead");
     return VERR_NOT_SUPPORTED;
 }
 
@@ -1554,6 +1592,7 @@ int rtMemPageNativeRevertFlags(void *pv, size_t cb, uint32_t fFlags)
 int rtldrNativeLoad(const char *pszFilename, uintptr_t *phHandle, uint32_t fFlags, PRTERRINFO pErrInfo)
 {
     RT_NOREF(pszFilename, phHandle, fFlags, pErrInfo);
+    STUB_NOT_SUPPORTED("rtldrNativeLoad");
     return VERR_NOT_SUPPORTED;
 }
 
@@ -1585,6 +1624,7 @@ size_t rtDirNativeGetStructSize(const char *pszPath)
 int rtDirNativeOpen(struct RTDIRINTERNAL *pDir, uintptr_t hRelativeDir, void *pvNativeRelative)
 {
     RT_NOREF(pDir, hRelativeDir, pvNativeRelative);
+    STUB_NOT_SUPPORTED("rtDirNativeOpen");
     return VERR_NOT_SUPPORTED;
 }
 
@@ -1596,6 +1636,7 @@ int rtDirNativeOpen(struct RTDIRINTERNAL *pDir, uintptr_t hRelativeDir, void *pv
 RTDECL(int) RTCrCipherOpenByType(void **phCipher, uint32_t enmType, uint32_t fFlags)
 {
     RT_NOREF(phCipher, enmType, fFlags);
+    STUB_NOT_SUPPORTED("RTCrCipherOpenByType");
     return VERR_NOT_SUPPORTED;
 }
 
@@ -1613,6 +1654,7 @@ RTDECL(int) RTCrCipherEncrypt(void *hCipher, const void *pvKey, size_t cbKey,
 {
     RT_NOREF(hCipher, pvKey, cbKey, pvInitVector, cbInitVector, pvPlainText, cbPlainText,
              pvEncrypted, cbEncrypted, pcbEncrypted, pvTag, cbTag, pcbTag);
+    STUB_NOT_SUPPORTED("RTCrCipherEncrypt");
     return VERR_NOT_SUPPORTED;
 }
 
@@ -1624,6 +1666,7 @@ RTDECL(int) RTCrCipherDecrypt(void *hCipher, const void *pvKey, size_t cbKey,
 {
     RT_NOREF(hCipher, pvKey, cbKey, pvInitVector, cbInitVector, pvEncrypted, cbEncrypted,
              pvPlainText, cbPlainText, pcbPlainText, pvTag, cbTag);
+    STUB_NOT_SUPPORTED("RTCrCipherDecrypt");
     return VERR_NOT_SUPPORTED;
 }
 
@@ -1631,6 +1674,7 @@ RTDECL(int) RTCrPkcs5Pbkdf2Hmac(void *pvOutput, size_t cbOutput, const void *pvI
                                   const void *pvSalt, size_t cbSalt, uint32_t cIterations, uint32_t enmDigestType)
 {
     RT_NOREF(pvOutput, cbOutput, pvInput, cbInput, pvSalt, cbSalt, cIterations, enmDigestType);
+    STUB_NOT_SUPPORTED("RTCrPkcs5Pbkdf2Hmac");
     return VERR_NOT_SUPPORTED;
 }
 

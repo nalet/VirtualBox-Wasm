@@ -28,6 +28,7 @@
 
 #include <sys/stat.h>
 #include <string.h>
+#include <time.h>
 
 
 /*************************************************************************
@@ -635,6 +636,269 @@ SUPR3DECL(int) SUPR3GetSymbolR0(void *pvImageBase, const char *pszSymbol, void *
 
 
 /*************************************************************************
+ * x86 CPUID stubs — fake a basic AMD64 CPU for IEM
+ *************************************************************************/
+
+#include <iprt/x86.h>
+
+/* We can't include asm-amd64-x86.h (guarded by RT_ARCH_AMD64 which cdefs.h
+   undefines for __EMSCRIPTEN__).  Declare the types we need directly. */
+#pragma pack(1)
+typedef struct RTIDTR { uint16_t cbIdt; uint64_t pIdt; } RTIDTR, *PRTIDTR;
+typedef struct RTGDTR { uint16_t cbGdt; uint64_t pGdt; } RTGDTR, *PRTGDTR;
+#pragma pack()
+
+/**
+ * Fake CPUID results for a minimal AMD64 CPU.
+ * We report SSE2 (required by VMR3.cpp:570) and basic features
+ * that VBox expects from a 64-bit host CPU.
+ */
+static void asmFakeCpuId(uint32_t uLeaf, uint32_t uSubLeaf,
+                          uint32_t *pEAX, uint32_t *pEBX, uint32_t *pECX, uint32_t *pEDX)
+{
+    RT_NOREF(uSubLeaf);
+    *pEAX = *pEBX = *pECX = *pEDX = 0;
+
+    switch (uLeaf)
+    {
+        case 0x00000000: /* Max standard leaf + vendor */
+            *pEAX = 0x0000000d; /* max leaf */
+            /* "GenuineIntel" */
+            *pEBX = 0x756e6547;
+            *pEDX = 0x49656e69;
+            *pECX = 0x6c65746e;
+            break;
+
+        case 0x00000001: /* Family/model/stepping + features */
+            *pEAX = 0x000306c3; /* Haswell-like family 6 model 60 stepping 3 */
+            *pEBX = 0x00010800; /* CLFLUSH=8, logical CPUs=1, APIC ID=0 */
+            *pECX = X86_CPUID_FEATURE_ECX_SSE3
+                  | X86_CPUID_FEATURE_ECX_SSSE3
+                  | X86_CPUID_FEATURE_ECX_SSE4_1
+                  | X86_CPUID_FEATURE_ECX_SSE4_2
+                  | X86_CPUID_FEATURE_ECX_POPCNT;
+            *pEDX = X86_CPUID_FEATURE_EDX_FPU
+                  | X86_CPUID_FEATURE_EDX_TSC
+                  | X86_CPUID_FEATURE_EDX_MSR
+                  | X86_CPUID_FEATURE_EDX_CX8
+                  | X86_CPUID_FEATURE_EDX_APIC
+                  | X86_CPUID_FEATURE_EDX_SEP
+                  | X86_CPUID_FEATURE_EDX_CMOV
+                  | X86_CPUID_FEATURE_EDX_PAT
+                  | X86_CPUID_FEATURE_EDX_PSE36
+                  | X86_CPUID_FEATURE_EDX_CLFSH
+                  | X86_CPUID_FEATURE_EDX_MMX
+                  | X86_CPUID_FEATURE_EDX_FXSR
+                  | X86_CPUID_FEATURE_EDX_SSE
+                  | X86_CPUID_FEATURE_EDX_SSE2;
+            break;
+
+        case 0x80000000: /* Max extended leaf */
+            *pEAX = 0x80000008;
+            break;
+
+        case 0x80000001: /* Extended features */
+            *pECX = 0;
+            *pEDX = RT_BIT_32(29) /* Long Mode */
+                  | RT_BIT_32(20) /* NX */;
+            break;
+
+        case 0x80000008: /* Address sizes */
+            *pEAX = 0x00003028; /* 48-bit virtual, 40-bit physical */
+            break;
+
+        default:
+            break;
+    }
+}
+
+DECLASM(void) ASMCpuId(uint32_t uOperator, void RT_FAR *pvEAX, void RT_FAR *pvEBX,
+                        void RT_FAR *pvECX, void RT_FAR *pvEDX)
+{
+    asmFakeCpuId(uOperator, 0, (uint32_t *)pvEAX, (uint32_t *)pvEBX,
+                 (uint32_t *)pvECX, (uint32_t *)pvEDX);
+}
+
+DECLASM(void) ASMCpuId_Idx_ECX(uint32_t uOperator, uint32_t uIdxECX,
+                                void RT_FAR *pvEAX, void RT_FAR *pvEBX,
+                                void RT_FAR *pvECX, void RT_FAR *pvEDX)
+{
+    asmFakeCpuId(uOperator, uIdxECX, (uint32_t *)pvEAX, (uint32_t *)pvEBX,
+                 (uint32_t *)pvECX, (uint32_t *)pvEDX);
+}
+
+DECLASM(uint32_t) ASMCpuIdExSlow(uint32_t uOperator, uint32_t uInitEBX, uint32_t uInitECX,
+                                  uint32_t uInitEDX, uint32_t *pEAX, uint32_t *pEBX,
+                                  uint32_t *pECX, uint32_t *pEDX)
+{
+    RT_NOREF(uInitEBX, uInitEDX);
+    asmFakeCpuId(uOperator, uInitECX, pEAX, pEBX, pECX, pEDX);
+    return *pEAX;
+}
+
+uint32_t ASMCpuId_EAX(uint32_t uOperator) RT_NOTHROW_DEF
+{
+    uint32_t eax, ebx, ecx, edx;
+    asmFakeCpuId(uOperator, 0, &eax, &ebx, &ecx, &edx);
+    return eax;
+}
+
+uint32_t ASMCpuId_EBX(uint32_t uOperator) RT_NOTHROW_DEF
+{
+    uint32_t eax, ebx, ecx, edx;
+    asmFakeCpuId(uOperator, 0, &eax, &ebx, &ecx, &edx);
+    return ebx;
+}
+
+uint32_t ASMCpuId_ECX(uint32_t uOperator) RT_NOTHROW_DEF
+{
+    uint32_t eax, ebx, ecx, edx;
+    asmFakeCpuId(uOperator, 0, &eax, &ebx, &ecx, &edx);
+    return ecx;
+}
+
+uint32_t ASMCpuId_EDX(uint32_t uOperator) RT_NOTHROW_DEF
+{
+    uint32_t eax, ebx, ecx, edx;
+    asmFakeCpuId(uOperator, 0, &eax, &ebx, &ecx, &edx);
+    return edx;
+}
+
+void ASMCpuId_ECX_EDX(uint32_t uOperator, void RT_FAR *pvECX, void RT_FAR *pvEDX) RT_NOTHROW_DEF
+{
+    uint32_t eax, ebx;
+    asmFakeCpuId(uOperator, 0, &eax, &ebx, (uint32_t *)pvECX, (uint32_t *)pvEDX);
+}
+
+DECLASM(bool) ASMHasCpuId(void)
+{
+    return true;
+}
+
+uint8_t ASMGetApicId(void) RT_NOTHROW_DEF
+{
+    return 0;
+}
+
+uint32_t ASMGetApicIdExt0B(void) RT_NOTHROW_DEF
+{
+    return 0;
+}
+
+
+/*************************************************************************
+ * x86 MSR / CR / TSC / segment register stubs
+ *************************************************************************/
+
+uint64_t ASMRdMsr(uint32_t uRegister) RT_NOTHROW_DEF
+{
+    RT_NOREF(uRegister);
+    return 0;
+}
+
+uint64_t ASMRdMsrEx(uint32_t uRegister, RTCCUINTXREG uXDI) RT_NOTHROW_DEF
+{
+    RT_NOREF(uRegister, uXDI);
+    return 0;
+}
+
+void ASMWrMsr(uint32_t uRegister, uint64_t u64Val) RT_NOTHROW_DEF
+{
+    RT_NOREF(uRegister, u64Val);
+}
+
+void ASMWrMsrEx(uint32_t uRegister, RTCCUINTXREG uXDI, uint64_t u64Val) RT_NOTHROW_DEF
+{
+    RT_NOREF(uRegister, uXDI, u64Val);
+}
+
+uint32_t ASMRdMsr_Low(uint32_t uRegister) RT_NOTHROW_DEF
+{
+    RT_NOREF(uRegister);
+    return 0;
+}
+
+uint32_t ASMRdMsr_High(uint32_t uRegister) RT_NOTHROW_DEF
+{
+    RT_NOREF(uRegister);
+    return 0;
+}
+
+RTCCUINTXREG ASMGetCR0(void) RT_NOTHROW_DEF { return 0x80000011; /* PE|ET|PG */ }
+void ASMSetCR0(RTCCUINTXREG uCR0) RT_NOTHROW_DEF { RT_NOREF(uCR0); }
+RTCCUINTXREG ASMGetCR2(void) RT_NOTHROW_DEF { return 0; }
+void ASMSetCR2(RTCCUINTXREG uCR2) RT_NOTHROW_DEF { RT_NOREF(uCR2); }
+RTCCUINTXREG ASMGetCR3(void) RT_NOTHROW_DEF { return 0; }
+void ASMSetCR3(RTCCUINTXREG uCR3) RT_NOTHROW_DEF { RT_NOREF(uCR3); }
+void ASMReloadCR3(void) RT_NOTHROW_DEF {}
+RTCCUINTXREG ASMGetCR4(void) RT_NOTHROW_DEF { return 0; }
+void ASMSetCR4(RTCCUINTXREG uCR4) RT_NOTHROW_DEF { RT_NOREF(uCR4); }
+
+RTCCUINTXREG ASMGetDR0(void) RT_NOTHROW_DEF { return 0; }
+RTCCUINTXREG ASMGetDR1(void) RT_NOTHROW_DEF { return 0; }
+RTCCUINTXREG ASMGetDR2(void) RT_NOTHROW_DEF { return 0; }
+RTCCUINTXREG ASMGetDR3(void) RT_NOTHROW_DEF { return 0; }
+RTCCUINTXREG ASMGetDR6(void) RT_NOTHROW_DEF { return 0xFFFF0FF0; }
+RTCCUINTXREG ASMGetAndClearDR6(void) RT_NOTHROW_DEF { return 0xFFFF0FF0; }
+RTCCUINTXREG ASMGetDR7(void) RT_NOTHROW_DEF { return 0x00000400; }
+void ASMSetDR0(RTCCUINTXREG uDRVal) RT_NOTHROW_DEF { RT_NOREF(uDRVal); }
+void ASMSetDR1(RTCCUINTXREG uDRVal) RT_NOTHROW_DEF { RT_NOREF(uDRVal); }
+void ASMSetDR2(RTCCUINTXREG uDRVal) RT_NOTHROW_DEF { RT_NOREF(uDRVal); }
+void ASMSetDR3(RTCCUINTXREG uDRVal) RT_NOTHROW_DEF { RT_NOREF(uDRVal); }
+void ASMSetDR6(RTCCUINTXREG uDRVal) RT_NOTHROW_DEF { RT_NOREF(uDRVal); }
+void ASMSetDR7(RTCCUINTXREG uDRVal) RT_NOTHROW_DEF { RT_NOREF(uDRVal); }
+
+RTCCUINTREG ASMGetFlags(void) RT_NOTHROW_DEF { return 0x202; /* IF */ }
+void ASMSetFlags(RTCCUINTREG uFlags) RT_NOTHROW_DEF { RT_NOREF(uFlags); }
+RTCCUINTREG ASMChangeFlags(RTCCUINTREG fAndEfl, RTCCUINTREG fOrEfl) RT_NOTHROW_DEF { RT_NOREF(fAndEfl, fOrEfl); return 0x202; }
+RTCCUINTREG ASMAddFlags(RTCCUINTREG fOrEfl) RT_NOTHROW_DEF { RT_NOREF(fOrEfl); return 0x202; }
+RTCCUINTREG ASMClearFlags(RTCCUINTREG fAndEfl) RT_NOTHROW_DEF { RT_NOREF(fAndEfl); return 0x202; }
+
+void ASMIntEnable(void) RT_NOTHROW_DEF {}
+void ASMIntDisable(void) RT_NOTHROW_DEF {}
+RTCCUINTREG ASMIntDisableFlags(void) RT_NOTHROW_DEF { return 0x202; }
+void ASMHalt(void) RT_NOTHROW_DEF {}
+
+RTSEL ASMGetCS(void) RT_NOTHROW_DEF { return 0x08; }
+RTSEL ASMGetDS(void) RT_NOTHROW_DEF { return 0x10; }
+RTSEL ASMGetES(void) RT_NOTHROW_DEF { return 0x10; }
+RTSEL ASMGetFS(void) RT_NOTHROW_DEF { return 0; }
+RTSEL ASMGetGS(void) RT_NOTHROW_DEF { return 0; }
+RTSEL ASMGetSS(void) RT_NOTHROW_DEF { return 0x10; }
+RTSEL ASMGetTR(void) RT_NOTHROW_DEF { return 0x28; }
+RTSEL ASMGetLDTR(void) RT_NOTHROW_DEF { return 0; }
+uint32_t ASMGetSegAttr(uint32_t uSel) RT_NOTHROW_DEF { RT_NOREF(uSel); return 0; }
+
+void ASMGetIDTR(PRTIDTR pIdtr) RT_NOTHROW_DEF { memset(pIdtr, 0, sizeof(*pIdtr)); }
+uint16_t ASMGetIdtrLimit(void) RT_NOTHROW_DEF { return 0; }
+void ASMSetIDTR(const RTIDTR RT_FAR *pIdtr) RT_NOTHROW_DEF { RT_NOREF(pIdtr); }
+void ASMGetGDTR(PRTGDTR pGdtr) RT_NOTHROW_DEF { memset(pGdtr, 0, sizeof(*pGdtr)); }
+void ASMSetGDTR(const RTGDTR RT_FAR *pGdtr) RT_NOTHROW_DEF { RT_NOREF(pGdtr); }
+
+void ASMInvalidatePage(RTCCUINTXREG uPtr) RT_NOTHROW_DEF { RT_NOREF(uPtr); }
+void ASMWriteBackAndInvalidateCaches(void) RT_NOTHROW_DEF {}
+void ASMInvalidateInternalCaches(void) RT_NOTHROW_DEF {}
+
+
+/*************************************************************************
+ * x86 I/O port stubs (for host-side — guest I/O is emulated by IEM)
+ *************************************************************************/
+
+void    ASMOutU8(RTIOPORT Port, uint8_t u8) RT_NOTHROW_DEF { RT_NOREF(Port, u8); }
+uint8_t ASMInU8(RTIOPORT Port) RT_NOTHROW_DEF { RT_NOREF(Port); return 0xFF; }
+void    ASMOutU16(RTIOPORT Port, uint16_t u16) RT_NOTHROW_DEF { RT_NOREF(Port, u16); }
+uint16_t ASMInU16(RTIOPORT Port) RT_NOTHROW_DEF { RT_NOREF(Port); return 0xFFFF; }
+void    ASMOutU32(RTIOPORT Port, uint32_t u32) RT_NOTHROW_DEF { RT_NOREF(Port, u32); }
+uint32_t ASMInU32(RTIOPORT Port) RT_NOTHROW_DEF { RT_NOREF(Port); return 0xFFFFFFFF; }
+void ASMOutStrU8(RTIOPORT Port, uint8_t const RT_FAR *pau8, size_t c) RT_NOTHROW_DEF { RT_NOREF(Port, pau8, c); }
+void ASMInStrU8(RTIOPORT Port, uint8_t RT_FAR *pau8, size_t c) RT_NOTHROW_DEF { RT_NOREF(Port, pau8, c); }
+void ASMOutStrU16(RTIOPORT Port, uint16_t const RT_FAR *pau16, size_t c) RT_NOTHROW_DEF { RT_NOREF(Port, pau16, c); }
+void ASMInStrU16(RTIOPORT Port, uint16_t RT_FAR *pau16, size_t c) RT_NOTHROW_DEF { RT_NOREF(Port, pau16, c); }
+void ASMOutStrU32(RTIOPORT Port, uint32_t const RT_FAR *pau32, size_t c) RT_NOTHROW_DEF { RT_NOREF(Port, pau32, c); }
+void ASMInStrU32(RTIOPORT Port, uint32_t RT_FAR *pau32, size_t c) RT_NOTHROW_DEF { RT_NOREF(Port, pau32, c); }
+
+
+/*************************************************************************
  * Additional ASM intrinsic stubs
  *************************************************************************/
 
@@ -700,39 +964,110 @@ uint64_t ASMMultU64ByU32DivByU32(uint64_t u64, uint32_t u32A, uint32_t u32B) RT_
 
 
 /*************************************************************************
- * RTTimer stubs
+ * RTTimer — pthread-based periodic timer for Wasm
  *************************************************************************/
 
 #include <iprt/thread.h>
+#include <pthread.h>
+
+/** Minimal RTTIMER structure — the real one is opaque. */
+typedef struct RTTIMERINT
+{
+    PFNRTTIMER      pfnTimer;
+    void           *pvUser;
+    uint64_t        u64NanoInterval;
+    pthread_t       hThread;
+    volatile bool   fRunning;
+    volatile bool   fActive;
+} RTTIMERINT;
+
+static void *rtTimerThread(void *pvArg)
+{
+    RTTIMERINT *pThis = (RTTIMERINT *)pvArg;
+    while (pThis->fRunning)
+    {
+        if (pThis->fActive)
+            pThis->pfnTimer((PRTTIMER)pThis, pThis->pvUser, 0);
+
+        /* Sleep for the interval (milliseconds) */
+        uint64_t ms = pThis->u64NanoInterval / RT_NS_1MS;
+        if (ms < 1) ms = 1;
+        struct timespec ts;
+        ts.tv_sec = (time_t)(ms / 1000);
+        ts.tv_nsec = (long)((ms % 1000) * 1000000);
+        nanosleep(&ts, NULL);
+    }
+    return NULL;
+}
 
 RTDECL(int) RTTimerCreate(PRTTIMER *ppTimer, unsigned uMilliesInterval, PFNRTTIMER pfnTimer, void *pvUser)
 {
-    RT_NOREF(ppTimer, uMilliesInterval, pfnTimer, pvUser);
-    return VERR_NOT_SUPPORTED;
+    RTTIMERINT *pThis = (RTTIMERINT *)RTMemAllocZ(sizeof(*pThis));
+    if (!pThis)
+        return VERR_NO_MEMORY;
+    pThis->pfnTimer = pfnTimer;
+    pThis->pvUser = pvUser;
+    pThis->u64NanoInterval = (uint64_t)uMilliesInterval * RT_NS_1MS;
+    pThis->fRunning = true;
+    pThis->fActive = true;
+    if (pthread_create(&pThis->hThread, NULL, rtTimerThread, pThis) != 0)
+    {
+        RTMemFree(pThis);
+        return VERR_NOT_SUPPORTED;
+    }
+    *ppTimer = (PRTTIMER)pThis;
+    return VINF_SUCCESS;
 }
 
 RTDECL(int) RTTimerCreateEx(PRTTIMER *ppTimer, uint64_t u64NanoInterval, uint32_t fFlags,
                              PFNRTTIMER pfnTimer, void *pvUser)
 {
-    RT_NOREF(ppTimer, u64NanoInterval, fFlags, pfnTimer, pvUser);
-    return VERR_NOT_SUPPORTED;
+    RT_NOREF(fFlags);
+    RTTIMERINT *pThis = (RTTIMERINT *)RTMemAllocZ(sizeof(*pThis));
+    if (!pThis)
+        return VERR_NO_MEMORY;
+    pThis->pfnTimer = pfnTimer;
+    pThis->pvUser = pvUser;
+    pThis->u64NanoInterval = u64NanoInterval > 0 ? u64NanoInterval : RT_NS_1MS;
+    pThis->fRunning = true;
+    pThis->fActive = false; /* RTTimerStart activates */
+    if (pthread_create(&pThis->hThread, NULL, rtTimerThread, pThis) != 0)
+    {
+        RTMemFree(pThis);
+        return VERR_NOT_SUPPORTED;
+    }
+    *ppTimer = (PRTTIMER)pThis;
+    return VINF_SUCCESS;
 }
 
 RTDECL(int) RTTimerDestroy(PRTTIMER pTimer)
 {
-    RT_NOREF(pTimer);
+    if (!pTimer)
+        return VINF_SUCCESS;
+    RTTIMERINT *pThis = (RTTIMERINT *)pTimer;
+    pThis->fRunning = false;
+    pThis->fActive = false;
+    pthread_join(pThis->hThread, NULL);
+    RTMemFree(pThis);
     return VINF_SUCCESS;
 }
 
 RTDECL(int) RTTimerStart(PRTTIMER pTimer, uint64_t u64First)
 {
-    RT_NOREF(pTimer, u64First);
-    return VERR_NOT_SUPPORTED;
+    RT_NOREF(u64First);
+    if (!pTimer)
+        return VERR_INVALID_HANDLE;
+    RTTIMERINT *pThis = (RTTIMERINT *)pTimer;
+    pThis->fActive = true;
+    return VINF_SUCCESS;
 }
 
 RTDECL(int) RTTimerStop(PRTTIMER pTimer)
 {
-    RT_NOREF(pTimer);
+    if (!pTimer)
+        return VINF_SUCCESS;
+    RTTIMERINT *pThis = (RTTIMERINT *)pTimer;
+    pThis->fActive = false;
     return VINF_SUCCESS;
 }
 

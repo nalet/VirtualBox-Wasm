@@ -1956,6 +1956,55 @@ function ___cxa_throw(ptr, type, destructor) {
   assert(false, "Exception thrown, but exception catching is not enabled. Compile with -sNO_DISABLE_EXCEPTION_CATCHING or -sEXCEPTION_CATCHING_ALLOWED=[..] to catch.");
 }
 
+function pthreadCreateProxied(pthread_ptr, attr, startRoutine, arg) {
+  if (ENVIRONMENT_IS_PTHREAD) return proxyToMainThread(2, 0, 1, pthread_ptr, attr, startRoutine, arg);
+  return ___pthread_create_js(pthread_ptr, attr, startRoutine, arg);
+}
+
+var _emscripten_has_threading_support = () => !!globalThis.SharedArrayBuffer;
+
+function ___pthread_create_js(pthread_ptr, attr, startRoutine, arg) {
+  pthread_ptr = bigintToI53Checked(pthread_ptr);
+  attr = bigintToI53Checked(attr);
+  startRoutine = bigintToI53Checked(startRoutine);
+  arg = bigintToI53Checked(arg);
+  if (!_emscripten_has_threading_support()) {
+    dbg("pthread_create: environment does not support SharedArrayBuffer, pthreads are not available");
+    return 6;
+  }
+  // List of JS objects that will transfer ownership to the Worker hosting the thread
+  var transferList = [];
+  var error = 0;
+  // Synchronously proxy the thread creation to main thread if possible. If we
+  // need to transfer ownership of objects, then proxy asynchronously via
+  // postMessage.
+  if (ENVIRONMENT_IS_PTHREAD && (transferList.length === 0 || error)) {
+    return pthreadCreateProxied(pthread_ptr, attr, startRoutine, arg);
+  }
+  // If on the main thread, and accessing Canvas/OffscreenCanvas failed, abort
+  // with the detected error.
+  if (error) return error;
+  var threadParams = {
+    startRoutine,
+    pthread_ptr,
+    arg,
+    transferList
+  };
+  if (ENVIRONMENT_IS_PTHREAD) {
+    // The prepopulated pool of web workers that can host pthreads is stored
+    // in the main JS thread. Therefore if a pthread is attempting to spawn a
+    // new thread, the thread creation must be deferred to the main JS thread.
+    threadParams.cmd = "spawnThread";
+    postMessage(threadParams, transferList);
+    // When we defer thread creation this way, we have no way to detect thread
+    // creation synchronously today, so we have to assume success and return 0.
+    return 0;
+  }
+  // We are the main thread, so we have the pthread warmup pool in this
+  // thread and can fire off JS thread creation directly ourselves.
+  return spawnThread(threadParams);
+}
+
 var initRandomFill = () => view => view.set(crypto.getRandomValues(new Uint8Array(view.byteLength)));
 
 var randomFill = view => {
@@ -5276,7 +5325,7 @@ var getSocketAddress = (addrp, addrlen) => {
 };
 
 function ___syscall_connect(fd, addr, addrlen, d1, d2, d3) {
-  if (ENVIRONMENT_IS_PTHREAD) return proxyToMainThread(2, 0, 1, fd, addr, addrlen, d1, d2, d3);
+  if (ENVIRONMENT_IS_PTHREAD) return proxyToMainThread(3, 0, 1, fd, addr, addrlen, d1, d2, d3);
   addr = bigintToI53Checked(addr);
   addrlen = bigintToI53Checked(addrlen);
   try {
@@ -5384,7 +5433,7 @@ var SYSCALLS = {
 };
 
 function ___syscall_fcntl64(fd, cmd, varargs) {
-  if (ENVIRONMENT_IS_PTHREAD) return proxyToMainThread(3, 0, 1, fd, cmd, varargs);
+  if (ENVIRONMENT_IS_PTHREAD) return proxyToMainThread(4, 0, 1, fd, cmd, varargs);
   varargs = bigintToI53Checked(varargs);
   SYSCALLS.varargs = varargs;
   try {
@@ -5444,7 +5493,7 @@ function ___syscall_fcntl64(fd, cmd, varargs) {
 }
 
 function ___syscall_fstat64(fd, buf) {
-  if (ENVIRONMENT_IS_PTHREAD) return proxyToMainThread(4, 0, 1, fd, buf);
+  if (ENVIRONMENT_IS_PTHREAD) return proxyToMainThread(5, 0, 1, fd, buf);
   buf = bigintToI53Checked(buf);
   try {
     return SYSCALLS.writeStat(buf, FS.fstat(fd));
@@ -5490,7 +5539,7 @@ var zeroMemory = (ptr, size) => (growMemViews(), HEAPU8).fill(0, ptr, ptr + size
 };
 
 function ___syscall_getpeername(fd, addr, addrlen, d1, d2, d3) {
-  if (ENVIRONMENT_IS_PTHREAD) return proxyToMainThread(5, 0, 1, fd, addr, addrlen, d1, d2, d3);
+  if (ENVIRONMENT_IS_PTHREAD) return proxyToMainThread(6, 0, 1, fd, addr, addrlen, d1, d2, d3);
   addr = bigintToI53Checked(addr);
   addrlen = bigintToI53Checked(addrlen);
   try {
@@ -5508,7 +5557,7 @@ function ___syscall_getpeername(fd, addr, addrlen, d1, d2, d3) {
 }
 
 function ___syscall_getsockname(fd, addr, addrlen, d1, d2, d3) {
-  if (ENVIRONMENT_IS_PTHREAD) return proxyToMainThread(6, 0, 1, fd, addr, addrlen, d1, d2, d3);
+  if (ENVIRONMENT_IS_PTHREAD) return proxyToMainThread(7, 0, 1, fd, addr, addrlen, d1, d2, d3);
   addr = bigintToI53Checked(addr);
   addrlen = bigintToI53Checked(addrlen);
   try {
@@ -5524,7 +5573,7 @@ function ___syscall_getsockname(fd, addr, addrlen, d1, d2, d3) {
 }
 
 function ___syscall_getsockopt(fd, level, optname, optval, optlen, d1) {
-  if (ENVIRONMENT_IS_PTHREAD) return proxyToMainThread(7, 0, 1, fd, level, optname, optval, optlen, d1);
+  if (ENVIRONMENT_IS_PTHREAD) return proxyToMainThread(8, 0, 1, fd, level, optname, optval, optlen, d1);
   optval = bigintToI53Checked(optval);
   optlen = bigintToI53Checked(optlen);
   try {
@@ -5548,7 +5597,7 @@ function ___syscall_getsockopt(fd, level, optname, optval, optlen, d1) {
 }
 
 function ___syscall_ioctl(fd, op, varargs) {
-  if (ENVIRONMENT_IS_PTHREAD) return proxyToMainThread(8, 0, 1, fd, op, varargs);
+  if (ENVIRONMENT_IS_PTHREAD) return proxyToMainThread(9, 0, 1, fd, op, varargs);
   varargs = bigintToI53Checked(varargs);
   SYSCALLS.varargs = varargs;
   try {
@@ -5672,7 +5721,7 @@ function ___syscall_ioctl(fd, op, varargs) {
 }
 
 function ___syscall_lstat64(path, buf) {
-  if (ENVIRONMENT_IS_PTHREAD) return proxyToMainThread(9, 0, 1, path, buf);
+  if (ENVIRONMENT_IS_PTHREAD) return proxyToMainThread(10, 0, 1, path, buf);
   path = bigintToI53Checked(path);
   buf = bigintToI53Checked(buf);
   try {
@@ -5685,7 +5734,7 @@ function ___syscall_lstat64(path, buf) {
 }
 
 function ___syscall_newfstatat(dirfd, path, buf, flags) {
-  if (ENVIRONMENT_IS_PTHREAD) return proxyToMainThread(10, 0, 1, dirfd, path, buf, flags);
+  if (ENVIRONMENT_IS_PTHREAD) return proxyToMainThread(11, 0, 1, dirfd, path, buf, flags);
   path = bigintToI53Checked(path);
   buf = bigintToI53Checked(buf);
   try {
@@ -5703,7 +5752,7 @@ function ___syscall_newfstatat(dirfd, path, buf, flags) {
 }
 
 function ___syscall_openat(dirfd, path, flags, varargs) {
-  if (ENVIRONMENT_IS_PTHREAD) return proxyToMainThread(11, 0, 1, dirfd, path, flags, varargs);
+  if (ENVIRONMENT_IS_PTHREAD) return proxyToMainThread(12, 0, 1, dirfd, path, flags, varargs);
   path = bigintToI53Checked(path);
   varargs = bigintToI53Checked(varargs);
   SYSCALLS.varargs = varargs;
@@ -5719,7 +5768,7 @@ function ___syscall_openat(dirfd, path, flags, varargs) {
 }
 
 var ___syscall_poll = function(fds, nfds, timeout) {
-  if (ENVIRONMENT_IS_PTHREAD) return proxyToMainThread(12, 0, 2, fds, nfds, timeout);
+  if (ENVIRONMENT_IS_PTHREAD) return proxyToMainThread(13, 0, 2, fds, nfds, timeout);
   fds = bigintToI53Checked(fds);
   try {
     const isAsyncContext = PThread.currentProxiedOperationCallerThread;
@@ -5798,7 +5847,7 @@ var ___syscall_poll = function(fds, nfds, timeout) {
 };
 
 function ___syscall_recvfrom(fd, buf, len, flags, addr, addrlen) {
-  if (ENVIRONMENT_IS_PTHREAD) return proxyToMainThread(13, 0, 1, fd, buf, len, flags, addr, addrlen);
+  if (ENVIRONMENT_IS_PTHREAD) return proxyToMainThread(14, 0, 1, fd, buf, len, flags, addr, addrlen);
   buf = bigintToI53Checked(buf);
   len = bigintToI53Checked(len);
   addr = bigintToI53Checked(addr);
@@ -5821,7 +5870,7 @@ function ___syscall_recvfrom(fd, buf, len, flags, addr, addrlen) {
 }
 
 function ___syscall_sendmsg(fd, message, flags, d1, d2, d3) {
-  if (ENVIRONMENT_IS_PTHREAD) return proxyToMainThread(14, 0, 1, fd, message, flags, d1, d2, d3);
+  if (ENVIRONMENT_IS_PTHREAD) return proxyToMainThread(15, 0, 1, fd, message, flags, d1, d2, d3);
   message = bigintToI53Checked(message);
   d1 = bigintToI53Checked(d1);
   d2 = bigintToI53Checked(d2);
@@ -5861,7 +5910,7 @@ function ___syscall_sendmsg(fd, message, flags, d1, d2, d3) {
 }
 
 function ___syscall_sendto(fd, message, length, flags, addr, addr_len) {
-  if (ENVIRONMENT_IS_PTHREAD) return proxyToMainThread(15, 0, 1, fd, message, length, flags, addr, addr_len);
+  if (ENVIRONMENT_IS_PTHREAD) return proxyToMainThread(16, 0, 1, fd, message, length, flags, addr, addr_len);
   message = bigintToI53Checked(message);
   length = bigintToI53Checked(length);
   addr = bigintToI53Checked(addr);
@@ -5882,7 +5931,7 @@ function ___syscall_sendto(fd, message, length, flags, addr, addr_len) {
 }
 
 function ___syscall_socket(domain, type, protocol) {
-  if (ENVIRONMENT_IS_PTHREAD) return proxyToMainThread(16, 0, 1, domain, type, protocol);
+  if (ENVIRONMENT_IS_PTHREAD) return proxyToMainThread(17, 0, 1, domain, type, protocol);
   try {
     var sock = SOCKFS.createSocket(domain, type, protocol);
     assert(sock.stream.fd < 64);
@@ -5895,7 +5944,7 @@ function ___syscall_socket(domain, type, protocol) {
 }
 
 function ___syscall_stat64(path, buf) {
-  if (ENVIRONMENT_IS_PTHREAD) return proxyToMainThread(17, 0, 1, path, buf);
+  if (ENVIRONMENT_IS_PTHREAD) return proxyToMainThread(18, 0, 1, path, buf);
   path = bigintToI53Checked(path);
   buf = bigintToI53Checked(buf);
   try {
@@ -6304,7 +6353,7 @@ var stringToUTF8 = (str, outPtr, maxBytesToWrite) => {
 };
 
 function _environ_get(__environ, environ_buf) {
-  if (ENVIRONMENT_IS_PTHREAD) return proxyToMainThread(18, 0, 1, __environ, environ_buf);
+  if (ENVIRONMENT_IS_PTHREAD) return proxyToMainThread(19, 0, 1, __environ, environ_buf);
   __environ = bigintToI53Checked(__environ);
   environ_buf = bigintToI53Checked(environ_buf);
   var bufSize = 0;
@@ -6319,7 +6368,7 @@ function _environ_get(__environ, environ_buf) {
 }
 
 function _environ_sizes_get(penviron_count, penviron_buf_size) {
-  if (ENVIRONMENT_IS_PTHREAD) return proxyToMainThread(19, 0, 1, penviron_count, penviron_buf_size);
+  if (ENVIRONMENT_IS_PTHREAD) return proxyToMainThread(20, 0, 1, penviron_count, penviron_buf_size);
   penviron_count = bigintToI53Checked(penviron_count);
   penviron_buf_size = bigintToI53Checked(penviron_buf_size);
   var strings = getEnvStrings();
@@ -6333,7 +6382,7 @@ function _environ_sizes_get(penviron_count, penviron_buf_size) {
 }
 
 function _fd_close(fd) {
-  if (ENVIRONMENT_IS_PTHREAD) return proxyToMainThread(20, 0, 1, fd);
+  if (ENVIRONMENT_IS_PTHREAD) return proxyToMainThread(21, 0, 1, fd);
   try {
     var stream = SYSCALLS.getStreamFromFD(fd);
     FS.close(stream);
@@ -6345,7 +6394,7 @@ function _fd_close(fd) {
 }
 
 function _fd_fdstat_get(fd, pbuf) {
-  if (ENVIRONMENT_IS_PTHREAD) return proxyToMainThread(21, 0, 1, fd, pbuf);
+  if (ENVIRONMENT_IS_PTHREAD) return proxyToMainThread(22, 0, 1, fd, pbuf);
   pbuf = bigintToI53Checked(pbuf);
   try {
     var rightsBase = 0;
@@ -6387,7 +6436,7 @@ function _fd_fdstat_get(fd, pbuf) {
 };
 
 function _fd_read(fd, iov, iovcnt, pnum) {
-  if (ENVIRONMENT_IS_PTHREAD) return proxyToMainThread(22, 0, 1, fd, iov, iovcnt, pnum);
+  if (ENVIRONMENT_IS_PTHREAD) return proxyToMainThread(23, 0, 1, fd, iov, iovcnt, pnum);
   iov = bigintToI53Checked(iov);
   iovcnt = bigintToI53Checked(iovcnt);
   pnum = bigintToI53Checked(pnum);
@@ -6403,7 +6452,7 @@ function _fd_read(fd, iov, iovcnt, pnum) {
 }
 
 function _fd_seek(fd, offset, whence, newOffset) {
-  if (ENVIRONMENT_IS_PTHREAD) return proxyToMainThread(23, 0, 1, fd, offset, whence, newOffset);
+  if (ENVIRONMENT_IS_PTHREAD) return proxyToMainThread(24, 0, 1, fd, offset, whence, newOffset);
   offset = bigintToI53Checked(offset);
   newOffset = bigintToI53Checked(newOffset);
   try {
@@ -6441,7 +6490,7 @@ function _fd_seek(fd, offset, whence, newOffset) {
 };
 
 function _fd_write(fd, iov, iovcnt, pnum) {
-  if (ENVIRONMENT_IS_PTHREAD) return proxyToMainThread(24, 0, 1, fd, iov, iovcnt, pnum);
+  if (ENVIRONMENT_IS_PTHREAD) return proxyToMainThread(25, 0, 1, fd, iov, iovcnt, pnum);
   iov = bigintToI53Checked(iov);
   iovcnt = bigintToI53Checked(iovcnt);
   pnum = bigintToI53Checked(pnum);
@@ -6537,7 +6586,7 @@ unexportedSymbols.forEach(unexportedRuntimeSymbol);
 // either synchronously or asynchronously from other threads in postMessage()d
 // or internally queued events. This way a pthread in a Worker can synchronously
 // access e.g. the DOM on the main thread.
-var proxiedFunctionTable = [ _proc_exit, exitOnMainThread, ___syscall_connect, ___syscall_fcntl64, ___syscall_fstat64, ___syscall_getpeername, ___syscall_getsockname, ___syscall_getsockopt, ___syscall_ioctl, ___syscall_lstat64, ___syscall_newfstatat, ___syscall_openat, ___syscall_poll, ___syscall_recvfrom, ___syscall_sendmsg, ___syscall_sendto, ___syscall_socket, ___syscall_stat64, _environ_get, _environ_sizes_get, _fd_close, _fd_fdstat_get, _fd_read, _fd_seek, _fd_write ];
+var proxiedFunctionTable = [ _proc_exit, exitOnMainThread, pthreadCreateProxied, ___syscall_connect, ___syscall_fcntl64, ___syscall_fstat64, ___syscall_getpeername, ___syscall_getsockname, ___syscall_getsockopt, ___syscall_ioctl, ___syscall_lstat64, ___syscall_newfstatat, ___syscall_openat, ___syscall_poll, ___syscall_recvfrom, ___syscall_sendmsg, ___syscall_sendto, ___syscall_socket, ___syscall_stat64, _environ_get, _environ_sizes_get, _fd_close, _fd_fdstat_get, _fd_read, _fd_seek, _fd_write ];
 
 function checkIncomingModuleAPI() {
   ignoredModuleProp("fetchSettings");
@@ -6734,6 +6783,7 @@ function assignWasmImports() {
     /** @export */ __assert_fail: ___assert_fail,
     /** @export */ __call_sighandler: ___call_sighandler,
     /** @export */ __cxa_throw: ___cxa_throw,
+    /** @export */ __pthread_create_js: ___pthread_create_js,
     /** @export */ __syscall_connect: ___syscall_connect,
     /** @export */ __syscall_fcntl64: ___syscall_fcntl64,
     /** @export */ __syscall_fstat64: ___syscall_fstat64,

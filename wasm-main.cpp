@@ -90,6 +90,13 @@ static DECLCALLBACK(int) vboxWasmCfgmConstructor(PUVM pUVM, PVM pVM, PCVMMR3VTAB
     INSERT_INTEGER(pHm, "FallbackToNEM", 0);
 
     /*
+     * NEM — disable native execution manager (no KVM in Wasm).
+     */
+    PCFGMNODE pNem;
+    INSERT_NODE(pRoot, "NEM", &pNem);
+    INSERT_INTEGER(pNem, "Enabled", 0);
+
+    /*
      * PDM — tell it to load builtin device/driver modules.
      */
     PCFGMNODE pPdm, pPdmDevices, pPdmDrivers;

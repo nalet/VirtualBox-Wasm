@@ -142,6 +142,17 @@ RUN . /opt/emsdk/emsdk_env.sh 2>/dev/null \
     && echo "=== Phase 3b: Building DisasmR3 ==" \
     && kmk -C src/VBox/Disassembler DisasmR3 2>&1 | tail -20 || true
 
+# Wasm fixup: Patch function signatures for call_indirect type safety.
+# Wasm64 call_indirect strictly validates function types. Functions dispatched
+# through VMR3ReqCall* must have all-uintptr_t params to match the dispatch
+# signature (pfnNN(uintptr_t, ...) -> int). On x86-64, uint32_t and uintptr_t
+# both fit in 64-bit registers so the type-pun works; in Wasm64, i32 != i64.
+RUN echo "=== Wasm fixup: patching VMR3ReqCall dispatch targets ===" \
+    && sed -i 's/vmR3CreateU(PUVM pUVM, uint32_t cCpus/vmR3CreateU(PUVM pUVM, uintptr_t cCpus/g' \
+        src/VBox/VMM/VMMR3/VMR3.cpp \
+    && grep -n 'vmR3CreateU.*uintptr_t' src/VBox/VMM/VMMR3/VMR3.cpp | head -3 \
+    && echo "VMR3.cpp patched OK"
+
 # Phase 3c: VBoxVMM (the big one!)
 RUN . /opt/emsdk/emsdk_env.sh 2>/dev/null \
     && export PATH="/build/vbox/kBuild/bin/linux.amd64:${PATH}" \
@@ -218,8 +229,5 @@ RUN . /opt/emsdk/emsdk_env.sh 2>/dev/null \
         -sDEFAULT_PTHREAD_STACK_SIZE=1048576 \
         -Wno-unused-command-line-argument \
         -sERROR_ON_UNDEFINED_SYMBOLS=0 \
-        -sEMULATE_FUNCTION_POINTER_CASTS=1 \
-        -sBINARYEN_EXTRA_PASSES="--pass-arg=max-func-params@20" \
-        2>&1 | tail -40 \
     && ls -lh docs/vbox-wasm.js docs/vbox-wasm.wasm \
     && echo "=== Full VM harness linked OK ==="

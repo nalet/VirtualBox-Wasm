@@ -1829,7 +1829,7 @@ void xmlSetExternalEntityLoader(xmlExternalEntityLoader loader)
  * so that --allow-multiple-definition picks them up first.
  *************************************************************************/
 
-#include "src/VBox/Runtime/include/internal/thread.h"
+#include "internal/thread.h"
 #include <iprt/semaphore.h>
 #include <iprt/asm.h>
 #include <sched.h>

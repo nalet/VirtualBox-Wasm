@@ -1735,8 +1735,61 @@ RTDECL(int) RTCrRandBytes(void *pvBuf, size_t cbBuf)
  *************************************************************************/
 #include <VBox/vmm/pdmdrv.h>
 
+/* Minimal driver registration — just enough to pass version check */
+static DECLCALLBACK(int)  drvIfTraceStubConstruct(PPDMDRVINS pDrvIns, PCFGMNODE pCfg, uint32_t fFlags)
+{
+    RT_NOREF(pDrvIns, pCfg, fFlags);
+    return VERR_NOT_SUPPORTED;
+}
+
 extern const PDMDRVREG g_DrvIfTrace;
-const PDMDRVREG g_DrvIfTrace = {0};
+const PDMDRVREG g_DrvIfTrace =
+{
+    /* u32Version */
+    PDM_DRVREG_VERSION,
+    /* szName */
+    "IfTrace",
+    /* szRCMod */
+    "",
+    /* szR0Mod */
+    "",
+    /* pszDescription */
+    "Interface callback tracing driver (Wasm stub)",
+    /* fFlags */
+    PDM_DRVREG_FLAGS_HOST_BITS_DEFAULT,
+    /* fClass. */
+    PDM_DRVREG_CLASS_STATUS,
+    /* cMaxInstances */
+    ~0U,
+    /* cbInstance */
+    0,
+    /* pfnConstruct */
+    drvIfTraceStubConstruct,
+    /* pfnDestruct */
+    NULL,
+    /* pfnRelocate */
+    NULL,
+    /* pfnIOCtl */
+    NULL,
+    /* pfnPowerOn */
+    NULL,
+    /* pfnReset */
+    NULL,
+    /* pfnSuspend */
+    NULL,
+    /* pfnResume */
+    NULL,
+    /* pfnAttach */
+    NULL,
+    /* pfnDetach */
+    NULL,
+    /* pfnPowerOff */
+    NULL,
+    /* pfnSoftReset */
+    NULL,
+    /* u32EndVersion */
+    PDM_DRVREG_VERSION
+};
 
 
 /*************************************************************************

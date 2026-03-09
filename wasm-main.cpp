@@ -273,6 +273,28 @@ int main(int argc, char **argv)
      * VMCREATE_F_DRIVERLESS: No kernel driver needed (pure IEM emulation).
      * This is exactly what we want for WebAssembly.
      */
+    /*
+     * Quick pthread sanity check.
+     */
+    {
+        #include <pthread.h>
+        struct PthreadTest { int val; };
+        static auto testFn = [](void *arg) -> void * {
+            ((PthreadTest *)arg)->val = 42;
+            return NULL;
+        };
+        PthreadTest pt = { 0 };
+        pthread_t th;
+        int prc = pthread_create(&th, NULL, testFn, &pt);
+        if (prc == 0)
+        {
+            pthread_join(th, NULL);
+            RTPrintf("pthread test: OK (val=%d)\n", pt.val);
+        }
+        else
+            RTPrintf("pthread test: FAILED (errno=%d)\n", prc);
+    }
+
     RTPrintf("Creating VM...\n");
     rc = VMR3Create(1 /*cCpus*/,
                     NULL /*pVmm2UserMethods*/,
@@ -282,7 +304,7 @@ int main(int argc, char **argv)
                     &g_pVM, &g_pUVM);
     if (RT_FAILURE(rc))
     {
-        RTPrintf("VMR3Create failed: %Rrc\n", rc);
+        RTPrintf("VMR3Create failed: %Rrc (rc=%d)\n", rc, rc);
         return 1;
     }
     RTPrintf("VM created successfully!\n");

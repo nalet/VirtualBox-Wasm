@@ -196,17 +196,14 @@ static DECLCALLBACK(int) vboxWasmCfgmConstructor(PUVM pUVM, PVM pVM, PCVMMR3VTAB
      *   LUN#0 = Primary Master    LUN#1 = Primary Slave
      *   LUN#2 = Secondary Master  LUN#3 = Secondary Slave
      */
-    PCFGMNODE pLun2, pLun2Cfg, pAtt, pAttCfg;
+    PCFGMNODE pLun2, pLun2Cfg;
     INSERT_NODE(pInst, "LUN#2", &pLun2);
-    INSERT_STRING(pLun2, "Driver", "Block");
+    INSERT_STRING(pLun2, "Driver", "VD");
     INSERT_NODE(pLun2, "Config", &pLun2Cfg);
-    INSERT_STRING(pLun2Cfg, "Type", "DVD");
-    INSERT_NODE(pLun2, "AttachedDriver", &pAtt);
-    INSERT_STRING(pAtt, "Driver", "VD");
-    INSERT_NODE(pAtt, "Config", &pAttCfg);
-    INSERT_STRING(pAttCfg, "Path",     g_pszCdImage);
-    INSERT_STRING(pAttCfg, "Format",   "RAW");
-    INSERT_INTEGER(pAttCfg, "ReadOnly", 1);
+    INSERT_STRING(pLun2Cfg, "Path",     g_pszCdImage);
+    INSERT_STRING(pLun2Cfg, "Format",   "RAW");
+    INSERT_STRING(pLun2Cfg, "Type",     "DVD");
+    INSERT_INTEGER(pLun2Cfg, "ReadOnly", 1);
 
     /* ── VMMDev ── */
     INSERT_NODE(pDevices, "VMMDev", &pDev);

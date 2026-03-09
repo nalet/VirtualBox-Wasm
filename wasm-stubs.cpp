@@ -592,7 +592,7 @@ SUPR3DECL(int) SUPR3QueryVTCaps(uint32_t *pfCaps)
 {
     if (pfCaps)
         *pfCaps = 0;
-    return VERR_NOT_SUPPORTED;
+    return VERR_SUP_DRIVERLESS;
 }
 
 SUPR3DECL(int) SUPR3QueryVTxSupported(const char **ppszWhy)

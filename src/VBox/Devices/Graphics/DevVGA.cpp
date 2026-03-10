@@ -5500,7 +5500,9 @@ vgaR3PortCopyRect(PPDMIDISPLAYPORT pInterface,
      * That is a not paused VBVA means that the video mode can be handled even if VBE_DISPI_ENABLED is clear.
      */
     if (   (pThis->vbe_regs[VBE_DISPI_INDEX_ENABLE] & VBE_DISPI_ENABLED) == 0
+# ifdef VBOX_WITH_HGSMI
         && VBVAIsPaused(pThisCC)
+# endif
 # ifdef VBOX_WITH_VMSVGA
         && !pThis->svga.fEnabled
 # endif
@@ -5613,8 +5615,10 @@ static DECLCALLBACK(void) vgaR3TimerRefresh(PPDMDEVINS pDevIns, TMTIMERHANDLE hT
     PVGASTATECC pThisCC = PDMDEVINS_2_DATA_CC(pDevIns, PVGASTATECC);
     RT_NOREF(pvUser);
 
+# ifdef VBOX_WITH_HGSMI
     if (pThis->fScanLineCfg & VBVASCANLINECFG_ENABLE_VSYNC_IRQ)
         VBVARaiseIrq(pDevIns, pThis, pThisCC, HGSMIHOSTFLAGS_VSYNC);
+# endif
 
     if (pThisCC->pDrv)
         pThisCC->pDrv->pfnRefresh(pThisCC->pDrv);
@@ -5896,7 +5900,9 @@ static DECLCALLBACK(int) vgaR3SaveDone(PPDMDEVINS pDevIns, PSSMHANDLE pSSM)
 static DECLCALLBACK(int) vgaR3SaveExec(PPDMDEVINS pDevIns, PSSMHANDLE pSSM)
 {
     PVGASTATE       pThis   = PDMDEVINS_2_DATA(pDevIns, PVGASTATE);
+#if defined(VBOX_WITH_VDMA) || defined(VBOX_WITH_HGSMI)
     PVGASTATECC     pThisCC = PDMDEVINS_2_DATA_CC(pDevIns, PVGASTATECC);
+#endif
     PCPDMDEVHLPR3   pHlp  = pDevIns->pHlpR3;
 
 # ifdef VBOX_WITH_VDMA
@@ -5962,7 +5968,9 @@ static DECLCALLBACK(int) vgaR3LoadPrep(PPDMDEVINS pDevIns, PSSMHANDLE pSSM)
 static DECLCALLBACK(int) vgaR3LoadExec(PPDMDEVINS pDevIns, PSSMHANDLE pSSM, uint32_t uVersion, uint32_t uPass)
 {
     PVGASTATE       pThis   = PDMDEVINS_2_DATA(pDevIns, PVGASTATE);
+#if defined(VBOX_WITH_HGSMI) || defined(VBOX_WITH_VDMA)
     PVGASTATECC     pThisCC = PDMDEVINS_2_DATA_CC(pDevIns, PVGASTATECC);
+#endif
     PCPDMDEVHLPR3   pHlp    = pDevIns->pHlpR3;
     int             rc;
 
@@ -6056,10 +6064,14 @@ static DECLCALLBACK(int) vgaR3LoadExec(PPDMDEVINS pDevIns, PSSMHANDLE pSSM, uint
  */
 static DECLCALLBACK(int) vgaR3LoadDone(PPDMDEVINS pDevIns, PSSMHANDLE pSSM)
 {
+    RT_NOREF(pSSM);
+#if defined(VBOX_WITH_HGSMI) || defined(VBOX_WITH_VDMA) || defined(VBOX_WITH_VMSVGA)
     PVGASTATECC pThisCC = PDMDEVINS_2_DATA_CC(pDevIns, PVGASTATECC);
     PVGASTATE   pThis   = PDMDEVINS_2_DATA(pDevIns, PVGASTATE);
     int         rc;
-    RT_NOREF(pThisCC, pThis, pSSM);
+#else
+    RT_NOREF(pDevIns);
+#endif
 
 # ifdef VBOX_WITH_HGSMI
     rc = vboxVBVALoadStateDone(pDevIns);
@@ -6089,9 +6101,13 @@ static DECLCALLBACK(int) vgaR3LoadDone(PPDMDEVINS pDevIns, PSSMHANDLE pSSM)
  */
 static DECLCALLBACK(void) vgaR3Resume(PPDMDEVINS pDevIns)
 {
+#ifdef VBOX_WITH_HGSMI
     PVGASTATE   pThis   = PDMDEVINS_2_DATA(pDevIns, PVGASTATE);
     PVGASTATECC pThisCC = PDMDEVINS_2_DATA_CC(pDevIns, PVGASTATECC);
     VBVAOnResume(pDevIns, pThis, pThisCC);
+#else
+    RT_NOREF(pDevIns);
+#endif
 }
 
 
@@ -6106,8 +6122,10 @@ static DECLCALLBACK(void)  vgaR3Reset(PPDMDEVINS pDevIns)
     char           *pchEnd;
     LogFlow(("vgaReset\n"));
 
+# ifdef VBOX_WITH_VDMA
     if (pThisCC->pVdma)
         vboxVDMAReset(pThisCC->pVdma);
+# endif
 
 # ifdef VBOX_WITH_VMSVGA
     if (pThis->fVMSVGAEnabled)
@@ -6217,13 +6235,19 @@ static DECLCALLBACK(void)  vgaR3Reset(PPDMDEVINS pDevIns)
  */
 static DECLCALLBACK(void) vgaR3PowerOn(PPDMDEVINS pDevIns)
 {
+#if defined(VBOX_WITH_VMSVGA) || defined(VBOX_WITH_HGSMI)
     PVGASTATE   pThis = PDMDEVINS_2_DATA(pDevIns, PVGASTATE);
     PVGASTATECC pThisCC = PDMDEVINS_2_DATA_CC(pDevIns, PVGASTATECC);
+#endif
 # ifdef VBOX_WITH_VMSVGA
     if (pThis->fVMSVGAEnabled)
         vmsvgaR3PowerOn(pDevIns);
 # endif
+# ifdef VBOX_WITH_HGSMI
     VBVAOnResume(pDevIns, pThis, pThisCC);
+# else
+    RT_NOREF(pDevIns);
+# endif
 }
 
 
@@ -6692,7 +6716,11 @@ static DECLCALLBACK(int)   vgaR3Construct(PPDMDEVINS pDevIns, int iInstance, PCF
         pThisCC->IPort.pfnReportMonitorPositions = vmsvgaR3PortReportMonitorPositions;
     }
 # endif
+# ifdef VBOX_WITH_HGSMI
     pThisCC->IPort.pfnSendModeHint      = vbvaR3PortSendModeHint;
+# else
+    pThisCC->IPort.pfnSendModeHint      = NULL;
+# endif
     pThisCC->IPort.pfnReportHostCursorCapabilities = vgaR3PortReportHostCursorCapabilities;
     pThisCC->IPort.pfnReportHostCursorPosition = vgaR3PortReportHostCursorPosition;
 
@@ -7499,6 +7527,117 @@ static DECLCALLBACK(int) vgaRZConstruct(PPDMDEVINS pDevIns)
     else
         AssertReturn(pThis->hMmio2VmSvgaFifo == NIL_PGMMMIO2HANDLE, VERR_INVALID_STATE);
 # endif
+
+#ifdef __EMSCRIPTEN__
+    /*
+     * Wasm hack: Pre-initialize VGA registers for mode 3 (80x25 text).
+     * IEM is too slow for BIOS POST to reach VGA initialization in a
+     * reasonable time.  This sets the VGA into text mode immediately so
+     * any BIOS text output shows up right away.
+     */
+    {
+        /* Sequencer registers for mode 3 */
+        pThis->sr[0] = 0x03;  /* reset */
+        pThis->sr[1] = 0x00;  /* clocking mode — 8-dot chars */
+        pThis->sr[2] = 0x03;  /* map mask — planes 0+1 enabled */
+        pThis->sr[3] = 0x00;  /* character map select */
+        pThis->sr[4] = 0x02;  /* memory mode — odd/even */
+
+        /* Misc Output Register */
+        pThis->msr = 0x67;    /* clock select 01, enable RAM, IO addr 3Dx */
+
+        /* CRTC registers for 720x400 text (mode 3) */
+        static const uint8_t s_aCrtcMode3[] = {
+            0x5f, 0x4f, 0x50, 0x82, 0x55, 0x81, 0xbf, 0x1f,
+            0x00, 0x4f, 0x06, 0x07, 0x00, 0x00, 0x00, 0x00,
+            0x9c, 0x8e, 0x8f, 0x28, 0x1f, 0x96, 0xb9, 0xa3,
+            0xff
+        };
+        for (unsigned i = 0; i < RT_ELEMENTS(s_aCrtcMode3); i++)
+            pThis->cr[i] = s_aCrtcMode3[i];
+
+        /* Graphics Controller registers */
+        pThis->gr[0] = 0x00;
+        pThis->gr[1] = 0x00;
+        pThis->gr[2] = 0x00;
+        pThis->gr[3] = 0x00;
+        pThis->gr[4] = 0x00;
+        pThis->gr[5] = 0x10;  /* odd/even text mode */
+        pThis->gr[6] = 0x0e;  /* text mode, B800 map */
+        pThis->gr[7] = 0x00;
+        pThis->gr[8] = 0xff;
+
+        /* Attribute Controller registers — palette + text mode control */
+        for (unsigned i = 0; i < 16; i++)
+            pThis->ar[i] = (uint8_t)i;
+        pThis->ar[16] = 0x0c; /* attr mode control — blink enable */
+        pThis->ar[17] = 0x00; /* overscan color */
+        pThis->ar[18] = 0x0f; /* color plane enable */
+        pThis->ar[19] = 0x08; /* horiz pixel panning */
+        pThis->ar[20] = 0x00; /* color select */
+
+        /* Enable display — switches from GMODE_BLANK to GMODE_TEXT */
+        pThis->ar_index = 0x20;
+
+        /* Set last_scr_width/height so vgaR3DrawBlank doesn't return early */
+        pThis->last_scr_width = 720;
+        pThis->last_scr_height = 400;
+
+        /* Initialize line_offset for proper text rendering.
+         * For text mode, line_offset = columns * 2 (character + attribute). */
+        pThis->line_offset = 80 * 2;  /* = cr[0x13] * pitch_multiplier */
+
+        /* Set the standard VGA 16-color text-mode palette (DAC entries) */
+        static const uint8_t s_aVgaDac16[16][3] = {
+            {0x00,0x00,0x00},{0x00,0x00,0x2a},{0x00,0x2a,0x00},{0x00,0x2a,0x2a},
+            {0x2a,0x00,0x00},{0x2a,0x00,0x2a},{0x2a,0x15,0x00},{0x2a,0x2a,0x2a},
+            {0x15,0x15,0x15},{0x15,0x15,0x3f},{0x15,0x3f,0x15},{0x15,0x3f,0x3f},
+            {0x3f,0x15,0x15},{0x3f,0x15,0x3f},{0x3f,0x3f,0x15},{0x3f,0x3f,0x3f},
+        };
+        for (unsigned i = 0; i < 16; i++)
+        {
+            pThis->palette[i * 3 + 0] = s_aVgaDac16[i][0];
+            pThis->palette[i * 3 + 1] = s_aVgaDac16[i][1];
+            pThis->palette[i * 3 + 2] = s_aVgaDac16[i][2];
+        }
+
+        if (pThisCC->pbVRam)
+        {
+            /*
+             * Load 8x16 VGA font into plane 2 of VRAM.
+             * Font data is at plane 2 (byte offset +2 with stride 4).
+             * Each character takes 32 bytes (16 used, 16 padding) × 4 planes.
+             */
+# include "BIOS/vgafonts.h"
+            for (unsigned ch = 0; ch < 256; ch++)
+            {
+                for (unsigned row = 0; row < 16; row++)
+                {
+                    /* Plane 2 byte = offset 2, stride 4 between planes, stride 4 between bytes */
+                    pThisCC->pbVRam[ch * 32 * 4 + row * 4 + 2] = vgafont16[ch * 16 + row];
+                }
+            }
+
+            /* Fill text VRAM at offset 0x18000 (B8000h - A0000h) with spaces.
+             * Text memory uses odd/even: char at even byte, attr at odd byte. */
+            for (unsigned i = 0; i < 80 * 25 * 2; i += 2)
+            {
+                pThisCC->pbVRam[0x18000 + i + 0] = 0x20; /* space */
+                pThisCC->pbVRam[0x18000 + i + 1] = 0x07; /* white on black */
+            }
+
+            /* Write a welcome message on the first line */
+            static const char szMsg[] = "VirtualBox/Wasm - IEM x86 emulator - BIOS POST in progress...";
+            for (unsigned i = 0; i < sizeof(szMsg) - 1 && i < 80; i++)
+            {
+                pThisCC->pbVRam[0x18000 + i * 2 + 0] = (uint8_t)szMsg[i];
+                pThisCC->pbVRam[0x18000 + i * 2 + 1] = 0x0F; /* high-intensity white on black */
+            }
+        }
+
+        Log(("VGA: Wasm pre-init: text mode 3 (80x25) with font loaded\n"));
+    }
+#endif /* __EMSCRIPTEN__ */
 
     return VINF_SUCCESS;
 }

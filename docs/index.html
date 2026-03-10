@@ -707,15 +707,6 @@
         statusEl.className = 'success';
         statusEl.textContent = 'VM initializing (IEM x86 emulation)';
 
-        // Show test pattern to prove display pipeline works
-        // (VGA device output takes minutes under IEM)
-        setTimeout(() => {
-          if (Module._wasmDisplayTestPattern) {
-            Module._wasmDisplayTestPattern();
-            appendLine('Test pattern drawn to framebuffer', 'info');
-          }
-        }, 3000);
-
         // Start VGA framebuffer rendering loop
         let lastUpdateRectCount = 0;
         function renderLoop() {

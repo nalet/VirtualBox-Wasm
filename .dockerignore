@@ -1,0 +1,8 @@
+.git
+out
+obj
+*.wasm
+*.js.map
+docs/vbox-wasm.js
+docs/vbox-wasm.wasm
+docs/vbox-wasm.worker.js

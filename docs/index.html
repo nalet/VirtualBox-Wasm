@@ -717,6 +717,7 @@
         }, 3000);
 
         // Start VGA framebuffer rendering loop
+        let lastUpdateRectCount = 0;
         function renderLoop() {
           if (!vmRunning) return;
           try {
@@ -727,6 +728,26 @@
           requestAnimationFrame(renderLoop);
         }
         requestAnimationFrame(renderLoop);
+
+        // Monitor POST progress — check for VGA device output
+        let postMonitorCount = 0;
+        const postMonitor = setInterval(() => {
+          postMonitorCount++;
+          if (!Module._wasmDisplayGetUpdateRectCount) return;
+          const refreshes = Number(Module._wasmDisplayGetRefreshCount());
+          const updates = Number(Module._wasmDisplayGetUpdateRectCount());
+          const w = Number(Module._wasmDisplayGetWidth());
+          const h = Number(Module._wasmDisplayGetHeight());
+          const secs = postMonitorCount * 5;
+          console.log(`[POST] ${secs}s: refresh=${refreshes} updateRect=${updates} ${w}x${h}`);
+          if (updates > lastUpdateRectCount) {
+            appendLine(`VGA device output detected! (updateRect=${updates}, ${w}x${h})`, 'info');
+            statusEl.textContent = `VM running — VGA ${w}x${h}`;
+            lastUpdateRectCount = updates;
+          }
+          // Stop monitoring after 10 minutes
+          if (postMonitorCount > 120) clearInterval(postMonitor);
+        }, 5000);
 
       } catch (err) {
         appendLine('VM start failed: ' + err.message, 'err');

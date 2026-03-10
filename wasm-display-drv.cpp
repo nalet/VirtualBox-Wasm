@@ -150,6 +150,12 @@ static DECLCALLBACK(void) wasmDispRefresh(PPDMIDISPLAYCONNECTOR pInterface)
 {
     PDRVWASMDISPLAY pThis = CON2THIS(pInterface);
     pThis->cRefreshCalls++;
+
+    /* Log progress every 500 refresh calls (~25s at 20fps) */
+    if (pThis->cRefreshCalls % 500 == 0)
+        RTPrintf("[WasmDisplay] refresh #%u, updateRect #%u\n",
+                 pThis->cRefreshCalls, pThis->cUpdateRectCalls);
+
     if (pThis->pPort)
         pThis->pPort->pfnUpdateDisplay(pThis->pPort);
 }

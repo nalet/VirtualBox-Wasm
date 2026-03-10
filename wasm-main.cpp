@@ -86,7 +86,7 @@ static DECLCALLBACK(int) vboxWasmCfgmConstructor(PUVM pUVM, PVM pVM, PCVMMR3VTAB
      * VM properties.
      */
     INSERT_STRING(pRoot, "Name", "VBoxWasm");
-    INSERT_INTEGER(pRoot, "RamSize",      (uint64_t)32 * _1M);    /* 32 MB RAM — faster BIOS POST under IEM */
+    INSERT_INTEGER(pRoot, "RamSize",      (uint64_t)4 * _1M);     /* 4 MB RAM — minimal for fastest BIOS POST under IEM */
     INSERT_INTEGER(pRoot, "RamHoleSize",  (uint64_t)512 * _1M);
     INSERT_INTEGER(pRoot, "TimerMillies", 10);
     INSERT_INTEGER(pRoot, "NumCPUs",      1);
@@ -105,6 +105,16 @@ static DECLCALLBACK(int) vboxWasmCfgmConstructor(PUVM pUVM, PVM pVM, PCVMMR3VTAB
     PCFGMNODE pNem;
     INSERT_NODE(pRoot, "NEM", &pNem);
     INSERT_INTEGER(pNem, "Enabled", 0);
+
+    /*
+     * EM — tune IEM instruction batching for maximum throughput.
+     * Larger batches = fewer context switches = faster BIOS POST.
+     */
+    PCFGMNODE pEm;
+    INSERT_NODE(pRoot, "EM", &pEm);
+    INSERT_INTEGER(pEm, "IemExecutesAll", 1);
+    INSERT_INTEGER(pEm, "HistoryIntprExecMaxInstructions", 65535);
+    INSERT_INTEGER(pEm, "HistoryIntprProbeMaxInstructionsWithoutExit", 512);
 
     /*
      * PDM — tell it to load builtin device/driver modules.

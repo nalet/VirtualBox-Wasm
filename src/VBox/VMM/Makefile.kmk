@@ -814,6 +814,7 @@ ifdef VBOX_WITH_IEM_RECOMPILER
  # Generate member offsets for selected structures for use from ARM64 assembly.
  #
  if1of ($(KBUILD_TARGET_ARCH), amd64)
+ ifndef VBOX_WITH_EMSCRIPTEN
   VBoxVMM_CLEAN += \
   	$(VBoxVMM_0_OUTDIR)/CommonGenIncs/IEMInternal.mac.ts \
   	$(VBoxVMM_0_OUTDIR)/CommonGenIncs/IEMInternal.mac \
@@ -843,6 +844,7 @@ ifdef VBOX_WITH_IEM_RECOMPILER
 	$(call KB_FN_AUTO_CMD_DEPS_COMMANDS)
 	$(QUIET)$(SED) -f "$(filter %.sed,$^)" --output "$@" "$<"
 	$(QUIET)$(CP) -v -f --changed -- "$@" "$(basename $@)"
+ endif # !VBOX_WITH_EMSCRIPTEN
  endif
 
 endif # VBOX_WITH_IEM_RECOMPILER

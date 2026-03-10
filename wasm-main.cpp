@@ -220,6 +220,7 @@ static DECLCALLBACK(int) vboxWasmCfgmConstructor(PUVM pUVM, PVM pVM, PCVMMR3VTAB
     INSERT_STRING(pLun2Cfg, "Format",   "RAW");
     INSERT_STRING(pLun2Cfg, "Type",     "DVD");
     INSERT_INTEGER(pLun2Cfg, "ReadOnly", 1);
+    INSERT_INTEGER(pLun2Cfg, "Mountable", 1);
 
     /* ── VMMDev ── */
     INSERT_NODE(pDevices, "VMMDev", &pDev);

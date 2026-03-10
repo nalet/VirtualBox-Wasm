@@ -1,5 +1,14 @@
 # LocalConfig.kmk — Emscripten/Wasm64 build overrides
 #
+# ── Open Watcom — DISABLED ──
+#
+# Open Watcom's wasm assembler hangs in an infinite loop on vberom.asm
+# (VGA BIOS VBE extensions).  Instead we use the pre-built Alternative
+# source files assembled by YASM, which is much faster and reliable.
+#
+#PATH_TOOL_OPENWATCOM := /opt/openwatcom
+#VBOX_WITH_OPEN_WATCOM := 1
+#
 # This file is auto-loaded by Config.kmk and can safely override templates.
 #
 # Strategy: leave VBOX_GCC_TOOL as the host g++ so DynamicConfig.kmk probes
@@ -137,9 +146,14 @@ VBOX_WITH_NESTED_HWVIRT_SVM           :=
 VBOX_WITH_NESTED_HWVIRT_VMX           :=
 VBOX_WITH_NESTED_HWVIRT_VMX_EPT       :=
 
-# No IEM JIT recompiler (generates native code — not possible in Wasm)
-VBOX_WITH_IEM_RECOMPILER              :=
+# IEM recompiler: enable threaded recompiler (portable function-pointer chains)
+# but disable native recompiler (generates x86/ARM64 machine code — not possible in Wasm)
+VBOX_WITH_IEM_RECOMPILER              := 1
 VBOX_WITH_IEM_NATIVE_RECOMPILER       :=
+
+# Clear .mac intermediate deps (NASM assembly helpers — not used in Wasm)
+# kmk_sed fails generating these and they're only needed for native asm code.
+VBoxVMM_INTERMEDIATES.amd64           :=
 
 # No raw-mode / ring-0
 VBOX_WITH_RAW_MODE                    :=
@@ -168,6 +182,63 @@ VBOX_WITH_REM                         :=
 
 # IEM: use C implementations only (no x86 asm)
 IEM_WITHOUT_ASSEMBLY                  := 1
+
+#
+# ── Disable device features not needed for minimal Wasm VM ──
+#
+# Graphics: basic VGA only (no VMSVGA, no HGSMI, no WDDM, no VDMA)
+VBOX_WITH_VMSVGA                      :=
+VBOX_WITH_VMSVGA3D                    :=
+VBOX_WITH_HGSMI                       :=
+VBOX_WITH_WDDM                       :=
+VBOX_WITH_VDMA                        :=
+VBOX_WITH_PXE_ROM                     :=
+
+# USB: disable all
+VBOX_WITH_USB                         :=
+VBOX_WITH_EHCI_IMPL                   :=
+VBOX_WITH_XHCI_IMPL                   :=
+VBOX_WITH_USB_VIDEO_IMPL              :=
+VBOX_WITH_USB_CARDREADER              :=
+
+# Storage: IDE/ATA only (no AHCI, SCSI, NVMe, VirtIO)
+VBOX_WITH_AHCI                        :=
+VBOX_WITH_BUSLOGIC                    :=
+VBOX_WITH_LSILOGIC                    :=
+VBOX_WITH_NVME_IMPL                   :=
+VBOX_WITH_SCSI                        :=
+VBOX_WITH_VIRTIO                      :=
+VBOX_WITH_VIRTIO_SCSI                 :=
+VBOX_WITH_DRV_DISK_INTEGRITY          :=
+
+# Networking: disable all optional (NAT is always included)
+VBOX_WITH_E1000                        :=
+VBOX_WITH_INIP                         :=
+VBOX_WITH_UDPTUNNEL                    :=
+VBOX_WITH_VDE                          :=
+VBOX_WITH_NETFLT                       :=
+VBOX_WITH_CLOUD_NET                    :=
+
+# Audio: null only (disable platform backends)
+VBOX_WITH_AUDIO_ALSA                   :=
+VBOX_WITH_AUDIO_PULSE                  :=
+VBOX_WITH_AUDIO_OSS                    :=
+VBOX_WITH_AUDIO_DEBUG                  :=
+VBOX_WITH_AUDIO_VALIDATIONKIT          :=
+
+# EFI/firmware: BIOS only
+VBOX_WITH_EFI                          :=
+
+# Security
+VBOX_WITH_TPM                          :=
+VBOX_WITH_PCI_PASSTHROUGH_IMPL         :=
+VBOX_WITH_VFIO_PCI_PASSTHROUGH         :=
+
+# Misc
+VBOX_WITH_HGCM                         :=
+VBOX_WITH_VIRT_ARMV8                    :=
+VBOX_WITH_VIRTUALKD                     :=
+VBOX_WITH_MSI_DEVICES                   :=
 
 #
 # ── Override LIB_RUNTIME to use static RuntimeR3.a ──

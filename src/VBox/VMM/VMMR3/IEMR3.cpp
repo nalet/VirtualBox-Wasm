@@ -320,7 +320,9 @@ VMMR3_INT_DECL(int) IEMR3Init(PVM pVM)
         /*
          * Recompiler state and configuration distribution.
          */
+# ifdef IEMNATIVE_WITH_SIMD_FP_NATIVE_EMITTERS
         IRECM(pVCpu).uRegFpCtrl                    = IEMNATIVE_SIMD_FP_CTRL_REG_NOT_MODIFIED;
+# endif
         IRECM(pVCpu).uTbNativeRecompileAtUsedCount = uTbNativeRecompileAtUsedCount;
         IRECM(pVCpu).fHostICacheInvalidation       = fHostICacheInvalidation;
 #endif
@@ -2022,6 +2024,7 @@ static DECLCALLBACK(void) iemR3InfoTlbTrace(PVM pVM, PCDBGFINFOHLP pHlp, int cAr
 
 #if defined(VBOX_WITH_IEM_RECOMPILER) && !defined(VBOX_VMM_TARGET_ARMV8)
 
+#ifdef VBOX_WITH_IEM_NATIVE_RECOMPILER
 /**
  * Get get compile time flat PC for the TB.
  */
@@ -2036,6 +2039,7 @@ DECL_FORCE_INLINE(RTGCPTR) iemR3GetTbFlatPc(PCIEMTB pTb)
 #endif
     return pTb->FlatPc;
 }
+#endif /* VBOX_WITH_IEM_NATIVE_RECOMPILER */
 
 
 /**

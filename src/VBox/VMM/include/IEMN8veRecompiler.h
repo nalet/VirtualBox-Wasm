@@ -194,6 +194,16 @@ AssertCompile(IEMNATIVE_FRAME_VAR_SLOTS == 32);
  * address for it). */
 # define IEMNATIVE_FP_OFF_STACK_VARS        (IEMNATIVE_FP_OFF_LAST_PUSH - IEMNATIVE_FRAME_ALIGN_SIZE - IEMNATIVE_FRAME_VAR_SIZE)
 
+#elif defined(RT_ARCH_WASM64)
+/* Wasm64: dummy frame layout matching AMD64 (native recompiler not used, only threaded TB). */
+# define IEMNATIVE_FRAME_ALIGN_SIZE         8
+# define IEMNATIVE_FRAME_STACK_ARG_COUNT    2
+# define IEMNATIVE_FRAME_SHADOW_ARG_COUNT   0
+# define IEMNATIVE_FP_OFF_LAST_PUSH         (5 * -8)
+# define IEMNATIVE_FP_OFF_STACK_VARS        (IEMNATIVE_FP_OFF_LAST_PUSH - IEMNATIVE_FRAME_ALIGN_SIZE - IEMNATIVE_FRAME_VAR_SIZE)
+# define IEMNATIVE_FP_OFF_STACK_ARG0        (IEMNATIVE_FP_OFF_STACK_VARS - IEMNATIVE_FRAME_STACK_ARG_COUNT * 8)
+# define IEMNATIVE_FP_OFF_STACK_ARG1        (IEMNATIVE_FP_OFF_STACK_ARG0 + 8)
+
 #else
 # error "port me"
 #endif
@@ -302,6 +312,16 @@ AssertCompile(IEMNATIVE_FRAME_VAR_SLOTS == 32);
 #  define IEMNATIVE_SIMD_REG_FIXED_MASK     (  UINT32_C(0xffc0) \
                                              | RT_BIT_32(IEMNATIVE_SIMD_REG_FIXED_TMP0))
 # endif
+
+#elif defined(RT_ARCH_WASM64)
+/* Wasm64: dummy register defs (native recompiler not used). */
+# define IEMNATIVE_REG_FIXED_PVMCPU         3 /* dummy */
+# define IEMNATIVE_REG_FIXED_TMP0           11 /* dummy */
+# define IEMNATIVE_REG_FIXED_MASK           (  RT_BIT_32(IEMNATIVE_REG_FIXED_PVMCPU) \
+                                             | RT_BIT_32(IEMNATIVE_REG_FIXED_TMP0) )
+# define IEMNATIVE_SIMD_REG_FIXED_TMP0      5 /* dummy */
+# define IEMNATIVE_WITH_SIMD_REG_ACCESS_ALL_REGISTERS
+# define IEMNATIVE_SIMD_REG_FIXED_MASK      (RT_BIT_32(IEMNATIVE_SIMD_REG_FIXED_TMP0))
 
 #else
 # error "port me"
@@ -471,6 +491,13 @@ AssertCompile(IEMNATIVE_FRAME_VAR_SLOTS == 32);
 
 # define IEMNATIVE_HST_SIMD_REG_COUNT       32
 # define IEMNATIVE_HST_SIMD_REG_MASK        UINT32_MAX
+
+#elif defined(RT_ARCH_WASM64)
+/* Wasm64: match AMD64 register counts (dummy, native recompiler not used). */
+# define IEMNATIVE_HST_GREG_COUNT           16
+# define IEMNATIVE_HST_GREG_MASK            UINT32_C(0xffff)
+# define IEMNATIVE_HST_SIMD_REG_COUNT       16
+# define IEMNATIVE_HST_SIMD_REG_MASK        UINT32_C(0xffff)
 
 #else
 # error "Port me!"
@@ -1197,6 +1224,8 @@ AssertCompile(IEMLIVENESS_STATE_UNUSED == 1 && IEMLIVENESS_STATE_XCPT_OR_CALL ==
 #  else
 #   define IEMNATIVE_MAX_POSTPONED_EFLAGS_INSTRUCTIONS   32
 #  endif
+# elif defined(RT_ARCH_WASM64)
+#  define IEMNATIVE_MAX_POSTPONED_EFLAGS_INSTRUCTIONS    32
 # else
 #  error "port me"
 # endif

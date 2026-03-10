@@ -70,7 +70,7 @@ int     rtNtQueryFsType(HANDLE hHandle, PRTFSTYPE penmType);
 #endif /* RT_OS_WINDOWS */
 
 #ifdef RT_OS_LINUX
-# ifdef __USE_MISC
+# if defined(__EMSCRIPTEN__) || defined(__USE_MISC)
 #  define HAVE_STAT_TIMESPEC_BRIEF
 # else
 #  define HAVE_STAT_NSEC

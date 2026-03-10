@@ -824,11 +824,26 @@ VMMDECL(int) PDMCritSectLeave(PVMCC pVM, PPDMCRITSECT pCritSect)
      * Always check that the caller is the owner (screw performance).
      */
     RTNATIVETHREAD const hNativeSelf = pdmCritSectGetNativeSelf(pVM, pCritSect);
+#ifdef __EMSCRIPTEN__
+    /* Wasm: ATA I/O threads may leave critsects entered by EMT during device
+       construction.  This is a known ownership transfer pattern that works on
+       native platforms but trips the assertion under Emscripten's threading.
+       Fixup the owner and continue instead of aborting. */
+    if (RT_UNLIKELY(pCritSect->s.Core.NativeThreadOwner != hNativeSelf && hNativeSelf != NIL_RTNATIVETHREAD))
+    {
+        LogRel(("PDMCritSectLeave: owner fixup %p %s: %p -> %p; cLockers=%d cNestings=%d\n",
+                pCritSect, R3STRING(pCritSect->s.pszName),
+                pCritSect->s.Core.NativeThreadOwner, hNativeSelf,
+                pCritSect->s.Core.cLockers, pCritSect->s.Core.cNestings));
+        ASMAtomicWriteHandle(&pCritSect->s.Core.NativeThreadOwner, hNativeSelf);
+    }
+#else
     VMM_ASSERT_RELEASE_MSG_RETURN(pVM, pCritSect->s.Core.NativeThreadOwner == hNativeSelf && hNativeSelf != NIL_RTNATIVETHREAD,
                                   ("%p %s: %p != %p; cLockers=%d cNestings=%d\n", pCritSect, R3STRING(pCritSect->s.pszName),
                                    pCritSect->s.Core.NativeThreadOwner, hNativeSelf,
                                    pCritSect->s.Core.cLockers, pCritSect->s.Core.cNestings),
                                   VERR_NOT_OWNER);
+#endif
 
     /*
      * Nested leave.

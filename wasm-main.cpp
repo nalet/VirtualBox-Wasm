@@ -154,6 +154,7 @@ static DECLCALLBACK(int) vboxWasmCfgmConstructor(PUVM pUVM, PVM pVM, PCVMMR3VTAB
     /* ── PS/2 Keyboard & Mouse ── */
     INSERT_NODE(pDevices, "pckbd", &pDev);
     INSERT_NODE(pDev, "0", &pInst);
+    INSERT_INTEGER(pInst, "Trusted", 1);
     INSERT_NODE(pInst, "Config", &pCfg);
 
     /* ── i8254 Programmable Interval Timer ── */

@@ -753,8 +753,13 @@ function _proc_exit(code) {
   quit_(code, new ExitStatus(code));
 }
 
+var runtimeKeepalivePop = () => {
+  runtimeKeepaliveCounter -= 1;
+};
+
 function exitOnMainThread(returnCode) {
   if (ENVIRONMENT_IS_PTHREAD) return proxyToMainThread(1, 0, 0, returnCode);
+  runtimeKeepalivePop();
   _exit(returnCode);
 }
 
@@ -833,6 +838,13 @@ var PThread = {
     // Detach the worker from the pthread object, and return it to the
     // worker pool as an unused worker.
     worker.pthread_ptr = 0;
+    if (ENVIRONMENT_IS_NODE) {
+      // Once the proxied main thread has finished, mark it as weakly
+      // referenced so that its existence does not prevent Node.js from
+      // exiting.  This has no effect if the worker is already weakly
+      // referenced.
+      worker.unref();
+    }
     // Finally, free the underlying (and now-unused) pthread structure in
     // linear memory.
     __emscripten_thread_free_data(pthread_ptr);
@@ -1028,6 +1040,10 @@ var invokeEntryPoint = (ptr, arg) => {
 var noExitRuntime = true;
 
 var registerTLSInit = tlsInitFunc => PThread.tlsInitFunctions.push(tlsInitFunc);
+
+var runtimeKeepalivePush = () => {
+  runtimeKeepaliveCounter += 1;
+};
 
 var wasmMemory;
 
@@ -5709,10 +5725,6 @@ function _clock_time_get(clk_id, ignored_precision, ptime) {
 
 var _emscripten_check_blocking_allowed = () => {};
 
-var runtimeKeepalivePush = () => {
-  runtimeKeepaliveCounter += 1;
-};
-
 var _emscripten_exit_with_live_runtime = () => {
   runtimeKeepalivePush();
   throw "unwind";
@@ -5812,6 +5824,8 @@ var _emscripten_return_address = function(level) {
   })();
   return BigInt(ret);
 };
+
+var _emscripten_runtime_keepalive_check = keepRuntimeAlive;
 
 var ENV = {};
 
@@ -6313,7 +6327,7 @@ function wasmCallFuncPtrTrampoline(pfn, cArgs, pArgs) {
 }
 
 // Imports from the Wasm binary.
-var _main, _wasmStubGetLog, _pthread_self, _malloc, __emscripten_tls_init, __emscripten_thread_init, __emscripten_thread_crashed, _htonl, _htons, _ntohs, __emscripten_run_js_on_main_thread_done, __emscripten_run_js_on_main_thread, __emscripten_thread_free_data, __emscripten_thread_exit, __emscripten_check_mailbox, _setThrew, _emscripten_stack_set_limits, __emscripten_stack_restore, __emscripten_stack_alloc, _emscripten_stack_get_current, __indirect_function_table, wasmTable;
+var _main, _wasmStubGetLog, _pthread_self, _malloc, __emscripten_tls_init, __emscripten_proxy_main, __emscripten_thread_init, __emscripten_thread_crashed, _htonl, _htons, _ntohs, __emscripten_run_js_on_main_thread_done, __emscripten_run_js_on_main_thread, __emscripten_thread_free_data, __emscripten_thread_exit, __emscripten_check_mailbox, _setThrew, _emscripten_stack_set_limits, __emscripten_stack_restore, __emscripten_stack_alloc, _emscripten_stack_get_current, __indirect_function_table, wasmTable;
 
 function assignWasmExports(wasmExports) {
   _main = Module["_main"] = wasmExports["__main_argc_argv"];
@@ -6321,6 +6335,7 @@ function assignWasmExports(wasmExports) {
   _pthread_self = wasmExports["pthread_self"];
   _malloc = wasmExports["malloc"];
   __emscripten_tls_init = wasmExports["_emscripten_tls_init"];
+  __emscripten_proxy_main = Module["__emscripten_proxy_main"] = wasmExports["_emscripten_proxy_main"];
   __emscripten_thread_init = wasmExports["_emscripten_thread_init"];
   __emscripten_thread_crashed = wasmExports["_emscripten_thread_crashed"];
   _htonl = wasmExports["htonl"];
@@ -6444,6 +6459,7 @@ function assignWasmImports() {
     /** @export */ emscripten_get_now: _emscripten_get_now,
     /** @export */ emscripten_resize_heap: _emscripten_resize_heap,
     /** @export */ emscripten_return_address: _emscripten_return_address,
+    /** @export */ emscripten_runtime_keepalive_check: _emscripten_runtime_keepalive_check,
     /** @export */ environ_get: _environ_get,
     /** @export */ environ_sizes_get: _environ_sizes_get,
     /** @export */ exit: _exit,
@@ -6706,7 +6722,10 @@ function applySignatureConversions(wasmExports) {
 // include: postamble.js
 // === Auto-generated postamble setup entry stuff ===
 function callMain(args = []) {
-  var entryFunction = _main;
+  var entryFunction = __emscripten_proxy_main;
+  // With PROXY_TO_PTHREAD make sure we keep the runtime alive until the
+  // proxied main calls exit (see exitOnMainThread() for where Pop is called).
+  runtimeKeepalivePush();
   args.unshift(thisProgram);
   var argc = args.length;
   var argv = stackAlloc((argc + 1) * 8);

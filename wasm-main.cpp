@@ -189,6 +189,7 @@ static DECLCALLBACK(int) vboxWasmCfgmConstructor(PUVM pUVM, PVM pVM, PCVMMR3VTAB
     INSERT_INTEGER(pInst, "Trusted", 1);
     INSERT_NODE(pInst, "Config", &pCfg);
 
+#if 0 /* Temporarily disabled to test VM creation without storage */
     /*
      * Attach a CD-ROM ISO to the IDE secondary master (LUN#2).
      *
@@ -204,6 +205,7 @@ static DECLCALLBACK(int) vboxWasmCfgmConstructor(PUVM pUVM, PVM pVM, PCVMMR3VTAB
     INSERT_STRING(pLun2Cfg, "Format",   "RAW");
     INSERT_STRING(pLun2Cfg, "Type",     "DVD");
     INSERT_INTEGER(pLun2Cfg, "ReadOnly", 1);
+#endif
 
     /* ── VMMDev ── */
     INSERT_NODE(pDevices, "VMMDev", &pDev);

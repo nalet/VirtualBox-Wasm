@@ -163,12 +163,14 @@ RUN . /opt/emsdk/emsdk_env.sh 2>/dev/null \
 RUN . /opt/emsdk/emsdk_env.sh 2>/dev/null \
     && export PATH="/build/vbox/kBuild/bin/linux.amd64:${PATH}" \
     && echo "=== Phase 4a: Building StorageLib ==" \
+    && find out/linux.amd64/release/obj/StorageLib -name '*.o' -delete 2>/dev/null || true \
     && kmk -C src/VBox/Storage StorageLib 2>&1 | tail -20 || true
 
 # Phase 4b: VBoxDDU (device utilities)
 RUN . /opt/emsdk/emsdk_env.sh 2>/dev/null \
     && export PATH="/build/vbox/kBuild/bin/linux.amd64:${PATH}" \
     && echo "=== Phase 4b: Building VBoxDDU ==" \
+    && find out/linux.amd64/release/obj/VBoxDDU -name '*.o' -delete 2>/dev/null || true \
     && kmk -C src/VBox/Devices VBoxDDU 2>&1 | tail -20 || true
 
 # Phase 4c: VBoxDD2 (firmware/BIOS container)
@@ -176,12 +178,16 @@ RUN . /opt/emsdk/emsdk_env.sh 2>/dev/null \
 RUN . /opt/emsdk/emsdk_env.sh 2>/dev/null \
     && export PATH="/build/vbox/kBuild/bin/linux.amd64:${PATH}" \
     && echo "=== Phase 4c: Building VBoxDD2 ==" \
+    && find out/linux.amd64/release/obj/VBoxDD2 -name '*.o' -delete 2>/dev/null || true \
     && kmk -C src/VBox/Devices VBoxDD2 2>&1 | tail -20 || true
 
 # Phase 4d: VBoxDD (devices - VGA, PS/2, PCI, BIOS, IDE, etc.)
+# Delete stale .o files from Phase 1 (native gcc) so emscripten recompiles them.
+# Without this, kmk sees the existing .o as up-to-date and skips recompilation.
 RUN . /opt/emsdk/emsdk_env.sh 2>/dev/null \
     && export PATH="/build/vbox/kBuild/bin/linux.amd64:${PATH}" \
     && echo "=== Phase 4d: Building VBoxDD ==" \
+    && (find out/linux.amd64/release/obj/VBoxDD -name '*.o' -delete 2>/dev/null; true) \
     && kmk -C src/VBox/Devices VBoxDD 2>&1 | tail -80
 
 

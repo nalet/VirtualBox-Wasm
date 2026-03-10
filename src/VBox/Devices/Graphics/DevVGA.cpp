@@ -7424,6 +7424,106 @@ static DECLCALLBACK(int)   vgaR3Construct(PPDMDEVINS pDevIns, int iInstance, PCF
             rc = PDMDEV_SET_ERROR(pDevIns, rc, N_("VGA cannot attach to status driver"));
         }
     }
+
+#if 1 /* Wasm: Pre-initialize VGA registers for mode 3 (80x25 text) */
+    /*
+     * Wasm hack: Pre-initialize VGA registers for mode 3 (80x25 text).
+     * IEM is too slow for BIOS POST to reach VGA initialization in a
+     * reasonable time.  This sets the VGA into text mode immediately so
+     * any BIOS text output shows up right away.
+     */
+    {
+        /* Sequencer registers for mode 3 */
+        pThis->sr[0] = 0x03;
+        pThis->sr[1] = 0x00;
+        pThis->sr[2] = 0x03;
+        pThis->sr[3] = 0x00;
+        pThis->sr[4] = 0x02;
+
+        /* Misc Output Register */
+        pThis->msr = 0x67;
+
+        /* CRTC registers for 720x400 text (mode 3) */
+        static const uint8_t s_aCrtcMode3[] = {
+            0x5f, 0x4f, 0x50, 0x82, 0x55, 0x81, 0xbf, 0x1f,
+            0x00, 0x4f, 0x06, 0x07, 0x00, 0x00, 0x00, 0x00,
+            0x9c, 0x8e, 0x8f, 0x28, 0x1f, 0x96, 0xb9, 0xa3,
+            0xff
+        };
+        for (i = 0; i < RT_ELEMENTS(s_aCrtcMode3); i++)
+            pThis->cr[i] = s_aCrtcMode3[i];
+
+        /* Graphics Controller registers */
+        pThis->gr[0] = 0x00; pThis->gr[1] = 0x00;
+        pThis->gr[2] = 0x00; pThis->gr[3] = 0x00;
+        pThis->gr[4] = 0x00;
+        pThis->gr[5] = 0x10;  /* odd/even text mode */
+        pThis->gr[6] = 0x0e;  /* text mode, B800 map */
+        pThis->gr[7] = 0x00;
+        pThis->gr[8] = 0xff;
+
+        /* Attribute Controller registers */
+        for (i = 0; i < 16; i++)
+            pThis->ar[i] = (uint8_t)i;
+        pThis->ar[16] = 0x0c;
+        pThis->ar[17] = 0x00;
+        pThis->ar[18] = 0x0f;
+        pThis->ar[19] = 0x08;
+        pThis->ar[20] = 0x00;
+
+        pThis->ar_index = 0x20;  /* Enable display */
+        pThis->last_scr_width = 720;
+        pThis->last_scr_height = 400;
+        pThis->line_offset = 80 * 2;
+
+        /* Standard VGA 16-color text-mode palette */
+        static const uint8_t s_aVgaDac16[16][3] = {
+            {0x00,0x00,0x00},{0x00,0x00,0x2a},{0x00,0x2a,0x00},{0x00,0x2a,0x2a},
+            {0x2a,0x00,0x00},{0x2a,0x00,0x2a},{0x2a,0x15,0x00},{0x2a,0x2a,0x2a},
+            {0x15,0x15,0x15},{0x15,0x15,0x3f},{0x15,0x3f,0x15},{0x15,0x3f,0x3f},
+            {0x3f,0x15,0x15},{0x3f,0x15,0x3f},{0x3f,0x3f,0x15},{0x3f,0x3f,0x3f},
+        };
+        for (i = 0; i < 16; i++)
+        {
+            pThis->palette[i * 3 + 0] = s_aVgaDac16[i][0];
+            pThis->palette[i * 3 + 1] = s_aVgaDac16[i][1];
+            pThis->palette[i * 3 + 2] = s_aVgaDac16[i][2];
+        }
+
+        if (pThisCC->pbVRam)
+        {
+            /* Load 8x16 VGA font into plane 2 of VRAM.
+             * Include font data, suppress unused variable warnings. */
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-variable"
+# include "BIOS/vgafonts.h"
+#pragma GCC diagnostic pop
+            unsigned ch, row;
+            for (ch = 0; ch < 256; ch++)
+                for (row = 0; row < 16; row++)
+                    pThisCC->pbVRam[ch * 32 * 4 + row * 4 + 2] = vgafont16[ch * 16 + row];
+
+            /* Fill text VRAM at offset 0x18000 with spaces */
+            for (i = 0; i < 80 * 25 * 2; i += 2)
+            {
+                pThisCC->pbVRam[0x18000 + i + 0] = 0x20;
+                pThisCC->pbVRam[0x18000 + i + 1] = 0x07;
+            }
+
+            /* Welcome message */
+            static const char szMsg[] = "VirtualBox/Wasm - IEM x86 emulator - BIOS POST in progress...";
+            for (i = 0; i < (unsigned)(sizeof(szMsg) - 1) && i < 80; i++)
+            {
+                pThisCC->pbVRam[0x18000 + i * 2 + 0] = (uint8_t)szMsg[i];
+                pThisCC->pbVRam[0x18000 + i * 2 + 1] = 0x0F;
+            }
+        }
+
+        LogRel(("[VGA] Wasm pre-init: text mode 3 (80x25) with font loaded\n"));
+    }
+#endif /* Wasm VGA pre-init */
+
+
     return rc;
 }
 
@@ -7528,116 +7628,6 @@ static DECLCALLBACK(int) vgaRZConstruct(PPDMDEVINS pDevIns)
         AssertReturn(pThis->hMmio2VmSvgaFifo == NIL_PGMMMIO2HANDLE, VERR_INVALID_STATE);
 # endif
 
-#ifdef __EMSCRIPTEN__
-    /*
-     * Wasm hack: Pre-initialize VGA registers for mode 3 (80x25 text).
-     * IEM is too slow for BIOS POST to reach VGA initialization in a
-     * reasonable time.  This sets the VGA into text mode immediately so
-     * any BIOS text output shows up right away.
-     */
-    {
-        /* Sequencer registers for mode 3 */
-        pThis->sr[0] = 0x03;  /* reset */
-        pThis->sr[1] = 0x00;  /* clocking mode — 8-dot chars */
-        pThis->sr[2] = 0x03;  /* map mask — planes 0+1 enabled */
-        pThis->sr[3] = 0x00;  /* character map select */
-        pThis->sr[4] = 0x02;  /* memory mode — odd/even */
-
-        /* Misc Output Register */
-        pThis->msr = 0x67;    /* clock select 01, enable RAM, IO addr 3Dx */
-
-        /* CRTC registers for 720x400 text (mode 3) */
-        static const uint8_t s_aCrtcMode3[] = {
-            0x5f, 0x4f, 0x50, 0x82, 0x55, 0x81, 0xbf, 0x1f,
-            0x00, 0x4f, 0x06, 0x07, 0x00, 0x00, 0x00, 0x00,
-            0x9c, 0x8e, 0x8f, 0x28, 0x1f, 0x96, 0xb9, 0xa3,
-            0xff
-        };
-        for (unsigned i = 0; i < RT_ELEMENTS(s_aCrtcMode3); i++)
-            pThis->cr[i] = s_aCrtcMode3[i];
-
-        /* Graphics Controller registers */
-        pThis->gr[0] = 0x00;
-        pThis->gr[1] = 0x00;
-        pThis->gr[2] = 0x00;
-        pThis->gr[3] = 0x00;
-        pThis->gr[4] = 0x00;
-        pThis->gr[5] = 0x10;  /* odd/even text mode */
-        pThis->gr[6] = 0x0e;  /* text mode, B800 map */
-        pThis->gr[7] = 0x00;
-        pThis->gr[8] = 0xff;
-
-        /* Attribute Controller registers — palette + text mode control */
-        for (unsigned i = 0; i < 16; i++)
-            pThis->ar[i] = (uint8_t)i;
-        pThis->ar[16] = 0x0c; /* attr mode control — blink enable */
-        pThis->ar[17] = 0x00; /* overscan color */
-        pThis->ar[18] = 0x0f; /* color plane enable */
-        pThis->ar[19] = 0x08; /* horiz pixel panning */
-        pThis->ar[20] = 0x00; /* color select */
-
-        /* Enable display — switches from GMODE_BLANK to GMODE_TEXT */
-        pThis->ar_index = 0x20;
-
-        /* Set last_scr_width/height so vgaR3DrawBlank doesn't return early */
-        pThis->last_scr_width = 720;
-        pThis->last_scr_height = 400;
-
-        /* Initialize line_offset for proper text rendering.
-         * For text mode, line_offset = columns * 2 (character + attribute). */
-        pThis->line_offset = 80 * 2;  /* = cr[0x13] * pitch_multiplier */
-
-        /* Set the standard VGA 16-color text-mode palette (DAC entries) */
-        static const uint8_t s_aVgaDac16[16][3] = {
-            {0x00,0x00,0x00},{0x00,0x00,0x2a},{0x00,0x2a,0x00},{0x00,0x2a,0x2a},
-            {0x2a,0x00,0x00},{0x2a,0x00,0x2a},{0x2a,0x15,0x00},{0x2a,0x2a,0x2a},
-            {0x15,0x15,0x15},{0x15,0x15,0x3f},{0x15,0x3f,0x15},{0x15,0x3f,0x3f},
-            {0x3f,0x15,0x15},{0x3f,0x15,0x3f},{0x3f,0x3f,0x15},{0x3f,0x3f,0x3f},
-        };
-        for (unsigned i = 0; i < 16; i++)
-        {
-            pThis->palette[i * 3 + 0] = s_aVgaDac16[i][0];
-            pThis->palette[i * 3 + 1] = s_aVgaDac16[i][1];
-            pThis->palette[i * 3 + 2] = s_aVgaDac16[i][2];
-        }
-
-        if (pThisCC->pbVRam)
-        {
-            /*
-             * Load 8x16 VGA font into plane 2 of VRAM.
-             * Font data is at plane 2 (byte offset +2 with stride 4).
-             * Each character takes 32 bytes (16 used, 16 padding) × 4 planes.
-             */
-# include "BIOS/vgafonts.h"
-            for (unsigned ch = 0; ch < 256; ch++)
-            {
-                for (unsigned row = 0; row < 16; row++)
-                {
-                    /* Plane 2 byte = offset 2, stride 4 between planes, stride 4 between bytes */
-                    pThisCC->pbVRam[ch * 32 * 4 + row * 4 + 2] = vgafont16[ch * 16 + row];
-                }
-            }
-
-            /* Fill text VRAM at offset 0x18000 (B8000h - A0000h) with spaces.
-             * Text memory uses odd/even: char at even byte, attr at odd byte. */
-            for (unsigned i = 0; i < 80 * 25 * 2; i += 2)
-            {
-                pThisCC->pbVRam[0x18000 + i + 0] = 0x20; /* space */
-                pThisCC->pbVRam[0x18000 + i + 1] = 0x07; /* white on black */
-            }
-
-            /* Write a welcome message on the first line */
-            static const char szMsg[] = "VirtualBox/Wasm - IEM x86 emulator - BIOS POST in progress...";
-            for (unsigned i = 0; i < sizeof(szMsg) - 1 && i < 80; i++)
-            {
-                pThisCC->pbVRam[0x18000 + i * 2 + 0] = (uint8_t)szMsg[i];
-                pThisCC->pbVRam[0x18000 + i * 2 + 1] = 0x0F; /* high-intensity white on black */
-            }
-        }
-
-        Log(("VGA: Wasm pre-init: text mode 3 (80x25) with font loaded\n"));
-    }
-#endif /* __EMSCRIPTEN__ */
 
     return VINF_SUCCESS;
 }

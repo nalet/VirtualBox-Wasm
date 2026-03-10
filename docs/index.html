@@ -707,13 +707,19 @@
         statusEl.className = 'success';
         statusEl.textContent = 'VM initializing (IEM x86 emulation)';
 
+        // Show test pattern to prove display pipeline works
+        // (VGA device output takes minutes under IEM)
+        setTimeout(() => {
+          if (Module._wasmDisplayTestPattern) {
+            Module._wasmDisplayTestPattern();
+            appendLine('Test pattern drawn to framebuffer', 'info');
+          }
+        }, 3000);
+
         // Start VGA framebuffer rendering loop
-        // VGA timer may not fire in Wasm, so we manually trigger display refresh
         function renderLoop() {
           if (!vmRunning) return;
           try {
-            // Trigger VGA device to update framebuffer (timer doesn't fire in Wasm)
-            if (Module._wasmDisplayRefresh) Module._wasmDisplayRefresh();
             VGA.renderFromWasm();
           } catch(e) {
             console.error('[VGA] renderError:', e.message);

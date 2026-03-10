@@ -393,6 +393,41 @@ void wasmDisplayRefresh(void)
     }
 }
 
+/**
+ * Write a test pattern directly to the framebuffer.
+ * Bypasses VGA device entirely — proves the display pipeline works.
+ */
+EMSCRIPTEN_KEEPALIVE
+void wasmDisplayTestPattern(void)
+{
+    if (!g_pWasmDisplay || !g_pWasmDisplay->pbFramebuffer)
+        return;
+
+    uint8_t *fb = g_pWasmDisplay->pbFramebuffer;
+    uint32_t w = g_pWasmDisplay->cxWidth;
+    uint32_t h = g_pWasmDisplay->cyHeight;
+
+    /* Draw colored bars: R, G, B, White, Gray */
+    for (uint32_t y = 0; y < h; y++)
+    {
+        for (uint32_t x = 0; x < w; x++)
+        {
+            uint8_t *p = fb + (y * w + x) * 4;
+            uint32_t bar = x * 5 / w;
+            switch (bar)
+            {
+                case 0: p[0] = 0;   p[1] = 0;   p[2] = 255; break;  /* B=0, G=0, R=255 → Red */
+                case 1: p[0] = 0;   p[1] = 255; p[2] = 0;   break;  /* B=0, G=255, R=0 → Green */
+                case 2: p[0] = 255; p[1] = 0;   p[2] = 0;   break;  /* B=255, G=0, R=0 → Blue */
+                case 3: p[0] = 255; p[1] = 255; p[2] = 255; break;  /* White */
+                case 4: p[0] = 128; p[1] = 128; p[2] = 128; break;  /* Gray */
+            }
+            p[3] = 0; /* X (unused alpha) */
+        }
+    }
+    g_pWasmDisplay->fDirty = 1;
+}
+
 /** Returns number of pfnRefresh calls (debug). */
 EMSCRIPTEN_KEEPALIVE
 uint32_t wasmDisplayGetRefreshCount(void)

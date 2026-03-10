@@ -6734,6 +6734,8 @@ var _wasmDisplayGetFBSize = Module["_wasmDisplayGetFBSize"] = makeInvalidEarlyAc
 
 var _wasmDisplayRefresh = Module["_wasmDisplayRefresh"] = makeInvalidEarlyAccess("_wasmDisplayRefresh");
 
+var _wasmDisplayTestPattern = Module["_wasmDisplayTestPattern"] = makeInvalidEarlyAccess("_wasmDisplayTestPattern");
+
 var _wasmDisplayGetRefreshCount = Module["_wasmDisplayGetRefreshCount"] = makeInvalidEarlyAccess("_wasmDisplayGetRefreshCount");
 
 var _wasmDisplayGetUpdateRectCount = Module["_wasmDisplayGetUpdateRectCount"] = makeInvalidEarlyAccess("_wasmDisplayGetUpdateRectCount");
@@ -6799,6 +6801,7 @@ function assignWasmExports(wasmExports) {
   assert(typeof wasmExports["wasmDisplayCheckDirty"] != "undefined", "missing Wasm export: wasmDisplayCheckDirty");
   assert(typeof wasmExports["wasmDisplayGetFBSize"] != "undefined", "missing Wasm export: wasmDisplayGetFBSize");
   assert(typeof wasmExports["wasmDisplayRefresh"] != "undefined", "missing Wasm export: wasmDisplayRefresh");
+  assert(typeof wasmExports["wasmDisplayTestPattern"] != "undefined", "missing Wasm export: wasmDisplayTestPattern");
   assert(typeof wasmExports["wasmDisplayGetRefreshCount"] != "undefined", "missing Wasm export: wasmDisplayGetRefreshCount");
   assert(typeof wasmExports["wasmDisplayGetUpdateRectCount"] != "undefined", "missing Wasm export: wasmDisplayGetUpdateRectCount");
   assert(typeof wasmExports["fflush"] != "undefined", "missing Wasm export: fflush");
@@ -6834,6 +6837,7 @@ function assignWasmExports(wasmExports) {
   _wasmDisplayCheckDirty = Module["_wasmDisplayCheckDirty"] = createExportWrapper("wasmDisplayCheckDirty", 0);
   _wasmDisplayGetFBSize = Module["_wasmDisplayGetFBSize"] = createExportWrapper("wasmDisplayGetFBSize", 0);
   _wasmDisplayRefresh = Module["_wasmDisplayRefresh"] = createExportWrapper("wasmDisplayRefresh", 0);
+  _wasmDisplayTestPattern = Module["_wasmDisplayTestPattern"] = createExportWrapper("wasmDisplayTestPattern", 0);
   _wasmDisplayGetRefreshCount = Module["_wasmDisplayGetRefreshCount"] = createExportWrapper("wasmDisplayGetRefreshCount", 0);
   _wasmDisplayGetUpdateRectCount = Module["_wasmDisplayGetUpdateRectCount"] = createExportWrapper("wasmDisplayGetUpdateRectCount", 0);
   _fflush = createExportWrapper("fflush", 1);

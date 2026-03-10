@@ -223,7 +223,7 @@ RUN . /opt/emsdk/emsdk_env.sh 2>/dev/null \
 RUN . /opt/emsdk/emsdk_env.sh 2>/dev/null \
     && echo "=== Phase 5: Linking vbox-wasm.js (full VM harness) ==" \
     && mkdir -p docs \
-    && em++ -o docs/vbox-wasm.js wasm-main.cpp wasm-stubs.cpp wasm-display-drv.cpp \
+    && em++ -O2 -o docs/vbox-wasm.js wasm-main.cpp wasm-stubs.cpp wasm-display-drv.cpp \
         /tmp/extra-o/*.o \
         -I include -I out/linux.amd64/release \
         -I src/VBox/Runtime/include \

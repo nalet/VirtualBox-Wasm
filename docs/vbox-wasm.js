@@ -6119,12 +6119,6 @@ function _rtStrConvert(...args) {
 
 _rtStrConvert.stub = true;
 
-function _rtStrGetLocaleCodeset(...args) {
-  abort("missing function: rtStrGetLocaleCodeset");
-}
-
-_rtStrGetLocaleCodeset.stub = true;
-
 var stringToUTF8OnStack = str => {
   var size = lengthBytesUTF8(str) + 1;
   var ret = stackAlloc(size);
@@ -6507,7 +6501,6 @@ function assignWasmImports() {
     /** @export */ rtFsObjInfoAttrSetUnixGroup: _rtFsObjInfoAttrSetUnixGroup,
     /** @export */ rtFsObjInfoAttrSetUnixOwner: _rtFsObjInfoAttrSetUnixOwner,
     /** @export */ rtStrConvert: _rtStrConvert,
-    /** @export */ rtStrGetLocaleCodeset: _rtStrGetLocaleCodeset,
     /** @export */ wasmCallFuncPtrTrampoline
   };
 }

@@ -246,6 +246,31 @@ SUPR3DECL(int) SUPR3LowFree(void *pvPages, size_t cPages)
 
 
 /*************************************************************************
+ * IPRT String/Locale — Emscripten uses UTF-8 natively
+ *************************************************************************/
+
+extern "C" {
+
+DECLHIDDEN(const char *) rtStrGetLocaleCodeset(void)
+{
+    return "UTF-8";
+}
+
+DECLHIDDEN(bool) rtStrIsLocaleCodesetUtf8(void)
+{
+    return true;
+}
+
+DECLHIDDEN(bool) rtStrIsCodesetUtf8(const char *pszCodeset)
+{
+    RT_NOREF(pszCodeset);
+    return true;  /* Emscripten is always UTF-8 */
+}
+
+} /* extern "C" */
+
+
+/*************************************************************************
  * RTMp — Multiprocessor stubs (single CPU for Wasm)
  *************************************************************************/
 

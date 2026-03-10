@@ -709,22 +709,19 @@
 
         // Start VGA framebuffer rendering loop
         let frameCount = 0;
+        console.log('[VGA] Starting render loop, vmRunning=' + vmRunning);
         function renderLoop() {
           if (!vmRunning) return;
+          frameCount++;
+          if (frameCount <= 3 || frameCount % 600 === 0) {
+            const hasFn = typeof Module._wasmDisplayCheckDirty === 'function';
+            console.log('[VGA] frame=' + frameCount + ' hasFn=' + hasFn);
+          }
           try {
             VGA.renderFromWasm();
-            // Debug: log first few frames
-            if (frameCount < 5 || (frameCount % 300 === 0)) {
-              const w = Module._wasmDisplayGetWidth ? Module._wasmDisplayGetWidth() : -1;
-              const h = Module._wasmDisplayGetHeight ? Module._wasmDisplayGetHeight() : -1;
-              const fb = Module._wasmDisplayGetFB ? Module._wasmDisplayGetFB() : 0;
-              const dirty = Module._wasmDisplayCheckDirty ? 'exists' : 'missing';
-              appendLine('[VGA-debug] frame=' + frameCount + ' w=' + w + ' h=' + h + ' fb=0x' + (fb ? fb.toString(16) : '0') + ' dirty-fn=' + dirty, 'log');
-            }
           } catch(e) {
-            if (frameCount < 3) appendLine('[VGA-debug] error: ' + e.message, 'err');
+            if (frameCount <= 3) console.error('[VGA] renderError:', e.message, e.stack);
           }
-          frameCount++;
           requestAnimationFrame(renderLoop);
         }
         requestAnimationFrame(renderLoop);

@@ -13,7 +13,11 @@
  * for ImageData.
  */
 
-#define LOG_GROUP LOG_GROUP_DRV_DISPLAY
+/* When included from VBoxDD.cpp, LOG_GROUP and VBoxDD.h are already present. */
+#ifndef VBOX_INCLUDED_SRC_build_VBoxDD_h
+# define LOG_GROUP LOG_GROUP_DRV_DISPLAY
+# include "VBoxDD.h"
+#endif
 #include <VBox/vmm/pdmdrv.h>
 #include <VBox/vmm/pdmifs.h>
 #include <iprt/assert.h>
@@ -22,8 +26,6 @@
 #include <iprt/stream.h>
 #include <iprt/uuid.h>
 #include <VBox/err.h>
-
-#include "VBoxDD.h"
 
 #ifdef __EMSCRIPTEN__
 # include <emscripten.h>

@@ -346,7 +346,12 @@ extern "C" DECLEXPORT(int) VBoxDriversRegister(PCPDMDRVREGCB pCallbacks, uint32_
     REGISTER_DRIVER(g_DrvACPI);
     REGISTER_DRIVER(g_DrvAcpiCpu);
     REGISTER_DRIVER(g_DrvChar);
-    REGISTER_DRIVER(g_DrvWasmDisplay);
+
+    /* WasmDisplay driver is defined via #include below */
+    {
+        extern const PDMDRVREG g_DrvWasmDisplay;
+        REGISTER_DRIVER(g_DrvWasmDisplay);
+    }
 
 #undef REGISTER_DRIVER
 
@@ -601,3 +606,11 @@ extern "C" DECLEXPORT(int) VBoxUsbRegister(PCPDMUSBREGCB pCallbacks, uint32_t u3
 
     return rc;
 }
+
+/*
+ * Include the WasmDisplay driver source directly into VBoxDD.cpp
+ * so it's compiled as part of VBoxDD.so without modifying Makefile.kmk.
+ */
+#ifdef __EMSCRIPTEN__
+# include "../Graphics/DrvWasmDisplay.cpp"
+#endif

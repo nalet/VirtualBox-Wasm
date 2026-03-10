@@ -45,41 +45,6 @@
 /* Defined in wasm-stubs.cpp — cross-thread debug buffer */
 extern "C" const char *wasmStubGetLog(void);
 
-/* Defined in wasm-display-drv.cpp (compiled separately in Phase 5) */
-extern const PDMDRVREG g_DrvWasmDisplay;
-
-/*
- * Override VBoxDriversRegister from VBoxDD.so to add WasmDisplay driver.
- * VBoxDD's version only registers g_DrvMouseQueue, g_DrvKeyboardQueue, etc.
- * We call it and then add our display driver.
- * With --allow-multiple-definition, this version takes precedence.
- */
-/* Drivers we also need from VBoxDD */
-extern const PDMDRVREG g_DrvMouseQueue;
-extern const PDMDRVREG g_DrvKeyboardQueue;
-extern const PDMDRVREG g_DrvVD;
-extern const PDMDRVREG g_DrvACPI;
-extern const PDMDRVREG g_DrvAcpiCpu;
-extern const PDMDRVREG g_DrvChar;
-
-extern "C" DECLEXPORT(int) VBoxDriversRegister(PCPDMDRVREGCB pCallbacks, uint32_t u32Version)
-{
-    int rc;
-#define REGISTER_DRIVER(drv) \
-    do { rc = pCallbacks->pfnRegister(pCallbacks, &drv); if (RT_FAILURE(rc)) return rc; } while (0)
-
-    REGISTER_DRIVER(g_DrvMouseQueue);
-    REGISTER_DRIVER(g_DrvKeyboardQueue);
-    REGISTER_DRIVER(g_DrvVD);
-    REGISTER_DRIVER(g_DrvACPI);
-    REGISTER_DRIVER(g_DrvAcpiCpu);
-    REGISTER_DRIVER(g_DrvChar);
-    REGISTER_DRIVER(g_DrvWasmDisplay);
-
-#undef REGISTER_DRIVER
-    return VINF_SUCCESS;
-}
-
 
 /*************************************************************************
  * Globals
@@ -220,7 +185,7 @@ static DECLCALLBACK(int) vboxWasmCfgmConstructor(PUVM pUVM, PVM pVM, PCVMMR3VTAB
     INSERT_INTEGER(pCfg, "LogoTime", 0);
     INSERT_STRING(pCfg,  "LogoFile", "");
 
-    /* Attach WasmDisplay driver to VGA LUN#0 for framebuffer output. */
+    /* VGA LUN#0 — WasmDisplay driver */
     {
         PCFGMNODE pLunVga, pLunVgaCfg;
         INSERT_NODE(pInst, "LUN#0", &pLunVga);
@@ -296,6 +261,40 @@ static DECLCALLBACK(void) vboxWasmVMAtError(PUVM pUVM, void *pvUser,
     errBufAppend(szMsg);
     errBufAppend("\n");
     RTPrintf("  %s\n", szMsg);
+}
+
+
+/*************************************************************************
+ * Override VBoxDriversRegister — register our WasmDisplay driver
+ * alongside the builtin drivers from VBoxDD.
+ *
+ * Uses --allow-multiple-definition to override the version in VBoxDD.so.
+ *************************************************************************/
+extern const PDMDRVREG g_DrvWasmDisplay;
+extern const PDMDRVREG g_DrvMouseQueue;
+extern const PDMDRVREG g_DrvKeyboardQueue;
+extern const PDMDRVREG g_DrvVD;
+extern const PDMDRVREG g_DrvACPI;
+extern const PDMDRVREG g_DrvAcpiCpu;
+extern const PDMDRVREG g_DrvChar;
+
+extern "C" DECLEXPORT(int) VBoxDriversRegister(PCPDMDRVREGCB pCallbacks, uint32_t u32Version)
+{
+    RT_NOREF(u32Version);
+    int rc;
+#define REGISTER_DRIVER(drv) \
+    do { rc = pCallbacks->pfnRegister(pCallbacks, &drv); if (RT_FAILURE(rc)) return rc; } while (0)
+
+    REGISTER_DRIVER(g_DrvMouseQueue);
+    REGISTER_DRIVER(g_DrvKeyboardQueue);
+    REGISTER_DRIVER(g_DrvVD);
+    REGISTER_DRIVER(g_DrvACPI);
+    REGISTER_DRIVER(g_DrvAcpiCpu);
+    REGISTER_DRIVER(g_DrvChar);
+    REGISTER_DRIVER(g_DrvWasmDisplay);
+
+#undef REGISTER_DRIVER
+    return VINF_SUCCESS;
 }
 
 

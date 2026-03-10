@@ -462,6 +462,7 @@
         else appendLine(text, 'warn');
         console.warn(text);
       },
+      noInitialRun: true,
       onRuntimeInitialized() {
         appendLine('Emscripten runtime initialized.', 'info');
         runtimeReady = true;

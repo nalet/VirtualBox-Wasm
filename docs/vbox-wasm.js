@@ -6186,6 +6186,14 @@ var writeArrayToMemory = (array, buffer) => {
   return (...args) => ccall(ident, returnType, argTypes, args, opts);
 };
 
+var FS_createPath = (...args) => FS.createPath(...args);
+
+var FS_unlink = (...args) => FS.unlink(...args);
+
+var FS_createLazyFile = (...args) => FS.createLazyFile(...args);
+
+var FS_createDevice = (...args) => FS.createDevice(...args);
+
 PThread.init();
 
 FS.createPreloadedFile = FS_createPreloadedFile;
@@ -6220,9 +6228,29 @@ FS.staticInit();
 }
 
 // Begin runtime exports
+Module["callMain"] = callMain;
+
+Module["addRunDependency"] = addRunDependency;
+
+Module["removeRunDependency"] = removeRunDependency;
+
 Module["ccall"] = ccall;
 
 Module["cwrap"] = cwrap;
+
+Module["FS_preloadFile"] = FS_preloadFile;
+
+Module["FS_unlink"] = FS_unlink;
+
+Module["FS_createPath"] = FS_createPath;
+
+Module["FS_createDevice"] = FS_createDevice;
+
+Module["FS"] = FS;
+
+Module["FS_createDataFile"] = FS_createDataFile;
+
+Module["FS_createLazyFile"] = FS_createLazyFile;
 
 // End runtime exports
 // Begin JS library exports
@@ -6721,7 +6749,7 @@ function run(args = arguments_) {
     initRuntime();
     preMain();
     Module["onRuntimeInitialized"]?.();
-    var noInitialRun = Module["noInitialRun"] || false;
+    var noInitialRun = Module["noInitialRun"] || true;
     if (!noInitialRun) callMain(args);
     postRun();
   }

@@ -351,26 +351,15 @@
       renderFromWasm() {
         if (!Module._wasmDisplayGetFB) return;
 
-        const fbPtr = Module._wasmDisplayGetFB();
-        const w = Module._wasmDisplayGetWidth();
-        const h = Module._wasmDisplayGetHeight();
-        const dirty = Module._wasmDisplayCheckDirty ? Module._wasmDisplayCheckDirty() : -1;
-
-        // Debug: log state periodically
-        if (!this._logCount) this._logCount = 0;
-        this._logCount++;
-        if (this._logCount <= 5 || this._logCount % 300 === 0) {
-          console.log('[VGA-render] fbPtr=' + fbPtr + ' w=' + w + ' h=' + h + ' dirty=' + dirty + ' type=' + typeof fbPtr);
-          if (fbPtr) {
-            try {
-              const off = Number(fbPtr);
-              const peek = new Uint8Array(Module.HEAPU8.buffer, off, 16);
-              console.log('[VGA-render] first 16 bytes:', Array.from(peek).join(','));
-            } catch(e) { console.log('[VGA-render] peek error:', e.message); }
-          }
-        }
+        // memory64 returns BigInt — convert to Number for typed array offsets
+        const fbPtr = Number(Module._wasmDisplayGetFB());
+        const w = Number(Module._wasmDisplayGetWidth());
+        const h = Number(Module._wasmDisplayGetHeight());
 
         if (!fbPtr || w === 0 || h === 0) return;
+
+        // Access wasm linear memory via wasmMemory (always available)
+        const mem = wasmMemory.buffer;
 
         // Resize canvas if display resolution changed
         if (w !== this.width || h !== this.height) {
@@ -383,9 +372,7 @@
         }
 
         const fbSize = w * h * 4;
-        // Read XRGB framebuffer from Wasm memory (memory64 = BigInt pointers)
-        const srcOffset = Number(fbPtr);
-        const src = new Uint8Array(Module.HEAPU8.buffer, srcOffset, fbSize);
+        const src = new Uint8Array(mem, fbPtr, fbSize);
         const dst = this.imageData.data;
 
         // Swizzle BGRX → RGBA (VBox stores B,G,R,X in little-endian order)
@@ -721,19 +708,12 @@
         statusEl.textContent = 'VM initializing (IEM x86 emulation)';
 
         // Start VGA framebuffer rendering loop
-        let frameCount = 0;
-        console.log('[VGA] Starting render loop, vmRunning=' + vmRunning);
         function renderLoop() {
           if (!vmRunning) return;
-          frameCount++;
-          if (frameCount <= 3 || frameCount % 600 === 0) {
-            const hasFn = typeof Module._wasmDisplayCheckDirty === 'function';
-            console.log('[VGA] frame=' + frameCount + ' hasFn=' + hasFn);
-          }
           try {
             VGA.renderFromWasm();
           } catch(e) {
-            if (frameCount <= 3) console.error('[VGA] renderError:', e.message, e.stack);
+            console.error('[VGA] renderError:', e.message);
           }
           requestAnimationFrame(renderLoop);
         }

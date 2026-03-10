@@ -138,7 +138,7 @@ static DECLCALLBACK(int) vboxWasmCfgmConstructor(PUVM pUVM, PVM pVM, PCVMMR3VTAB
     INSERT_STRING(pCfg, "BootDevice1", "IDE");
     INSERT_STRING(pCfg, "BootDevice2", "NONE");
     INSERT_STRING(pCfg, "BootDevice3", "NONE");
-    INSERT_STRING(pCfg, "HardDiskDevice", "piix3ide");
+    INSERT_STRING(pCfg, "HardDiskDevice", "");
     INSERT_STRING(pCfg, "FloppyDevice", "");
     RTUUID Uuid;
     RTUuidClear(&Uuid);
@@ -183,19 +183,15 @@ static DECLCALLBACK(int) vboxWasmCfgmConstructor(PUVM pUVM, PVM pVM, PCVMMR3VTAB
     INSERT_INTEGER(pCfg, "LogoTime", 0);
     INSERT_STRING(pCfg,  "LogoFile", "");
 
+#if 0 /* Temporarily disabled — ATA critsect thread ownership issue */
     /* ── IDE Controller (PIIX3) ── */
     INSERT_NODE(pDevices, "piix3ide", &pDev);
     INSERT_NODE(pDev, "0", &pInst);
     INSERT_INTEGER(pInst, "Trusted", 1);
     INSERT_NODE(pInst, "Config", &pCfg);
 
-#if 0 /* Temporarily disabled to test VM creation without storage */
     /*
      * Attach a CD-ROM ISO to the IDE secondary master (LUN#2).
-     *
-     * LUN numbering for piix3ide:
-     *   LUN#0 = Primary Master    LUN#1 = Primary Slave
-     *   LUN#2 = Secondary Master  LUN#3 = Secondary Slave
      */
     PCFGMNODE pLun2, pLun2Cfg;
     INSERT_NODE(pInst, "LUN#2", &pLun2);

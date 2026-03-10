@@ -372,6 +372,20 @@ uint32_t wasmDisplayGetFBSize(void)
     return g_pWasmDisplay ? g_pWasmDisplay->cbFramebuffer : 0;
 }
 
+/**
+ * Manually trigger a display refresh.
+ * Call this from JS at ~20fps since the VGA timer may not fire in Wasm.
+ */
+EMSCRIPTEN_KEEPALIVE
+void wasmDisplayRefresh(void)
+{
+    if (g_pWasmDisplay && g_pWasmDisplay->pPort)
+    {
+        g_pWasmDisplay->pPort->pfnUpdateDisplay(g_pWasmDisplay->pPort);
+        g_pWasmDisplay->cRefreshCalls++;
+    }
+}
+
 /** Returns number of pfnRefresh calls (debug). */
 EMSCRIPTEN_KEEPALIVE
 uint32_t wasmDisplayGetRefreshCount(void)

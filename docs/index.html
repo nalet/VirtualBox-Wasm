@@ -708,9 +708,12 @@
         statusEl.textContent = 'VM initializing (IEM x86 emulation)';
 
         // Start VGA framebuffer rendering loop
+        // VGA timer may not fire in Wasm, so we manually trigger display refresh
         function renderLoop() {
           if (!vmRunning) return;
           try {
+            // Trigger VGA device to update framebuffer (timer doesn't fire in Wasm)
+            if (Module._wasmDisplayRefresh) Module._wasmDisplayRefresh();
             VGA.renderFromWasm();
           } catch(e) {
             console.error('[VGA] renderError:', e.message);

@@ -5397,8 +5397,25 @@ function ___syscall_recvfrom(fd, buf, len, flags, addr, addrlen) {
   }
 }
 
+function ___syscall_renameat(olddirfd, oldpath, newdirfd, newpath) {
+  if (ENVIRONMENT_IS_PTHREAD) return proxyToMainThread(18, 0, 1, olddirfd, oldpath, newdirfd, newpath);
+  oldpath = bigintToI53Checked(oldpath);
+  newpath = bigintToI53Checked(newpath);
+  try {
+    oldpath = SYSCALLS.getStr(oldpath);
+    newpath = SYSCALLS.getStr(newpath);
+    oldpath = SYSCALLS.calculateAt(olddirfd, oldpath);
+    newpath = SYSCALLS.calculateAt(newdirfd, newpath);
+    FS.rename(oldpath, newpath);
+    return 0;
+  } catch (e) {
+    if (typeof FS == "undefined" || !(e.name === "ErrnoError")) throw e;
+    return -e.errno;
+  }
+}
+
 function ___syscall_sendmsg(fd, message, flags, d1, d2, d3) {
-  if (ENVIRONMENT_IS_PTHREAD) return proxyToMainThread(18, 0, 1, fd, message, flags, d1, d2, d3);
+  if (ENVIRONMENT_IS_PTHREAD) return proxyToMainThread(19, 0, 1, fd, message, flags, d1, d2, d3);
   message = bigintToI53Checked(message);
   d1 = bigintToI53Checked(d1);
   d2 = bigintToI53Checked(d2);
@@ -5438,7 +5455,7 @@ function ___syscall_sendmsg(fd, message, flags, d1, d2, d3) {
 }
 
 function ___syscall_sendto(fd, message, length, flags, addr, addr_len) {
-  if (ENVIRONMENT_IS_PTHREAD) return proxyToMainThread(19, 0, 1, fd, message, length, flags, addr, addr_len);
+  if (ENVIRONMENT_IS_PTHREAD) return proxyToMainThread(20, 0, 1, fd, message, length, flags, addr, addr_len);
   message = bigintToI53Checked(message);
   length = bigintToI53Checked(length);
   addr = bigintToI53Checked(addr);
@@ -5459,7 +5476,7 @@ function ___syscall_sendto(fd, message, length, flags, addr, addr_len) {
 }
 
 function ___syscall_socket(domain, type, protocol) {
-  if (ENVIRONMENT_IS_PTHREAD) return proxyToMainThread(20, 0, 1, domain, type, protocol);
+  if (ENVIRONMENT_IS_PTHREAD) return proxyToMainThread(21, 0, 1, domain, type, protocol);
   try {
     var sock = SOCKFS.createSocket(domain, type, protocol);
     return sock.stream.fd;
@@ -5470,7 +5487,7 @@ function ___syscall_socket(domain, type, protocol) {
 }
 
 function ___syscall_stat64(path, buf) {
-  if (ENVIRONMENT_IS_PTHREAD) return proxyToMainThread(21, 0, 1, path, buf);
+  if (ENVIRONMENT_IS_PTHREAD) return proxyToMainThread(22, 0, 1, path, buf);
   path = bigintToI53Checked(path);
   buf = bigintToI53Checked(buf);
   try {
@@ -5483,7 +5500,7 @@ function ___syscall_stat64(path, buf) {
 }
 
 function ___syscall_unlinkat(dirfd, path, flags) {
-  if (ENVIRONMENT_IS_PTHREAD) return proxyToMainThread(22, 0, 1, dirfd, path, flags);
+  if (ENVIRONMENT_IS_PTHREAD) return proxyToMainThread(23, 0, 1, dirfd, path, flags);
   path = bigintToI53Checked(path);
   try {
     path = SYSCALLS.getStr(path);
@@ -5865,7 +5882,7 @@ var stringToUTF8 = (str, outPtr, maxBytesToWrite) => stringToUTF8Array(str, (gro
 HEAPU8), outPtr, maxBytesToWrite);
 
 function _environ_get(__environ, environ_buf) {
-  if (ENVIRONMENT_IS_PTHREAD) return proxyToMainThread(23, 0, 1, __environ, environ_buf);
+  if (ENVIRONMENT_IS_PTHREAD) return proxyToMainThread(24, 0, 1, __environ, environ_buf);
   __environ = bigintToI53Checked(__environ);
   environ_buf = bigintToI53Checked(environ_buf);
   var bufSize = 0;
@@ -5880,7 +5897,7 @@ function _environ_get(__environ, environ_buf) {
 }
 
 function _environ_sizes_get(penviron_count, penviron_buf_size) {
-  if (ENVIRONMENT_IS_PTHREAD) return proxyToMainThread(24, 0, 1, penviron_count, penviron_buf_size);
+  if (ENVIRONMENT_IS_PTHREAD) return proxyToMainThread(25, 0, 1, penviron_count, penviron_buf_size);
   penviron_count = bigintToI53Checked(penviron_count);
   penviron_buf_size = bigintToI53Checked(penviron_buf_size);
   var strings = getEnvStrings();
@@ -5894,7 +5911,7 @@ function _environ_sizes_get(penviron_count, penviron_buf_size) {
 }
 
 function _fd_close(fd) {
-  if (ENVIRONMENT_IS_PTHREAD) return proxyToMainThread(25, 0, 1, fd);
+  if (ENVIRONMENT_IS_PTHREAD) return proxyToMainThread(26, 0, 1, fd);
   try {
     var stream = SYSCALLS.getStreamFromFD(fd);
     FS.close(stream);
@@ -5906,7 +5923,7 @@ function _fd_close(fd) {
 }
 
 function _fd_fdstat_get(fd, pbuf) {
-  if (ENVIRONMENT_IS_PTHREAD) return proxyToMainThread(26, 0, 1, fd, pbuf);
+  if (ENVIRONMENT_IS_PTHREAD) return proxyToMainThread(27, 0, 1, fd, pbuf);
   pbuf = bigintToI53Checked(pbuf);
   try {
     var rightsBase = 0;
@@ -5948,7 +5965,7 @@ function _fd_fdstat_get(fd, pbuf) {
 };
 
 function _fd_pread(fd, iov, iovcnt, offset, pnum) {
-  if (ENVIRONMENT_IS_PTHREAD) return proxyToMainThread(27, 0, 1, fd, iov, iovcnt, offset, pnum);
+  if (ENVIRONMENT_IS_PTHREAD) return proxyToMainThread(28, 0, 1, fd, iov, iovcnt, offset, pnum);
   iov = bigintToI53Checked(iov);
   iovcnt = bigintToI53Checked(iovcnt);
   offset = bigintToI53Checked(offset);
@@ -5986,7 +6003,7 @@ function _fd_pread(fd, iov, iovcnt, offset, pnum) {
 };
 
 function _fd_pwrite(fd, iov, iovcnt, offset, pnum) {
-  if (ENVIRONMENT_IS_PTHREAD) return proxyToMainThread(28, 0, 1, fd, iov, iovcnt, offset, pnum);
+  if (ENVIRONMENT_IS_PTHREAD) return proxyToMainThread(29, 0, 1, fd, iov, iovcnt, offset, pnum);
   iov = bigintToI53Checked(iov);
   iovcnt = bigintToI53Checked(iovcnt);
   offset = bigintToI53Checked(offset);
@@ -6004,7 +6021,7 @@ function _fd_pwrite(fd, iov, iovcnt, offset, pnum) {
 }
 
 function _fd_read(fd, iov, iovcnt, pnum) {
-  if (ENVIRONMENT_IS_PTHREAD) return proxyToMainThread(29, 0, 1, fd, iov, iovcnt, pnum);
+  if (ENVIRONMENT_IS_PTHREAD) return proxyToMainThread(30, 0, 1, fd, iov, iovcnt, pnum);
   iov = bigintToI53Checked(iov);
   iovcnt = bigintToI53Checked(iovcnt);
   pnum = bigintToI53Checked(pnum);
@@ -6020,7 +6037,7 @@ function _fd_read(fd, iov, iovcnt, pnum) {
 }
 
 function _fd_seek(fd, offset, whence, newOffset) {
-  if (ENVIRONMENT_IS_PTHREAD) return proxyToMainThread(30, 0, 1, fd, offset, whence, newOffset);
+  if (ENVIRONMENT_IS_PTHREAD) return proxyToMainThread(31, 0, 1, fd, offset, whence, newOffset);
   offset = bigintToI53Checked(offset);
   newOffset = bigintToI53Checked(newOffset);
   try {
@@ -6038,7 +6055,7 @@ function _fd_seek(fd, offset, whence, newOffset) {
 }
 
 var _fd_sync = function(fd) {
-  if (ENVIRONMENT_IS_PTHREAD) return proxyToMainThread(31, 0, 2, fd);
+  if (ENVIRONMENT_IS_PTHREAD) return proxyToMainThread(32, 0, 2, fd);
   try {
     var stream = SYSCALLS.getStreamFromFD(fd);
     var rtn = stream.stream_ops?.fsync?.(stream);
@@ -6057,7 +6074,7 @@ var _fd_sync = function(fd) {
 };
 
 function _fd_write(fd, iov, iovcnt, pnum) {
-  if (ENVIRONMENT_IS_PTHREAD) return proxyToMainThread(32, 0, 1, fd, iov, iovcnt, pnum);
+  if (ENVIRONMENT_IS_PTHREAD) return proxyToMainThread(33, 0, 1, fd, iov, iovcnt, pnum);
   iov = bigintToI53Checked(iov);
   iovcnt = bigintToI53Checked(iovcnt);
   pnum = bigintToI53Checked(pnum);
@@ -6096,23 +6113,17 @@ function _rtFsObjInfoAttrSetUnixOwner(...args) {
 
 _rtFsObjInfoAttrSetUnixOwner.stub = true;
 
-function _rtPathFreeNative(...args) {
-  abort("missing function: rtPathFreeNative");
+function _rtStrConvert(...args) {
+  abort("missing function: rtStrConvert");
 }
 
-_rtPathFreeNative.stub = true;
+_rtStrConvert.stub = true;
 
-function _rtPathPosixRename(...args) {
-  abort("missing function: rtPathPosixRename");
+function _rtStrGetLocaleCodeset(...args) {
+  abort("missing function: rtStrGetLocaleCodeset");
 }
 
-_rtPathPosixRename.stub = true;
-
-function _rtPathToNative(...args) {
-  abort("missing function: rtPathToNative");
-}
-
-_rtPathToNative.stub = true;
+_rtStrGetLocaleCodeset.stub = true;
 
 var stringToUTF8OnStack = str => {
   var size = lengthBytesUTF8(str) + 1;
@@ -6274,7 +6285,7 @@ Module["FS_createLazyFile"] = FS_createLazyFile;
 // either synchronously or asynchronously from other threads in postMessage()d
 // or internally queued events. This way a pthread in a Worker can synchronously
 // access e.g. the DOM on the main thread.
-var proxiedFunctionTable = [ _proc_exit, exitOnMainThread, pthreadCreateProxied, ___syscall_chmod, ___syscall_connect, ___syscall_fchmod, ___syscall_fcntl64, ___syscall_fstat64, ___syscall_ftruncate64, ___syscall_getpeername, ___syscall_getsockname, ___syscall_getsockopt, ___syscall_ioctl, ___syscall_lstat64, ___syscall_newfstatat, ___syscall_openat, ___syscall_poll, ___syscall_recvfrom, ___syscall_sendmsg, ___syscall_sendto, ___syscall_socket, ___syscall_stat64, ___syscall_unlinkat, _environ_get, _environ_sizes_get, _fd_close, _fd_fdstat_get, _fd_pread, _fd_pwrite, _fd_read, _fd_seek, _fd_sync, _fd_write ];
+var proxiedFunctionTable = [ _proc_exit, exitOnMainThread, pthreadCreateProxied, ___syscall_chmod, ___syscall_connect, ___syscall_fchmod, ___syscall_fcntl64, ___syscall_fstat64, ___syscall_ftruncate64, ___syscall_getpeername, ___syscall_getsockname, ___syscall_getsockopt, ___syscall_ioctl, ___syscall_lstat64, ___syscall_newfstatat, ___syscall_openat, ___syscall_poll, ___syscall_recvfrom, ___syscall_renameat, ___syscall_sendmsg, ___syscall_sendto, ___syscall_socket, ___syscall_stat64, ___syscall_unlinkat, _environ_get, _environ_sizes_get, _fd_close, _fd_fdstat_get, _fd_pread, _fd_pwrite, _fd_read, _fd_seek, _fd_sync, _fd_write ];
 
 function wasmCallFuncPtrTrampoline(pfn, cArgs, pArgs) {
   var func = wasmTable.get(pfn);
@@ -6438,6 +6449,7 @@ function assignWasmImports() {
     /** @export */ __syscall_openat: ___syscall_openat,
     /** @export */ __syscall_poll: ___syscall_poll,
     /** @export */ __syscall_recvfrom: ___syscall_recvfrom,
+    /** @export */ __syscall_renameat: ___syscall_renameat,
     /** @export */ __syscall_sendmsg: ___syscall_sendmsg,
     /** @export */ __syscall_sendto: ___syscall_sendto,
     /** @export */ __syscall_socket: ___syscall_socket,
@@ -6494,9 +6506,8 @@ function assignWasmImports() {
     /** @export */ rtFsConvertStatToObjInfo: _rtFsConvertStatToObjInfo,
     /** @export */ rtFsObjInfoAttrSetUnixGroup: _rtFsObjInfoAttrSetUnixGroup,
     /** @export */ rtFsObjInfoAttrSetUnixOwner: _rtFsObjInfoAttrSetUnixOwner,
-    /** @export */ rtPathFreeNative: _rtPathFreeNative,
-    /** @export */ rtPathPosixRename: _rtPathPosixRename,
-    /** @export */ rtPathToNative: _rtPathToNative,
+    /** @export */ rtStrConvert: _rtStrConvert,
+    /** @export */ rtStrGetLocaleCodeset: _rtStrGetLocaleCodeset,
     /** @export */ wasmCallFuncPtrTrampoline
   };
 }

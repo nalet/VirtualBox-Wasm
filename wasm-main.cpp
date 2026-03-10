@@ -29,6 +29,7 @@
 #include <VBox/vmm/vmapi.h>
 #include <VBox/vmm/cfgm.h>
 #include <VBox/vmm/pdmapi.h>
+#include <VBox/vmm/pdmdrv.h>
 #include <VBox/vmm/mm.h>
 #include <VBox/err.h>
 #include <VBox/version.h>
@@ -43,6 +44,41 @@
 
 /* Defined in wasm-stubs.cpp — cross-thread debug buffer */
 extern "C" const char *wasmStubGetLog(void);
+
+/* Defined in wasm-display-drv.cpp (compiled separately in Phase 5) */
+extern const PDMDRVREG g_DrvWasmDisplay;
+
+/*
+ * Override VBoxDriversRegister from VBoxDD.so to add WasmDisplay driver.
+ * VBoxDD's version only registers g_DrvMouseQueue, g_DrvKeyboardQueue, etc.
+ * We call it and then add our display driver.
+ * With --allow-multiple-definition, this version takes precedence.
+ */
+/* Drivers we also need from VBoxDD */
+extern const PDMDRVREG g_DrvMouseQueue;
+extern const PDMDRVREG g_DrvKeyboardQueue;
+extern const PDMDRVREG g_DrvVD;
+extern const PDMDRVREG g_DrvACPI;
+extern const PDMDRVREG g_DrvAcpiCpu;
+extern const PDMDRVREG g_DrvChar;
+
+extern "C" DECLEXPORT(int) VBoxDriversRegister(PCPDMDRVREGCB pCallbacks, uint32_t u32Version)
+{
+    int rc;
+#define REGISTER_DRIVER(drv) \
+    do { rc = pCallbacks->pfnRegister(pCallbacks, &drv); if (RT_FAILURE(rc)) return rc; } while (0)
+
+    REGISTER_DRIVER(g_DrvMouseQueue);
+    REGISTER_DRIVER(g_DrvKeyboardQueue);
+    REGISTER_DRIVER(g_DrvVD);
+    REGISTER_DRIVER(g_DrvACPI);
+    REGISTER_DRIVER(g_DrvAcpiCpu);
+    REGISTER_DRIVER(g_DrvChar);
+    REGISTER_DRIVER(g_DrvWasmDisplay);
+
+#undef REGISTER_DRIVER
+    return VINF_SUCCESS;
+}
 
 
 /*************************************************************************

@@ -273,6 +273,7 @@ static DECLCALLBACK(void) wasmDispDestruct(PPDMDRVINS pDrvIns)
 /*************************************************************************
  * Driver registration record
  *************************************************************************/
+extern const PDMDRVREG g_DrvWasmDisplay;
 const PDMDRVREG g_DrvWasmDisplay =
 {
     /* u32Version */

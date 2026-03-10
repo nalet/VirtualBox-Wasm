@@ -269,6 +269,8 @@ static DECLCALLBACK(void) wasmDispDestruct(PPDMDRVINS pDrvIns)
 /*************************************************************************
  * Driver registration record
  *************************************************************************/
+/* extern declaration gives external linkage in C++ (const has internal linkage by default) */
+extern const PDMDRVREG g_DrvWasmDisplay;
 const PDMDRVREG g_DrvWasmDisplay =
 {
     /* u32Version */

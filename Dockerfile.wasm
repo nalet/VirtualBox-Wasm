@@ -185,11 +185,40 @@ RUN . /opt/emsdk/emsdk_env.sh 2>/dev/null \
     && kmk -C src/VBox/Devices VBoxDD 2>&1 | tail -80
 
 
+# Phase 4e: Compile extra IPRT .o files not in RuntimeR3.a
+# (fileio-posix, path, fs, utf8 — cleared by kBuild _EXTENDS overrides)
+RUN . /opt/emsdk/emsdk_env.sh 2>/dev/null \
+    && export PATH="/build/vbox/kBuild/bin/linux.amd64:${PATH}" \
+    && echo "=== Phase 4e: Compiling extra IPRT .o files ===" \
+    && CFLAGS="-sMEMORY64=1 -pthread -O2 \
+        -I include -I out/linux.amd64/release \
+        -I src/VBox/Runtime/include \
+        -DRT_ARCH_AMD64 -D__AMD64__ \
+        -DIN_RING3 -DARCH_BITS=64 -DHC_ARCH_BITS=64 \
+        -DRT_OS_LINUX -DVBOX -DVBOX_OSE \
+        -DVBOX_VMM_TARGET_X86 -DVBOX_WITH_HARDENING \
+        -Wno-unused-command-line-argument" \
+    && mkdir -p /tmp/extra-o \
+    && em++ $CFLAGS -c src/VBox/Runtime/r3/posix/fileio-posix.cpp -o /tmp/extra-o/fileio-posix.o \
+    && em++ $CFLAGS -c src/VBox/Runtime/r3/posix/fileio2-posix.cpp -o /tmp/extra-o/fileio2-posix.o \
+    && em++ $CFLAGS -c src/VBox/Runtime/r3/fileio.cpp -o /tmp/extra-o/fileio.o \
+    && em++ $CFLAGS -c src/VBox/Runtime/r3/posix/fileio-at-posix.cpp -o /tmp/extra-o/fileio-at-posix.o \
+    && em++ $CFLAGS -c src/VBox/Runtime/r3/posix/fileio-sg-posix.cpp -o /tmp/extra-o/fileio-sg-posix.o \
+    && em++ $CFLAGS -c src/VBox/Runtime/r3/posix/fileio-sg-at-posix.cpp -o /tmp/extra-o/fileio-sg-at-posix.o \
+    && em++ $CFLAGS -c src/VBox/Runtime/r3/posix/pathhost-posix.cpp -o /tmp/extra-o/pathhost-posix.o \
+    && em++ $CFLAGS -c src/VBox/Runtime/r3/posix/path-posix.cpp -o /tmp/extra-o/path-posix.o \
+    && em++ $CFLAGS -c src/VBox/Runtime/r3/posix/path2-posix.cpp -o /tmp/extra-o/path2-posix.o \
+    && em++ $CFLAGS -c src/VBox/Runtime/r3/posix/fs2-posix.cpp -o /tmp/extra-o/fs2-posix.o \
+    && em++ $CFLAGS -c src/VBox/Runtime/r3/posix/fs3-posix.cpp -o /tmp/extra-o/fs3-posix.o \
+    && em++ $CFLAGS -c src/VBox/Runtime/r3/posix/utf8-posix.cpp -o /tmp/extra-o/utf8-posix.o \
+    && echo "=== Extra IPRT .o files compiled OK ==="
+
 # Phase 5: Link VM harness (browser target with pthreads)
 RUN . /opt/emsdk/emsdk_env.sh 2>/dev/null \
     && echo "=== Phase 5: Linking vbox-wasm.js (full VM harness) ==" \
     && mkdir -p docs \
     && em++ -o docs/vbox-wasm.js wasm-main.cpp wasm-stubs.cpp \
+        /tmp/extra-o/*.o \
         -I include -I out/linux.amd64/release \
         -I src/VBox/Runtime/include \
         -DRT_ARCH_AMD64 -D__AMD64__ \

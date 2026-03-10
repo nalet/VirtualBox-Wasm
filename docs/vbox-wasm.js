@@ -6732,6 +6732,10 @@ var _wasmDisplayCheckDirty = Module["_wasmDisplayCheckDirty"] = makeInvalidEarly
 
 var _wasmDisplayGetFBSize = Module["_wasmDisplayGetFBSize"] = makeInvalidEarlyAccess("_wasmDisplayGetFBSize");
 
+var _wasmDisplayGetRefreshCount = Module["_wasmDisplayGetRefreshCount"] = makeInvalidEarlyAccess("_wasmDisplayGetRefreshCount");
+
+var _wasmDisplayGetUpdateRectCount = Module["_wasmDisplayGetUpdateRectCount"] = makeInvalidEarlyAccess("_wasmDisplayGetUpdateRectCount");
+
 var _fflush = makeInvalidEarlyAccess("_fflush");
 
 var _malloc = makeInvalidEarlyAccess("_malloc");
@@ -6792,6 +6796,8 @@ function assignWasmExports(wasmExports) {
   assert(typeof wasmExports["wasmDisplayGetHeight"] != "undefined", "missing Wasm export: wasmDisplayGetHeight");
   assert(typeof wasmExports["wasmDisplayCheckDirty"] != "undefined", "missing Wasm export: wasmDisplayCheckDirty");
   assert(typeof wasmExports["wasmDisplayGetFBSize"] != "undefined", "missing Wasm export: wasmDisplayGetFBSize");
+  assert(typeof wasmExports["wasmDisplayGetRefreshCount"] != "undefined", "missing Wasm export: wasmDisplayGetRefreshCount");
+  assert(typeof wasmExports["wasmDisplayGetUpdateRectCount"] != "undefined", "missing Wasm export: wasmDisplayGetUpdateRectCount");
   assert(typeof wasmExports["fflush"] != "undefined", "missing Wasm export: fflush");
   assert(typeof wasmExports["malloc"] != "undefined", "missing Wasm export: malloc");
   assert(typeof wasmExports["_emscripten_tls_init"] != "undefined", "missing Wasm export: _emscripten_tls_init");
@@ -6824,6 +6830,8 @@ function assignWasmExports(wasmExports) {
   _wasmDisplayGetHeight = Module["_wasmDisplayGetHeight"] = createExportWrapper("wasmDisplayGetHeight", 0);
   _wasmDisplayCheckDirty = Module["_wasmDisplayCheckDirty"] = createExportWrapper("wasmDisplayCheckDirty", 0);
   _wasmDisplayGetFBSize = Module["_wasmDisplayGetFBSize"] = createExportWrapper("wasmDisplayGetFBSize", 0);
+  _wasmDisplayGetRefreshCount = Module["_wasmDisplayGetRefreshCount"] = createExportWrapper("wasmDisplayGetRefreshCount", 0);
+  _wasmDisplayGetUpdateRectCount = Module["_wasmDisplayGetUpdateRectCount"] = createExportWrapper("wasmDisplayGetUpdateRectCount", 0);
   _fflush = createExportWrapper("fflush", 1);
   _malloc = createExportWrapper("malloc", 1);
   __emscripten_tls_init = createExportWrapper("_emscripten_tls_init", 0);

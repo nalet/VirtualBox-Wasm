@@ -54,6 +54,10 @@ typedef struct DRVWASMDISPLAY
     uint32_t                cBitsPerPixel;
     /** Dirty flag — set by pfnUpdateRect, cleared by JS after read. */
     volatile int            fDirty;
+    /** Refresh call counter (debug). */
+    volatile uint32_t       cRefreshCalls;
+    /** UpdateRect call counter (debug). */
+    volatile uint32_t       cUpdateRectCalls;
 } DRVWASMDISPLAY;
 typedef DRVWASMDISPLAY *PDRVWASMDISPLAY;
 
@@ -135,6 +139,7 @@ static DECLCALLBACK(void) wasmDispUpdateRect(PPDMIDISPLAYCONNECTOR pInterface,
     PDRVWASMDISPLAY pThis = CON2THIS(pInterface);
     RT_NOREF(x, y, cx, cy);
     pThis->fDirty = 1;
+    pThis->cUpdateRectCalls++;
 }
 
 /**
@@ -144,6 +149,7 @@ static DECLCALLBACK(void) wasmDispUpdateRect(PPDMIDISPLAYCONNECTOR pInterface,
 static DECLCALLBACK(void) wasmDispRefresh(PPDMIDISPLAYCONNECTOR pInterface)
 {
     PDRVWASMDISPLAY pThis = CON2THIS(pInterface);
+    pThis->cRefreshCalls++;
     if (pThis->pPort)
         pThis->pPort->pfnUpdateDisplay(pThis->pPort);
 }
@@ -364,6 +370,20 @@ EMSCRIPTEN_KEEPALIVE
 uint32_t wasmDisplayGetFBSize(void)
 {
     return g_pWasmDisplay ? g_pWasmDisplay->cbFramebuffer : 0;
+}
+
+/** Returns number of pfnRefresh calls (debug). */
+EMSCRIPTEN_KEEPALIVE
+uint32_t wasmDisplayGetRefreshCount(void)
+{
+    return g_pWasmDisplay ? g_pWasmDisplay->cRefreshCalls : 0;
+}
+
+/** Returns number of pfnUpdateRect calls (debug). */
+EMSCRIPTEN_KEEPALIVE
+uint32_t wasmDisplayGetUpdateRectCount(void)
+{
+    return g_pWasmDisplay ? g_pWasmDisplay->cUpdateRectCalls : 0;
 }
 
 } /* extern "C" */

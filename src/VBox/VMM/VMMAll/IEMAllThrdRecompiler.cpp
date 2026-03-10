@@ -3672,6 +3672,27 @@ static IEM_DECL_MSC_GUARD_IGNORE VBOXSTRICTRC iemTbExec(PVMCPUCC pVCpu, PIEMTB p
             AssertCompile(RT_ELEMENTS(pVCpu->iem.s.acThreadedFuncStats) >= kIemThreadedFunc_End);
             pVCpu->iem.s.acThreadedFuncStats[pCallEntry->enmFunction] += 1;
 #endif
+#ifdef __EMSCRIPTEN__
+            /* Wasm64 runtime bounds check: catch OOB enmFunction before call_indirect traps */
+            if (RT_UNLIKELY(pCallEntry->enmFunction >= kIemThreadedFunc_End))
+            {
+                RTAssertMsg1("IEMAllThrdRecompiler", __LINE__, __FILE__, __PRETTY_FUNCTION__);
+                RTAssertMsg2("Threaded dispatch OOB: enmFunction=%u >= kIemThreadedFunc_End=%u\n",
+                             pCallEntry->enmFunction, (unsigned)kIemThreadedFunc_End);
+                RTAssertMsg2("TB: GCPhysPc=%RGp cCalls=%u cCallsLeft=%u callIdx=%u\n",
+                             pTb->GCPhysPc, pTb->Thrd.cCalls, cCallsLeft,
+                             pTb->Thrd.cCalls - cCallsLeft);
+                return VERR_IEM_IPE_1;
+            }
+            if (RT_UNLIKELY(g_apfnIemThreadedFunctions[pCallEntry->enmFunction] == NULL))
+            {
+                RTAssertMsg1("IEMAllThrdRecompiler", __LINE__, __FILE__, __PRETTY_FUNCTION__);
+                RTAssertMsg2("Threaded dispatch NULL: enmFunction=%u (%s)\n",
+                             pCallEntry->enmFunction,
+                             g_apszIemThreadedFunctions[pCallEntry->enmFunction]);
+                return VERR_IEM_IPE_1;
+            }
+#endif
             VBOXSTRICTRC const rcStrict = g_apfnIemThreadedFunctions[pCallEntry->enmFunction](pVCpu,
                                                                                               pCallEntry->auParams[0],
                                                                                               pCallEntry->auParams[1],

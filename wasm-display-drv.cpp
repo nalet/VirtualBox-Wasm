@@ -251,14 +251,6 @@ static DECLCALLBACK(int) wasmDispConstruct(PPDMDRVINS pDrvIns, PCFGMNODE pCfg, u
     /* Set the global pointer for JS access. */
     g_pWasmDisplay = pThis;
 
-    /*
-     * Arm the VGA refresh timer.
-     * Without this, the VGA device never calls pfnRefresh and the
-     * framebuffer stays black.  50ms = 20fps is the VBox default.
-     */
-    pThis->pPort->pfnSetRefreshRate(pThis->pPort, 50);
-    RTPrintf("[WasmDisplay] VGA refresh timer armed (50ms / 20fps)\n");
-
     RTPrintf("[WasmDisplay] Display driver attached (initial %ux%u 32bpp)\n",
              pThis->cxWidth, pThis->cyHeight);
 

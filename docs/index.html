@@ -349,12 +349,28 @@
       },
       /** Read framebuffer from Wasm and paint to canvas. */
       renderFromWasm() {
-        if (!Module._wasmDisplayCheckDirty) return;
-        if (!Module._wasmDisplayCheckDirty()) return;
+        if (!Module._wasmDisplayGetFB) return;
 
+        const fbPtr = Module._wasmDisplayGetFB();
         const w = Module._wasmDisplayGetWidth();
         const h = Module._wasmDisplayGetHeight();
-        if (w === 0 || h === 0) return;
+        const dirty = Module._wasmDisplayCheckDirty ? Module._wasmDisplayCheckDirty() : -1;
+
+        // Debug: log state periodically
+        if (!this._logCount) this._logCount = 0;
+        this._logCount++;
+        if (this._logCount <= 5 || this._logCount % 300 === 0) {
+          console.log('[VGA-render] fbPtr=' + fbPtr + ' w=' + w + ' h=' + h + ' dirty=' + dirty + ' type=' + typeof fbPtr);
+          if (fbPtr) {
+            try {
+              const off = Number(fbPtr);
+              const peek = new Uint8Array(Module.HEAPU8.buffer, off, 16);
+              console.log('[VGA-render] first 16 bytes:', Array.from(peek).join(','));
+            } catch(e) { console.log('[VGA-render] peek error:', e.message); }
+          }
+        }
+
+        if (!fbPtr || w === 0 || h === 0) return;
 
         // Resize canvas if display resolution changed
         if (w !== this.width || h !== this.height) {
@@ -363,11 +379,8 @@
           vgaCanvas.width = w;
           vgaCanvas.height = h;
           this.imageData = vgaCtx.createImageData(w, h);
-          appendLine('[VGA] Resolution: ' + w + 'x' + h, 'info');
+          console.log('[VGA] Resolution: ' + w + 'x' + h);
         }
-
-        const fbPtr = Module._wasmDisplayGetFB();
-        if (!fbPtr) return;
 
         const fbSize = w * h * 4;
         // Read XRGB framebuffer from Wasm memory (memory64 = BigInt pointers)

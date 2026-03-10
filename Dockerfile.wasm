@@ -217,7 +217,7 @@ RUN . /opt/emsdk/emsdk_env.sh 2>/dev/null \
 RUN . /opt/emsdk/emsdk_env.sh 2>/dev/null \
     && echo "=== Phase 5: Linking vbox-wasm.js (full VM harness) ==" \
     && mkdir -p docs \
-    && em++ -o docs/vbox-wasm.js wasm-main.cpp wasm-stubs.cpp \
+    && em++ -o docs/vbox-wasm.js wasm-main.cpp wasm-stubs.cpp wasm-display-drv.cpp \
         /tmp/extra-o/*.o \
         -I include -I out/linux.amd64/release \
         -I src/VBox/Runtime/include \
@@ -248,6 +248,7 @@ RUN . /opt/emsdk/emsdk_env.sh 2>/dev/null \
         -sSTACK_SIZE=2097152 \
         -sENVIRONMENT=web,worker \
         -sEXPORTED_RUNTIME_METHODS='["callMain","FS"]' \
+        -sEXPORTED_FUNCTIONS='["_main","_wasmDisplayGetFB","_wasmDisplayGetWidth","_wasmDisplayGetHeight","_wasmDisplayCheckDirty","_wasmDisplayGetFBSize"]' \
         -sINVOKE_RUN=0 \
         -sMODULARIZE=0 \
         -pthread \

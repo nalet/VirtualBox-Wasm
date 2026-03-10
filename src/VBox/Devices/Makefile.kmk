@@ -179,7 +179,52 @@ if !defined(VBOX_ONLY_EXTPACKS) && "$(intersects $(KBUILD_TARGET_ARCH),$(VBOX_SU
  ifeq ($(KBUILD_TARGET_ARCH),x86)
   VBoxDD_DEFS.darwin     = VBOX_WITH_2X_4GB_ADDR_SPACE
  endif
- VBoxDD_SOURCES          = \
+ ifdef VBOX_WITH_EMSCRIPTEN
+  # Minimal device set for Wasm — enough to boot an x86 guest
+  VBoxDD_SOURCES         = \
+ 	build/VBoxDD.cpp \
+ 	Input/DevPS2.cpp \
+ 	Input/DevPS2K.cpp \
+ 	Input/DevPS2M.cpp \
+ 	Bus/DevPCI.cpp \
+ 	Bus/DevPciIch9.cpp \
+ 	Bus/MsiCommon.cpp \
+ 	Bus/MsixCommon.cpp \
+ 	EFI/DevSmc.cpp \
+ 	EFI/DevFlash.cpp \
+ 	EFI/FlashCore.cpp \
+ 	Graphics/DevVGA.cpp \
+ 	Storage/DevATA.cpp \
+ 	PC/DevPit-i8254.cpp \
+ 	PC/DevPIC.cpp \
+ 	PC/DevACPI.cpp \
+ 	PC/ACPI/VBoxAcpi.cpp \
+ 	PC/DevRTC.cpp \
+ 	PC/DevPcBios.cpp \
+ 	PC/DevFwCommon.cpp \
+ 	PC/DevPcArch.cpp \
+ 	PC/DevQemuFwCfg.cpp \
+ 	PC/DevLpc.cpp \
+ 	VMMDev/VMMDev.cpp \
+ 	VMMDev/VMMDevTesting.cpp \
+ 	PC/DevDMA.cpp \
+ 	PC/DevHPET.cpp \
+ 	PC/DevIoApic.cpp \
+ 	Storage/DevFdc.cpp \
+ 	Input/DrvKeyboardQueue.cpp \
+ 	Input/DrvMouseQueue.cpp \
+ 	PC/DrvACPI.cpp \
+ 	PC/DrvAcpiCpu.cpp \
+ 	Serial/DevSerial.cpp \
+ 	Serial/UartCore.cpp \
+ 	Serial/DrvChar.cpp \
+ 	Serial/DrvRawFile.cpp \
+ 	Storage/Debug.cpp \
+ 	Storage/DrvVD.cpp \
+ 	Storage/IOBufMgmt.cpp \
+ 	Graphics/DrvWasmDisplay.cpp
+ else
+  VBoxDD_SOURCES          = \
  	build/VBoxDD.cpp \
  	\
  	Input/DevPS2.cpp \
@@ -246,20 +291,22 @@ if !defined(VBOX_ONLY_EXTPACKS) && "$(intersects $(KBUILD_TARGET_ARCH),$(VBOX_SU
  	Trace/DrvIfsTrace.cpp \
  	Trace/DrvIfsTrace-serial.cpp \
  	Trace/DrvIfsTrace-tpm.cpp
- ifn1of ($(KBUILD_TARGET), os2)
-  VBoxDD_SOURCES += Storage/DrvHostBase.cpp
- endif
- ifn1of ($(KBUILD_TARGET), os2)
-  VBoxDD_SOURCES += Storage/DrvHostDVD.cpp
- endif
- ifn1of ($(KBUILD_TARGET), darwin freebsd os2 solaris)
-  VBoxDD_SOURCES += Storage/DrvHostFloppy.cpp
- endif
+ endif # !VBOX_WITH_EMSCRIPTEN
+ ifndef VBOX_WITH_EMSCRIPTEN
+  ifn1of ($(KBUILD_TARGET), os2)
+   VBoxDD_SOURCES += Storage/DrvHostBase.cpp
+  endif
+  ifn1of ($(KBUILD_TARGET), os2)
+   VBoxDD_SOURCES += Storage/DrvHostDVD.cpp
+  endif
+  ifn1of ($(KBUILD_TARGET), darwin freebsd os2 solaris)
+   VBoxDD_SOURCES += Storage/DrvHostFloppy.cpp
+  endif
 
-
- ifn1of ($(KBUILD_TARGET), darwin)
-  VBoxDD_SOURCES += Storage/HBDMgmt-generic.cpp
- endif
+  ifn1of ($(KBUILD_TARGET), darwin)
+   VBoxDD_SOURCES += Storage/HBDMgmt-generic.cpp
+  endif
+ endif # !VBOX_WITH_EMSCRIPTEN
 
  VBoxDD_SOURCES.darwin += \
  	Storage/HBDMgmt-darwin.cpp \
@@ -268,8 +315,10 @@ if !defined(VBOX_ONLY_EXTPACKS) && "$(intersects $(KBUILD_TARGET_ARCH),$(VBOX_SU
  VBoxDD_SOURCES.freebsd += \
  	Storage/DrvHostBase-freebsd.cpp
 
- VBoxDD_SOURCES.linux += \
+ ifndef VBOX_WITH_EMSCRIPTEN
+  VBoxDD_SOURCES.linux += \
  	Storage/DrvHostBase-linux.cpp
+ endif
 
  VBoxDD_SOURCES.solaris += \
  	Storage/DrvHostBase-solaris.cpp
@@ -631,13 +680,15 @@ if !defined(VBOX_ONLY_EXTPACKS) && "$(intersects $(KBUILD_TARGET_ARCH),$(VBOX_SU
   	Network/DrvNetShaper.cpp
  endif
 
- # NAT is always available
- VBoxDD_SOURCES += \
- 	Network/DrvNAT.cpp
- VBoxDD_SOURCES.win += \
- 	Network/RTWinSocketPair.cpp
- VBoxDD_LIBS    += $(PATH_STAGE_LIB)/VBox-libslirp$(VBOX_SUFF_LIB)
- VBoxDD_LIBS.darwin += resolv
+ # NAT is always available (except Emscripten — no socket support)
+ ifndef VBOX_WITH_EMSCRIPTEN
+  VBoxDD_SOURCES += \
+  	Network/DrvNAT.cpp
+  VBoxDD_SOURCES.win += \
+  	Network/RTWinSocketPair.cpp
+  VBoxDD_LIBS    += $(PATH_STAGE_LIB)/VBox-libslirp$(VBOX_SUFF_LIB)
+  VBoxDD_LIBS.darwin += resolv
+ endif
  Network/DrvNAT.cpp_INCS = \
  	$(PATH_ROOT)/src/libs/libslirp-4.9.1/include
 
@@ -757,8 +808,9 @@ if !defined(VBOX_ONLY_EXTPACKS) && "$(intersects $(KBUILD_TARGET_ARCH),$(VBOX_SU
 
  # --- Audio bits (see also VBOX_AUDIO_DEFS in ./Config.kmk). ---
 
- VBoxDD_DEFS += $(VBOX_AUDIO_DEFS)
- VBoxDD_SOURCES         += \
+ ifndef VBOX_WITH_EMSCRIPTEN
+  VBoxDD_DEFS += $(VBOX_AUDIO_DEFS)
+  VBoxDD_SOURCES         += \
  	Audio/DevIchAc97.cpp \
  	Audio/DevSB16.cpp \
  	Audio/DevHda.cpp \
@@ -769,6 +821,7 @@ if !defined(VBOX_ONLY_EXTPACKS) && "$(intersects $(KBUILD_TARGET_ARCH),$(VBOX_SU
  	Audio/AudioMixer.cpp \
  	Audio/DrvAudio.cpp \
  	Audio/DrvHostAudioNull.cpp
+ endif # !VBOX_WITH_EMSCRIPTEN
 
  if defined(VBOX_WITH_AUDIO_DEBUG) || defined(VBOX_WITH_AUDIO_VALIDATIONKIT)
   VBoxDD_SOURCES += \
@@ -834,9 +887,11 @@ if !defined(VBOX_ONLY_EXTPACKS) && "$(intersects $(KBUILD_TARGET_ARCH),$(VBOX_SU
   VBoxDD_SOURCES.freebsd += Network/DrvTAP.cpp
  endif # freebsd
 
- VBoxDD_SOURCES.linux += \
+ ifndef VBOX_WITH_EMSCRIPTEN
+  VBoxDD_SOURCES.linux += \
  	Network/DrvTAP.cpp \
  	Parallel/DrvHostParallel.cpp
+ endif
 
  ifeq ($(KBUILD_TARGET),solaris)
   ifdef VBOX_WITH_SUID_WRAPPER
@@ -880,7 +935,12 @@ if !defined(VBOX_ONLY_EXTPACKS) && "$(intersects $(KBUILD_TARGET_ARCH),$(VBOX_SU
  VBoxDD_LIBS            += \
  	$(PATH_STAGE_LIB)/VgaDefBiosLogo$(VBOX_SUFF_LIB) \
  	$(LIB_RUNTIME)
- ifeq ($(KBUILD_TARGET),win)
+ ifdef VBOX_WITH_EMSCRIPTEN
+  # Emscripten: FAKE_DYLIBS makes shared libs into static objects (.so in bin/)
+  VBoxDD_LIBS           += \
+  	$(PATH_STAGE_BIN)/VBoxDDU.so \
+  	$(PATH_STAGE_BIN)/VBoxDD2.so
+ else ifeq ($(KBUILD_TARGET),win)
   VBoxDD_LIBS           += \
   	$(LIB_DDU) \
   	$(PATH_STAGE_LIB)/VBoxDD2.lib
@@ -913,9 +973,16 @@ if !defined(VBOX_ONLY_EXTPACKS) && "$(intersects $(KBUILD_TARGET_ARCH),$(VBOX_SU
  	$(VBoxDD_0_OUTDIR)/vboxaml.hex \
  	$(if $(VBOX_WITH_TPM),$(VBoxDD_0_OUTDIR)/vboxssdt_tpm.hex,)
 
+ ifdef VBOX_WITH_EMSCRIPTEN
+ # Emscripten: use pre-generated vboxaml.hex (bldRTIasl cannot be built for cross-compilation)
+ $$(VBoxDD_0_OUTDIR)/vboxaml.hex: $(PATH_SUB_CURRENT)/PC/vbox.dsl | $$(dir $$@)
+	$(call MSG_TOOL,iasl,VBoxDD,$<,$@)
+	$(QUIET)$(CP) -f "$(PATH_ROOT)/out/linux.amd64/release/obj/VBoxDD/vboxaml.hex" "$$@"
+ else
  $$(VBoxDD_0_OUTDIR)/vboxaml.hex: $(PATH_SUB_CURRENT)/PC/vbox.dsl $(VBOX_RTIASL) | $$(dir $$@)
 	$(call MSG_TOOL,iasl,VBoxDD,$<,$@)
 	$(QUIET)$(VBOX_RTIASL) --text-c-hdr AmlCode -o $@ $<
+ endif
 
  vboxaml.hex:: $$(VBoxDD_0_OUTDIR)/vboxaml.hex
 

@@ -346,6 +346,44 @@
       updateAll(rgbaData) {
         this.imageData.data.set(rgbaData);
         vgaCtx.putImageData(this.imageData, 0, 0);
+      },
+      /** Read framebuffer from Wasm and paint to canvas. */
+      renderFromWasm() {
+        if (!Module._wasmDisplayCheckDirty) return;
+        if (!Module._wasmDisplayCheckDirty()) return;
+
+        const w = Module._wasmDisplayGetWidth();
+        const h = Module._wasmDisplayGetHeight();
+        if (w === 0 || h === 0) return;
+
+        // Resize canvas if display resolution changed
+        if (w !== this.width || h !== this.height) {
+          this.width = w;
+          this.height = h;
+          vgaCanvas.width = w;
+          vgaCanvas.height = h;
+          this.imageData = vgaCtx.createImageData(w, h);
+          appendLine('[VGA] Resolution: ' + w + 'x' + h, 'info');
+        }
+
+        const fbPtr = Module._wasmDisplayGetFB();
+        if (!fbPtr) return;
+
+        const fbSize = w * h * 4;
+        // Read XRGB framebuffer from Wasm memory (memory64 = BigInt pointers)
+        const srcOffset = Number(fbPtr);
+        const src = new Uint8Array(Module.HEAPU8.buffer, srcOffset, fbSize);
+        const dst = this.imageData.data;
+
+        // Swizzle BGRX → RGBA (VBox stores B,G,R,X in little-endian order)
+        for (let i = 0; i < fbSize; i += 4) {
+          dst[i]     = src[i + 2]; // R ← byte 2
+          dst[i + 1] = src[i + 1]; // G ← byte 1
+          dst[i + 2] = src[i];     // B ← byte 0
+          dst[i + 3] = 255;        // A
+        }
+
+        vgaCtx.putImageData(this.imageData, 0, 0);
       }
     };
 
@@ -668,6 +706,14 @@
         vmRunning = true;
         statusEl.className = 'success';
         statusEl.textContent = 'VM initializing (IEM x86 emulation)';
+
+        // Start VGA framebuffer rendering loop
+        function renderLoop() {
+          if (!vmRunning) return;
+          try { VGA.renderFromWasm(); } catch(e) { /* ignore during init */ }
+          requestAnimationFrame(renderLoop);
+        }
+        requestAnimationFrame(renderLoop);
 
       } catch (err) {
         appendLine('VM start failed: ' + err.message, 'err');

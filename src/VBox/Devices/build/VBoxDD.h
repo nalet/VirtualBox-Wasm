@@ -118,6 +118,9 @@ extern const PDMDEVREG g_DeviceTpmPpi;
 extern const PDMDEVREG g_DevicePciVfio;
 #endif
 
+#ifdef __EMSCRIPTEN__
+extern const PDMDRVREG g_DrvWasmDisplay;
+#endif
 extern const PDMDRVREG g_DrvMouseQueue;
 extern const PDMDRVREG g_DrvKeyboardQueue;
 extern const PDMDRVREG g_DrvVBoxHDD;

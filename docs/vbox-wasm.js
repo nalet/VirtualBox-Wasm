@@ -6720,13 +6720,21 @@ function wasmCallFuncPtrTrampoline(pfn, cArgs, pArgs) {
 // Imports from the Wasm binary.
 var _main = Module["_main"] = makeInvalidEarlyAccess("_main");
 
-var _wasmStubGetLog = Module["_wasmStubGetLog"] = makeInvalidEarlyAccess("_wasmStubGetLog");
-
 var _pthread_self = makeInvalidEarlyAccess("_pthread_self");
 
 var _fflush = makeInvalidEarlyAccess("_fflush");
 
 var _malloc = makeInvalidEarlyAccess("_malloc");
+
+var _wasmDisplayGetFB = Module["_wasmDisplayGetFB"] = makeInvalidEarlyAccess("_wasmDisplayGetFB");
+
+var _wasmDisplayGetWidth = Module["_wasmDisplayGetWidth"] = makeInvalidEarlyAccess("_wasmDisplayGetWidth");
+
+var _wasmDisplayGetHeight = Module["_wasmDisplayGetHeight"] = makeInvalidEarlyAccess("_wasmDisplayGetHeight");
+
+var _wasmDisplayCheckDirty = Module["_wasmDisplayCheckDirty"] = makeInvalidEarlyAccess("_wasmDisplayCheckDirty");
+
+var _wasmDisplayGetFBSize = Module["_wasmDisplayGetFBSize"] = makeInvalidEarlyAccess("_wasmDisplayGetFBSize");
 
 var __emscripten_tls_init = makeInvalidEarlyAccess("__emscripten_tls_init");
 
@@ -6778,10 +6786,14 @@ var wasmTable = makeInvalidEarlyAccess("wasmTable");
 
 function assignWasmExports(wasmExports) {
   assert(typeof wasmExports["__main_argc_argv"] != "undefined", "missing Wasm export: __main_argc_argv");
-  assert(typeof wasmExports["wasmStubGetLog"] != "undefined", "missing Wasm export: wasmStubGetLog");
   assert(typeof wasmExports["pthread_self"] != "undefined", "missing Wasm export: pthread_self");
   assert(typeof wasmExports["fflush"] != "undefined", "missing Wasm export: fflush");
   assert(typeof wasmExports["malloc"] != "undefined", "missing Wasm export: malloc");
+  assert(typeof wasmExports["wasmDisplayGetFB"] != "undefined", "missing Wasm export: wasmDisplayGetFB");
+  assert(typeof wasmExports["wasmDisplayGetWidth"] != "undefined", "missing Wasm export: wasmDisplayGetWidth");
+  assert(typeof wasmExports["wasmDisplayGetHeight"] != "undefined", "missing Wasm export: wasmDisplayGetHeight");
+  assert(typeof wasmExports["wasmDisplayCheckDirty"] != "undefined", "missing Wasm export: wasmDisplayCheckDirty");
+  assert(typeof wasmExports["wasmDisplayGetFBSize"] != "undefined", "missing Wasm export: wasmDisplayGetFBSize");
   assert(typeof wasmExports["_emscripten_tls_init"] != "undefined", "missing Wasm export: _emscripten_tls_init");
   assert(typeof wasmExports["_emscripten_proxy_main"] != "undefined", "missing Wasm export: _emscripten_proxy_main");
   assert(typeof wasmExports["emscripten_stack_get_base"] != "undefined", "missing Wasm export: emscripten_stack_get_base");
@@ -6806,10 +6818,14 @@ function assignWasmExports(wasmExports) {
   assert(typeof wasmExports["emscripten_stack_get_current"] != "undefined", "missing Wasm export: emscripten_stack_get_current");
   assert(typeof wasmExports["__indirect_function_table"] != "undefined", "missing Wasm export: __indirect_function_table");
   _main = Module["_main"] = createExportWrapper("__main_argc_argv", 2);
-  _wasmStubGetLog = Module["_wasmStubGetLog"] = createExportWrapper("wasmStubGetLog", 0);
   _pthread_self = createExportWrapper("pthread_self", 0);
   _fflush = createExportWrapper("fflush", 1);
   _malloc = createExportWrapper("malloc", 1);
+  _wasmDisplayGetFB = Module["_wasmDisplayGetFB"] = createExportWrapper("wasmDisplayGetFB", 0);
+  _wasmDisplayGetWidth = Module["_wasmDisplayGetWidth"] = createExportWrapper("wasmDisplayGetWidth", 0);
+  _wasmDisplayGetHeight = Module["_wasmDisplayGetHeight"] = createExportWrapper("wasmDisplayGetHeight", 0);
+  _wasmDisplayCheckDirty = Module["_wasmDisplayCheckDirty"] = createExportWrapper("wasmDisplayCheckDirty", 0);
+  _wasmDisplayGetFBSize = Module["_wasmDisplayGetFBSize"] = createExportWrapper("wasmDisplayGetFBSize", 0);
   __emscripten_tls_init = createExportWrapper("_emscripten_tls_init", 0);
   __emscripten_proxy_main = Module["__emscripten_proxy_main"] = createExportWrapper("_emscripten_proxy_main", 2);
   _emscripten_stack_get_base = wasmExports["emscripten_stack_get_base"];

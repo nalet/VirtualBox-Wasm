@@ -184,6 +184,14 @@ static DECLCALLBACK(int) vboxWasmCfgmConstructor(PUVM pUVM, PVM pVM, PCVMMR3VTAB
     INSERT_INTEGER(pCfg, "LogoTime", 0);
     INSERT_STRING(pCfg,  "LogoFile", "");
 
+    /* Attach WasmDisplay driver to VGA LUN#0 for framebuffer output. */
+    {
+        PCFGMNODE pLunVga, pLunVgaCfg;
+        INSERT_NODE(pInst, "LUN#0", &pLunVga);
+        INSERT_STRING(pLunVga, "Driver", "WasmDisplay");
+        INSERT_NODE(pLunVga, "Config", &pLunVgaCfg);
+    }
+
     /* ── IDE Controller (PIIX3) ── */
     INSERT_NODE(pDevices, "piix3ide", &pDev);
     INSERT_NODE(pDev, "0", &pInst);

@@ -6667,64 +6667,10 @@ function checkIncomingModuleAPI() {
   ignoredModuleProp("loadSplitModule");
 }
 
-function wasmCallFuncPtrTrampoline(pfn, cArgs, pArgs) {
-  var func = wasmTable.get(pfn);
-  if (!func) {
-    err("wasmCallFuncPtrTrampoline: no function at table index " + pfn);
-    return -1;
-  }
-  var idx = Number(pfn);
-  var baseIdx = Number(pArgs) >> 3;
-  var bigArgs = [];
-  for (var i = 0; i < cArgs; i++) {
-    bigArgs.push((growMemViews(), HEAP64)[baseIdx + i]);
-  }
-  if (!Module._typeMaskCache) Module._typeMaskCache = {};
-  var cached = Module._typeMaskCache[idx];
-  if (cached !== undefined) {
-    var args = [];
-    for (var i = 0; i < cArgs; i++) {
-      args.push((cached & (1 << i)) ? Number(bigArgs[i]) : bigArgs[i]);
-    }
-    try {
-      var result = func(...args);
-      return typeof result === "bigint" ? Number(result) : (result | 0);
-    } catch (e) {
-      delete Module._typeMaskCache[idx];
-    }
-  }
-  var numArgs = bigArgs.map(function(v) {
-    return Number(v);
-  });
-  var combos = 1 << cArgs;
-  for (var mask = 0; mask < combos; mask++) {
-    var args = [];
-    for (var i = 0; i < cArgs; i++) {
-      args.push((mask & (1 << i)) ? numArgs[i] : bigArgs[i]);
-    }
-    try {
-      var result = func(...args);
-      Module._typeMaskCache[idx] = mask;
-      return typeof result === "bigint" ? Number(result) : (result | 0);
-    } catch (e) {
-      if (!(e instanceof TypeError)) {
-        err("wasmCallFuncPtrTrampoline: idx=" + idx + " failed: " + e.message);
-        return -1;
-      }
-    }
-  }
-  err("wasmCallFuncPtrTrampoline: exhausted all type combos for idx " + idx + " (" + cArgs + " args)");
-  return -1;
-}
-
 // Imports from the Wasm binary.
 var _main = Module["_main"] = makeInvalidEarlyAccess("_main");
 
 var _pthread_self = makeInvalidEarlyAccess("_pthread_self");
-
-var _fflush = makeInvalidEarlyAccess("_fflush");
-
-var _malloc = makeInvalidEarlyAccess("_malloc");
 
 var _wasmDisplayGetFB = Module["_wasmDisplayGetFB"] = makeInvalidEarlyAccess("_wasmDisplayGetFB");
 
@@ -6735,6 +6681,10 @@ var _wasmDisplayGetHeight = Module["_wasmDisplayGetHeight"] = makeInvalidEarlyAc
 var _wasmDisplayCheckDirty = Module["_wasmDisplayCheckDirty"] = makeInvalidEarlyAccess("_wasmDisplayCheckDirty");
 
 var _wasmDisplayGetFBSize = Module["_wasmDisplayGetFBSize"] = makeInvalidEarlyAccess("_wasmDisplayGetFBSize");
+
+var _fflush = makeInvalidEarlyAccess("_fflush");
+
+var _malloc = makeInvalidEarlyAccess("_malloc");
 
 var __emscripten_tls_init = makeInvalidEarlyAccess("__emscripten_tls_init");
 
@@ -6787,13 +6737,13 @@ var wasmTable = makeInvalidEarlyAccess("wasmTable");
 function assignWasmExports(wasmExports) {
   assert(typeof wasmExports["__main_argc_argv"] != "undefined", "missing Wasm export: __main_argc_argv");
   assert(typeof wasmExports["pthread_self"] != "undefined", "missing Wasm export: pthread_self");
-  assert(typeof wasmExports["fflush"] != "undefined", "missing Wasm export: fflush");
-  assert(typeof wasmExports["malloc"] != "undefined", "missing Wasm export: malloc");
   assert(typeof wasmExports["wasmDisplayGetFB"] != "undefined", "missing Wasm export: wasmDisplayGetFB");
   assert(typeof wasmExports["wasmDisplayGetWidth"] != "undefined", "missing Wasm export: wasmDisplayGetWidth");
   assert(typeof wasmExports["wasmDisplayGetHeight"] != "undefined", "missing Wasm export: wasmDisplayGetHeight");
   assert(typeof wasmExports["wasmDisplayCheckDirty"] != "undefined", "missing Wasm export: wasmDisplayCheckDirty");
   assert(typeof wasmExports["wasmDisplayGetFBSize"] != "undefined", "missing Wasm export: wasmDisplayGetFBSize");
+  assert(typeof wasmExports["fflush"] != "undefined", "missing Wasm export: fflush");
+  assert(typeof wasmExports["malloc"] != "undefined", "missing Wasm export: malloc");
   assert(typeof wasmExports["_emscripten_tls_init"] != "undefined", "missing Wasm export: _emscripten_tls_init");
   assert(typeof wasmExports["_emscripten_proxy_main"] != "undefined", "missing Wasm export: _emscripten_proxy_main");
   assert(typeof wasmExports["emscripten_stack_get_base"] != "undefined", "missing Wasm export: emscripten_stack_get_base");
@@ -6819,13 +6769,13 @@ function assignWasmExports(wasmExports) {
   assert(typeof wasmExports["__indirect_function_table"] != "undefined", "missing Wasm export: __indirect_function_table");
   _main = Module["_main"] = createExportWrapper("__main_argc_argv", 2);
   _pthread_self = createExportWrapper("pthread_self", 0);
-  _fflush = createExportWrapper("fflush", 1);
-  _malloc = createExportWrapper("malloc", 1);
   _wasmDisplayGetFB = Module["_wasmDisplayGetFB"] = createExportWrapper("wasmDisplayGetFB", 0);
   _wasmDisplayGetWidth = Module["_wasmDisplayGetWidth"] = createExportWrapper("wasmDisplayGetWidth", 0);
   _wasmDisplayGetHeight = Module["_wasmDisplayGetHeight"] = createExportWrapper("wasmDisplayGetHeight", 0);
   _wasmDisplayCheckDirty = Module["_wasmDisplayCheckDirty"] = createExportWrapper("wasmDisplayCheckDirty", 0);
   _wasmDisplayGetFBSize = Module["_wasmDisplayGetFBSize"] = createExportWrapper("wasmDisplayGetFBSize", 0);
+  _fflush = createExportWrapper("fflush", 1);
+  _malloc = createExportWrapper("malloc", 1);
   __emscripten_tls_init = createExportWrapper("_emscripten_tls_init", 0);
   __emscripten_proxy_main = Module["__emscripten_proxy_main"] = createExportWrapper("_emscripten_proxy_main", 2);
   _emscripten_stack_get_base = wasmExports["emscripten_stack_get_base"];
@@ -6990,8 +6940,7 @@ function assignWasmImports() {
     /** @export */ invoke_vjj,
     /** @export */ invoke_vjji,
     /** @export */ memory: wasmMemory,
-    /** @export */ proc_exit: _proc_exit,
-    /** @export */ wasmCallFuncPtrTrampoline
+    /** @export */ proc_exit: _proc_exit
   };
 }
 

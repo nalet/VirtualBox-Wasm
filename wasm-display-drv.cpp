@@ -258,7 +258,30 @@ static DECLCALLBACK(int) wasmDispConstruct(PPDMDRVINS pDrvIns, PCFGMNODE pCfg, u
     pThis->pPort->pfnSetRefreshRate(pThis->pPort, 50);
     RTPrintf("[WasmDisplay] VGA refresh timer armed (50ms / 20fps)\n");
 
-    RTPrintf("[WasmDisplay] Display driver attached (initial %ux%u 32bpp)\n",
+    /* Draw test pattern immediately to prove display pipeline works.
+     * VGA device output takes minutes under IEM, so we show this first. */
+    {
+        uint8_t *fb = pThis->pbFramebuffer;
+        uint32_t w = pThis->cxWidth, h = pThis->cyHeight;
+        for (uint32_t y = 0; y < h; y++)
+            for (uint32_t x = 0; x < w; x++)
+            {
+                uint8_t *p = fb + (y * w + x) * 4;
+                uint32_t bar = x * 5 / w;
+                switch (bar)
+                {
+                    case 0: p[0]=0;   p[1]=0;   p[2]=255; break;
+                    case 1: p[0]=0;   p[1]=255; p[2]=0;   break;
+                    case 2: p[0]=255; p[1]=0;   p[2]=0;   break;
+                    case 3: p[0]=255; p[1]=255; p[2]=255; break;
+                    case 4: p[0]=128; p[1]=128; p[2]=128; break;
+                }
+                p[3] = 0;
+            }
+        pThis->fDirty = 1;
+    }
+
+    RTPrintf("[WasmDisplay] Display driver attached (initial %ux%u 32bpp, test pattern drawn)\n",
              pThis->cxWidth, pThis->cyHeight);
 
     return VINF_SUCCESS;

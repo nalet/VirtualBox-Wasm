@@ -1333,50 +1333,98 @@ function execBlock(cpuP, ramB, maxInsn) {
         const srcSeg = segOverride >= 0 ? segBase(segOverride) : dsBase;
 
         switch (b) {
-          case 0xAA: { // STOSB
+          case 0xAA: { // STOSB — optimized bulk fill
             let di = gr16(7);
-            while (cx > 0) {
-              wb(esBase + di, gr8(0));
-              di = (di + dir) & 0xFFFF;
-              cx--;
+            const val = gr8(0);
+            const addr = esBase + di;
+            if (dir === 1 && addr + cx <= ramSize) {
+              // Fast path: forward direction, all in RAM
+              mem8.fill(val, ramBase + addr, ramBase + addr + cx);
+              di = (di + cx) & 0xFFFF;
+              cx = 0;
+            } else {
+              while (cx > 0) {
+                wb(esBase + di, val);
+                di = (di + dir) & 0xFFFF;
+                cx--;
+              }
             }
             sr16(7, di); sr16(1, 0);
             break;
           }
-          case 0xAB: { // STOSW/STOSD
+          case 0xAB: { // STOSW/STOSD — optimized bulk fill
             let di = gr16(7);
             if (opSize === 2) {
               const v = gr16(0);
-              while (cx > 0) { ww(esBase + di, v); di = (di + dir * 2) & 0xFFFF; cx--; }
+              const addr = esBase + di;
+              if (dir === 1 && addr + cx * 2 <= ramSize) {
+                // Fast path: fill 16-bit values using DataView
+                let off = ramBase + addr;
+                for (let i = 0; i < cx; i++) { dv.setUint16(off, v, true); off += 2; }
+                di = (di + cx * 2) & 0xFFFF;
+                cx = 0;
+              } else {
+                while (cx > 0) { ww(esBase + di, v); di = (di + dir * 2) & 0xFFFF; cx--; }
+              }
             } else {
               const v = gr32(0);
-              while (cx > 0) { wd(esBase + di, v); di = (di + dir * 4) & 0xFFFF; cx--; }
+              const addr = esBase + di;
+              if (dir === 1 && addr + cx * 4 <= ramSize) {
+                let off = ramBase + addr;
+                for (let i = 0; i < cx; i++) { dv.setUint32(off, v, true); off += 4; }
+                di = (di + cx * 4) & 0xFFFF;
+                cx = 0;
+              } else {
+                while (cx > 0) { wd(esBase + di, v); di = (di + dir * 4) & 0xFFFF; cx--; }
+              }
             }
             sr16(7, di); sr16(1, 0);
             break;
           }
-          case 0xA4: { // MOVSB
+          case 0xA4: { // MOVSB — optimized bulk copy
             let si = gr16(6), di = gr16(7);
-            while (cx > 0) {
-              wb(esBase + di, rb(srcSeg + si));
-              si = (si + dir) & 0xFFFF;
-              di = (di + dir) & 0xFFFF;
-              cx--;
+            const srcAddr = srcSeg + si;
+            const dstAddr = esBase + di;
+            if (dir === 1 && srcAddr + cx <= ramSize && dstAddr + cx <= ramSize) {
+              // Fast path: forward direction, both in RAM
+              mem8.copyWithin(ramBase + dstAddr, ramBase + srcAddr, ramBase + srcAddr + cx);
+              si = (si + cx) & 0xFFFF;
+              di = (di + cx) & 0xFFFF;
+              cx = 0;
+            } else {
+              while (cx > 0) {
+                wb(esBase + di, rb(srcSeg + si));
+                si = (si + dir) & 0xFFFF;
+                di = (di + dir) & 0xFFFF;
+                cx--;
+              }
             }
             sr16(6, si); sr16(7, di); sr16(1, 0);
             break;
           }
-          case 0xA5: { // MOVSW/MOVSD
+          case 0xA5: { // MOVSW/MOVSD — optimized bulk copy
             let si = gr16(6), di = gr16(7);
+            const srcAddr5 = srcSeg + si;
+            const dstAddr5 = esBase + di;
             if (opSize === 2) {
-              while (cx > 0) {
-                ww(esBase + di, rw(srcSeg + si));
-                si = (si + dir * 2) & 0xFFFF; di = (di + dir * 2) & 0xFFFF; cx--;
+              if (dir === 1 && srcAddr5 + cx * 2 <= ramSize && dstAddr5 + cx * 2 <= ramSize) {
+                mem8.copyWithin(ramBase + dstAddr5, ramBase + srcAddr5, ramBase + srcAddr5 + cx * 2);
+                si = (si + cx * 2) & 0xFFFF; di = (di + cx * 2) & 0xFFFF; cx = 0;
+              } else {
+                while (cx > 0) {
+                  ww(esBase + di, rw(srcSeg + si));
+                  si = (si + dir * 2) & 0xFFFF; di = (di + dir * 2) & 0xFFFF; cx--;
+                }
               }
             } else {
-              while (cx > 0) {
-                wd(esBase + di, rd(srcSeg + si));
-                si = (si + dir * 4) & 0xFFFF; di = (di + dir * 4) & 0xFFFF; cx--;
+              if (dir === 1 && srcAddr5 + cx * 4 <= ramSize && dstAddr5 + cx * 4 <= ramSize) {
+                mem8.copyWithin(ramBase + dstAddr5, ramBase + srcAddr5, ramBase + srcAddr5 + cx * 4);
+                si = (si + cx * 4) & 0xFFFF; di = (di + cx * 4) & 0xFFFF; cx = 0;
+              } else {
+                while (cx > 0) {
+                  wd(esBase + di, rd(srcSeg + si));
+                  si = (si + dir * 4) & 0xFFFF; di = (di + dir * 4) & 0xFFFF; cx--;
+                }
               }
             }
             sr16(6, si); sr16(7, di); sr16(1, 0);

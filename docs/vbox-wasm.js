@@ -684,6 +684,8 @@ globalThis.VBoxJIT = (function() {
       return 0;
     }
     let executed = 0;
+    let lastBailOp = -1;
+    // track the opcode that caused early exit
     const ramSize = mem8.length - ramBase;
     // available RAM
     // Pre-read a chunk of code for fast access
@@ -1952,6 +1954,7 @@ globalThis.VBoxJIT = (function() {
 
              default:
               // INSB/INSW/OUTSB/OUTSW — fall back to IEM
+              lastBailOp = b;
               iter = maxInsn;
               // force exit
               break;
@@ -2089,6 +2092,7 @@ globalThis.VBoxJIT = (function() {
               break;
 
              default:
+              lastBailOp = b;
               iter = maxInsn;
               break;
             }
@@ -2168,6 +2172,7 @@ globalThis.VBoxJIT = (function() {
             }
           } else {
             // MUL, IMUL, DIV, IDIV — fallback
+            lastBailOp = b;
             iter = maxInsn;
             break;
           }
@@ -2240,6 +2245,7 @@ globalThis.VBoxJIT = (function() {
               }
             }
           } else {
+            lastBailOp = b;
             iter = maxInsn;
             break;
           }
@@ -2339,6 +2345,7 @@ globalThis.VBoxJIT = (function() {
             }
 
            default:
+            lastBailOp = b;
             iter = maxInsn;
             break;
           }
@@ -2358,6 +2365,7 @@ globalThis.VBoxJIT = (function() {
           ilen += 2;
           const op = (modrm >> 3) & 7;
           if (op > 1) {
+            lastBailOp = b;
             iter = maxInsn;
             break;
           }
@@ -2492,6 +2500,7 @@ globalThis.VBoxJIT = (function() {
             if (opSize === 2) push16(val, ssBase); else push32(val, ssBase);
           } else {
             // CALL/JMP far — fallback
+            lastBailOp = 65280 | op;
             iter = maxInsn;
             break;
           }
@@ -2639,6 +2648,7 @@ globalThis.VBoxJIT = (function() {
 
            default:
             // Unsupported 0x0F opcode — fallback
+            lastBailOp = 3840 | b2;
             iter = maxInsn;
             break;
           }
@@ -2661,6 +2671,7 @@ globalThis.VBoxJIT = (function() {
             wr16(R_IP, ip);
             continue;
           } else {
+            lastBailOp = b;
             iter = maxInsn;
             break;
           }
@@ -2685,6 +2696,7 @@ globalThis.VBoxJIT = (function() {
             wr16(R_IP, ip);
             continue;
           } else {
+            lastBailOp = b;
             iter = maxInsn;
             break;
           }
@@ -2704,6 +2716,7 @@ globalThis.VBoxJIT = (function() {
             wr16(R_IP, ip);
             continue;
           } else {
+            lastBailOp = b;
             iter = maxInsn;
             break;
           }
@@ -2824,9 +2837,7 @@ globalThis.VBoxJIT = (function() {
         default:
         {
           // INT, IRET, HLT, CPUID, RDTSC, etc. — let IEM handle
-          const key = b < 256 ? b : ((c0 << 8) | b);
-          // track effective opcode (with 0x0F prefix)
-          fallbackOpcodes.set(key, (fallbackOpcodes.get(key) || 0) + 1);
+          lastBailOp = b;
           iter = maxInsn;
           break;
         }
@@ -2844,19 +2855,8 @@ globalThis.VBoxJIT = (function() {
     const newFlags = (flags & 4294963200) | flagsToWord();
     wr32(R_FLAGS, newFlags);
     // Track bail opcode if we exited early
-    if (executed < maxInsn && executed > 0) {
-      const bailPhys = csBase + ip;
-      if (bailPhys >= 0 && bailPhys + 2 < ramSize) {
-        let bailByte = mem8[ramBase + bailPhys];
-        // For opcodes with modrm reg field (0x80-0x83, 0xF6/F7, 0xFF), include /reg
-        if (bailByte === 255 || bailByte === 246 || bailByte === 247) {
-          const modrm = mem8[ramBase + bailPhys + 1];
-          bailByte = (bailByte << 4) | ((modrm >> 3) & 7);
-        } else if (bailByte === 15) {
-          bailByte = (bailByte << 8) | mem8[ramBase + bailPhys + 1];
-        }
-        fallbackOpcodes.set(bailByte, (fallbackOpcodes.get(bailByte) || 0) + 1);
-      }
+    if (lastBailOp >= 0) {
+      fallbackOpcodes.set(lastBailOp, (fallbackOpcodes.get(lastBailOp) || 0) + 1);
     }
     return executed;
   }

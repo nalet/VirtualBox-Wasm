@@ -385,6 +385,7 @@ function execBlock(cpuP, ramB, maxInsn) {
   }
 
   let executed = 0;
+  let lastBailOp = -1; // track the opcode that caused early exit
   const ramSize = mem8.length - ramBase; // available RAM
 
   // Pre-read a chunk of code for fast access
@@ -1338,7 +1339,7 @@ function execBlock(cpuP, ramB, maxInsn) {
           }
           default:
             // INSB/INSW/OUTSB/OUTSW — fall back to IEM
-            iter = maxInsn; // force exit
+            lastBailOp = b; iter = maxInsn; // force exit
             break;
         }
       } else if (repPrefix && (b === 0xAE || b === 0xAF)) {
@@ -1433,7 +1434,7 @@ function execBlock(cpuP, ramB, maxInsn) {
             else alu32(7, gr32(0), rd(esBase+gr16(7)));
             sr16(7,(gr16(7)+dir*opSize)&0xFFFF); break;
           default:
-            iter = maxInsn; break;
+            lastBailOp = b; iter = maxInsn; break;
         }
       }
       break;
@@ -1495,7 +1496,7 @@ function execBlock(cpuP, ramB, maxInsn) {
         }
       } else {
         // MUL, IMUL, DIV, IDIV — fallback
-        iter = maxInsn; break;
+        lastBailOp = b; iter = maxInsn; break;
       }
       break;
     }
@@ -1548,7 +1549,7 @@ function execBlock(cpuP, ramB, maxInsn) {
           else { alu32(4, rd(m.ea), mem8[off]|(mem8[off+1]<<8)|(mem8[off+2]<<16)|(mem8[off+3]<<24)); ilen += 4; }
         }
       } else {
-        iter = maxInsn; break;
+        lastBailOp = b; iter = maxInsn; break;
       }
       break;
     }
@@ -1629,7 +1630,7 @@ function execBlock(cpuP, ramB, maxInsn) {
           break;
         }
         default:
-          iter = maxInsn; break; // RCL, RCR — complex, fallback
+          lastBailOp = b; iter = maxInsn; break; // RCL, RCR — complex, fallback
       }
 
       if (isMem) {
@@ -1649,7 +1650,7 @@ function execBlock(cpuP, ramB, maxInsn) {
     case 0xFE: {
       const modrm = mem8[ci+1]; ilen += 2;
       const op = (modrm >> 3) & 7;
-      if (op > 1) { iter = maxInsn; break; }
+      if (op > 1) { lastBailOp = b; iter = maxInsn; break; }
       const oldCF = getCF();
       if ((modrm >> 6) === 3) {
         const rm = modrm & 7;
@@ -1747,7 +1748,7 @@ function execBlock(cpuP, ramB, maxInsn) {
         else push32(val, ssBase);
       } else {
         // CALL/JMP far — fallback
-        iter = maxInsn; break;
+        lastBailOp = 0xFF00 | op; iter = maxInsn; break;
       }
       break;
     }
@@ -1860,7 +1861,7 @@ function execBlock(cpuP, ramB, maxInsn) {
 
         default:
           // Unsupported 0x0F opcode — fallback
-          iter = maxInsn;
+          lastBailOp = 0x0F00 | b2; iter = maxInsn;
           break;
       }
       break;
@@ -1878,7 +1879,7 @@ function execBlock(cpuP, ramB, maxInsn) {
         ip = newIP;
         ilen = 0; executed++; wr16(R_IP, ip); continue;
       } else {
-        iter = maxInsn; break; // 32-bit far jump — complex
+        lastBailOp = b; iter = maxInsn; break; // 32-bit far jump — complex
       }
     }
 
@@ -1895,7 +1896,7 @@ function execBlock(cpuP, ramB, maxInsn) {
         ip = newIP;
         ilen = 0; executed++; wr16(R_IP, ip); continue;
       } else {
-        iter = maxInsn; break;
+        lastBailOp = b; iter = maxInsn; break;
       }
     }
 
@@ -1909,7 +1910,7 @@ function execBlock(cpuP, ramB, maxInsn) {
         ip = newIP;
         ilen = 0; executed++; wr16(R_IP, ip); continue;
       } else {
-        iter = maxInsn; break;
+        lastBailOp = b; iter = maxInsn; break;
       }
     }
 
@@ -1974,9 +1975,7 @@ function execBlock(cpuP, ramB, maxInsn) {
     // ──── Unsupported — fallback to IEM ────
     default: {
       // INT, IRET, HLT, CPUID, RDTSC, etc. — let IEM handle
-      const key = b < 0x100 ? b : ((c0 << 8) | b); // track effective opcode (with 0x0F prefix)
-      fallbackOpcodes.set(key, (fallbackOpcodes.get(key) || 0) + 1);
-      iter = maxInsn;
+      lastBailOp = b; iter = maxInsn;
       break;
     }
     } // end switch
@@ -1994,19 +1993,8 @@ function execBlock(cpuP, ramB, maxInsn) {
   wr32(R_FLAGS, newFlags);
 
   // Track bail opcode if we exited early
-  if (executed < maxInsn && executed > 0) {
-    const bailPhys = csBase + ip;
-    if (bailPhys >= 0 && bailPhys + 2 < ramSize) {
-      let bailByte = mem8[ramBase + bailPhys];
-      // For opcodes with modrm reg field (0x80-0x83, 0xF6/F7, 0xFF), include /reg
-      if (bailByte === 0xFF || bailByte === 0xF6 || bailByte === 0xF7) {
-        const modrm = mem8[ramBase + bailPhys + 1];
-        bailByte = (bailByte << 4) | ((modrm >> 3) & 7); // e.g., 0xFF0 for FF/0
-      } else if (bailByte === 0x0F) {
-        bailByte = (bailByte << 8) | mem8[ramBase + bailPhys + 1]; // 0x0Fxx
-      }
-      fallbackOpcodes.set(bailByte, (fallbackOpcodes.get(bailByte) || 0) + 1);
-    }
+  if (lastBailOp >= 0) {
+    fallbackOpcodes.set(lastBailOp, (fallbackOpcodes.get(lastBailOp) || 0) + 1);
   }
 
   return executed;

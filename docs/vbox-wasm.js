@@ -1032,7 +1032,13 @@ globalThis.VBoxJIT = (function() {
             ilen += m.len;
             val = rw(m.ea);
           }
-          // Update selector and base (real mode: base = sel << 4)
+          // In protected mode, MOV Sreg requires GDT lookup — let IEM handle it.
+          if (!realMode) {
+            lastBailOp = 142;
+            iter = maxInsn;
+            break;
+          }
+          // Real mode: base = sel << 4
           const sOff = SEG_OFFS[sreg];
           if (!sOff && sreg !== 0) {
             ip = (ip + ilen) & 65535;
@@ -1040,11 +1046,8 @@ globalThis.VBoxJIT = (function() {
           }
           // invalid sreg
           wr16(sOff + SEG_SEL, val);
-          if (realMode) {
-            wr64(sOff + SEG_BASE, val << 4);
-            // Refresh cached bases
-            if (sreg === 3) dsBase = val << 4; else if (sreg === 2) ssBase = val << 4; else if (sreg === 0) esBase = val << 4;
-          }
+          wr64(sOff + SEG_BASE, val << 4);
+          if (sreg === 3) dsBase = val << 4; else if (sreg === 2) ssBase = val << 4; else if (sreg === 0) esBase = val << 4;
           break;
         }
 
@@ -3345,36 +3348,45 @@ globalThis.VBoxJIT = (function() {
        // ──── POP ES/SS/DS (0x07,0x17,0x1F) ────
         case 7:
         {
+          if (!realMode) {
+            lastBailOp = b;
+            iter = maxInsn;
+            break;
+          }
           const v = pop16(ssBase);
           wr16(S_ES + SEG_SEL, v);
-          if (realMode) {
-            wr64(S_ES + SEG_BASE, v << 4);
-            esBase = v << 4;
-          }
+          wr64(S_ES + SEG_BASE, v << 4);
+          esBase = v << 4;
           ilen += 1;
           break;
         }
 
        case 23:
         {
+          if (!realMode) {
+            lastBailOp = b;
+            iter = maxInsn;
+            break;
+          }
           const v = pop16(ssBase);
           wr16(S_SS + SEG_SEL, v);
-          if (realMode) {
-            wr64(S_SS + SEG_BASE, v << 4);
-            ssBase = v << 4;
-          }
+          wr64(S_SS + SEG_BASE, v << 4);
+          ssBase = v << 4;
           ilen += 1;
           break;
         }
 
        case 31:
         {
+          if (!realMode) {
+            lastBailOp = b;
+            iter = maxInsn;
+            break;
+          }
           const v = pop16(ssBase);
           wr16(S_DS + SEG_SEL, v);
-          if (realMode) {
-            wr64(S_DS + SEG_BASE, v << 4);
-            dsBase = v << 4;
-          }
+          wr64(S_DS + SEG_BASE, v << 4);
+          dsBase = v << 4;
           ilen += 1;
           break;
         }
@@ -3382,6 +3394,11 @@ globalThis.VBoxJIT = (function() {
        // ──── LES r, m (0xC4) ────
         case 196:
         {
+          if (!realMode) {
+            lastBailOp = b;
+            iter = maxInsn;
+            break;
+          }
           const modrm = mem8[ci + 1];
           ilen += 2;
           if ((modrm >> 6) === 3) {
@@ -3400,16 +3417,19 @@ globalThis.VBoxJIT = (function() {
           }
           const seg = rw(m.ea + opSize);
           wr16(S_ES + SEG_SEL, seg);
-          if (realMode) {
-            wr64(S_ES + SEG_BASE, seg << 4);
-            esBase = seg << 4;
-          }
+          wr64(S_ES + SEG_BASE, seg << 4);
+          esBase = seg << 4;
           break;
         }
 
        // ──── LDS r, m (0xC5) ────
         case 197:
         {
+          if (!realMode) {
+            lastBailOp = b;
+            iter = maxInsn;
+            break;
+          }
           const modrm = mem8[ci + 1];
           ilen += 2;
           if ((modrm >> 6) === 3) {
@@ -3427,10 +3447,8 @@ globalThis.VBoxJIT = (function() {
           }
           const seg = rw(m.ea + opSize);
           wr16(S_DS + SEG_SEL, seg);
-          if (realMode) {
-            wr64(S_DS + SEG_BASE, seg << 4);
-            dsBase = seg << 4;
-          }
+          wr64(S_DS + SEG_BASE, seg << 4);
+          dsBase = seg << 4;
           break;
         }
 

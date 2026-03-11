@@ -676,17 +676,16 @@ function execBlock(cpuP, ramB, maxInsn) {
         ilen += m.len;
         val = rw(m.ea);
       }
-      // Update selector and base (real mode: base = sel << 4)
+      // In protected mode, MOV Sreg requires GDT lookup — let IEM handle it.
+      if (!realMode) { lastBailOp = 0x8E; iter = maxInsn; break; }
+      // Real mode: base = sel << 4
       const sOff = SEG_OFFS[sreg];
       if (!sOff && sreg !== 0) { ip = (ip + ilen) & 0xFFFF; break; } // invalid sreg
       wr16(sOff + SEG_SEL, val);
-      if (realMode) {
-        wr64(sOff + SEG_BASE, val << 4);
-        // Refresh cached bases
-        if (sreg === 3) dsBase = val << 4;
-        else if (sreg === 2) ssBase = val << 4;
-        else if (sreg === 0) esBase = val << 4;
-      }
+      wr64(sOff + SEG_BASE, val << 4);
+      if (sreg === 3) dsBase = val << 4;
+      else if (sreg === 2) ssBase = val << 4;
+      else if (sreg === 0) esBase = val << 4;
       break;
     }
 
@@ -2295,29 +2294,30 @@ function execBlock(cpuP, ramB, maxInsn) {
 
     // ──── POP ES/SS/DS (0x07,0x17,0x1F) ────
     case 0x07: {
+      if (!realMode) { lastBailOp = b; iter = maxInsn; break; }
       const v = pop16(ssBase);
-      wr16(S_ES + SEG_SEL, v);
-      if (realMode) { wr64(S_ES + SEG_BASE, v << 4); esBase = v << 4; }
+      wr16(S_ES + SEG_SEL, v); wr64(S_ES + SEG_BASE, v << 4); esBase = v << 4;
       ilen += 1;
       break;
     }
     case 0x17: {
+      if (!realMode) { lastBailOp = b; iter = maxInsn; break; }
       const v = pop16(ssBase);
-      wr16(S_SS + SEG_SEL, v);
-      if (realMode) { wr64(S_SS + SEG_BASE, v << 4); ssBase = v << 4; }
+      wr16(S_SS + SEG_SEL, v); wr64(S_SS + SEG_BASE, v << 4); ssBase = v << 4;
       ilen += 1;
       break;
     }
     case 0x1F: {
+      if (!realMode) { lastBailOp = b; iter = maxInsn; break; }
       const v = pop16(ssBase);
-      wr16(S_DS + SEG_SEL, v);
-      if (realMode) { wr64(S_DS + SEG_BASE, v << 4); dsBase = v << 4; }
+      wr16(S_DS + SEG_SEL, v); wr64(S_DS + SEG_BASE, v << 4); dsBase = v << 4;
       ilen += 1;
       break;
     }
 
     // ──── LES r, m (0xC4) ────
     case 0xC4: {
+      if (!realMode) { lastBailOp = b; iter = maxInsn; break; }
       const modrm = mem8[ci+1]; ilen += 2;
       if ((modrm >> 6) === 3) { lastBailOp = b; iter = maxInsn; break; } // must be memory
       const reg = (modrm >> 3) & 7;
@@ -2325,13 +2325,13 @@ function execBlock(cpuP, ramB, maxInsn) {
       ilen += m.len;
       if (opSize === 2) { sr16(reg, rw(m.ea)); } else { sr32(reg, rd(m.ea)); }
       const seg = rw(m.ea + opSize);
-      wr16(S_ES + SEG_SEL, seg);
-      if (realMode) { wr64(S_ES + SEG_BASE, seg << 4); esBase = seg << 4; }
+      wr16(S_ES + SEG_SEL, seg); wr64(S_ES + SEG_BASE, seg << 4); esBase = seg << 4;
       break;
     }
 
     // ──── LDS r, m (0xC5) ────
     case 0xC5: {
+      if (!realMode) { lastBailOp = b; iter = maxInsn; break; }
       const modrm = mem8[ci+1]; ilen += 2;
       if ((modrm >> 6) === 3) { lastBailOp = b; iter = maxInsn; break; }
       const reg = (modrm >> 3) & 7;
@@ -2339,8 +2339,7 @@ function execBlock(cpuP, ramB, maxInsn) {
       ilen += m.len;
       if (opSize === 2) { sr16(reg, rw(m.ea)); } else { sr32(reg, rd(m.ea)); }
       const seg = rw(m.ea + opSize);
-      wr16(S_DS + SEG_SEL, seg);
-      if (realMode) { wr64(S_DS + SEG_BASE, seg << 4); dsBase = seg << 4; }
+      wr16(S_DS + SEG_SEL, seg); wr64(S_DS + SEG_BASE, seg << 4); dsBase = seg << 4;
       break;
     }
 

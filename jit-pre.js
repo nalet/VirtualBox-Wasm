@@ -18,6 +18,8 @@ const R_CR0=0x160;
 // ── Lazy flags ──
 const OP_NONE=0,OP_ADD=1,OP_SUB=2,OP_AND=3,OP_OR=4,OP_XOR=5,OP_INC=6,OP_DEC=7,OP_SHL=8,OP_SHR=9,OP_SAR=10,OP_ROL=11,OP_ROR=12;
 let lazyOp=OP_NONE, lazyRes=0, lazyOp1=0, lazyOp2=0, lazySize=16, lazyCF=0;
+// When lazyOp=OP_NONE, all flags are explicit in this word (avoids ZF/SF conflict in lazyRes).
+let lazyExplicitFlags=0x02; // bit 1 always set
 
 // Parity lookup (even parity = 1)
 const parityTable = new Uint8Array(256);
@@ -31,60 +33,60 @@ const SIZE_MASK = [0, 0xFF, 0xFFFF, 0, 0xFFFFFFFF];
 const SIZE_SIGN = [0, 0x80, 0x8000, 0, 0x80000000];
 
 function getCF() {
+  if (lazyOp === OP_NONE) return (lazyExplicitFlags >> 0) & 1;
   switch (lazyOp) {
-    case OP_NONE: return lazyCF;
     case OP_ADD: return (lazyRes & SIZE_MASK[lazySize]) < (lazyOp1 & SIZE_MASK[lazySize]) ? 1 : 0;
     case OP_SUB: return (lazyOp1 & SIZE_MASK[lazySize]) < (lazyOp2 & SIZE_MASK[lazySize]) ? 1 : 0;
     case OP_AND: case OP_OR: case OP_XOR: return 0;
-    case OP_INC: case OP_DEC: return lazyCF; // unchanged
-    case OP_SHL: return lazyCF;
-    case OP_SHR: case OP_SAR: return lazyCF;
     default: return lazyCF;
   }
 }
 
 function getZF() {
+  if (lazyOp === OP_NONE) return (lazyExplicitFlags >> 6) & 1;
   return ((lazyRes & SIZE_MASK[lazySize]) === 0) ? 1 : 0;
 }
 
 function getSF() {
+  if (lazyOp === OP_NONE) return (lazyExplicitFlags >> 7) & 1;
   return ((lazyRes & SIZE_SIGN[lazySize]) !== 0) ? 1 : 0;
 }
 
 function getOF() {
+  if (lazyOp === OP_NONE) return (lazyExplicitFlags >> 11) & 1;
   const m = SIZE_MASK[lazySize], s = SIZE_SIGN[lazySize];
   switch (lazyOp) {
-    case OP_NONE: return 0;
     case OP_ADD: return ((~(lazyOp1 ^ lazyOp2) & (lazyOp1 ^ lazyRes)) & s) ? 1 : 0;
     case OP_SUB: return (((lazyOp1 ^ lazyOp2) & (lazyOp1 ^ lazyRes)) & s) ? 1 : 0;
     case OP_AND: case OP_OR: case OP_XOR: return 0;
-    case OP_INC: return ((lazyRes & m) === (s & m)) ? 1 : 0; // overflow if result is 0x80..
+    case OP_INC: return ((lazyRes & m) === (s & m)) ? 1 : 0;
     case OP_DEC: return ((lazyRes & m) === ((s - 1) & m)) ? 1 : 0;
     default: return 0;
   }
 }
 
-function getPF() { return parityTable[lazyRes & 0xFF]; }
+function getPF() {
+  if (lazyOp === OP_NONE) return (lazyExplicitFlags >> 2) & 1;
+  return parityTable[lazyRes & 0xFF];
+}
 
 function getAF() {
+  if (lazyOp === OP_NONE) return (lazyExplicitFlags >> 4) & 1;
   if (lazyOp === OP_ADD || lazyOp === OP_SUB || lazyOp === OP_INC || lazyOp === OP_DEC)
     return ((lazyOp1 ^ lazyOp2 ^ lazyRes) & 0x10) ? 1 : 0;
   return 0;
 }
 
 function flagsToWord() {
+  if (lazyOp === OP_NONE) return lazyExplicitFlags | 0x02;
   return (getCF()) | (getPF() << 2) | (getAF() << 4) | (getZF() << 6) |
-         (getSF() << 7) | (getOF() << 11) | 0x02; // bit 1 always set
+         (getSF() << 7) | (getOF() << 11) | 0x02;
 }
 
 function loadFlags(val) {
   lazyOp = OP_NONE;
-  lazyCF = val & 1;
-  // Reconstruct lazy state from explicit flags
-  lazyRes = 0;
-  if (!(val & 0x40)) lazyRes = 1; // ZF=0 means result != 0
-  if (val & 0x80) lazyRes |= SIZE_SIGN[lazySize]; // SF
-  // PF, AF, OF stored in lazyCF / flags word for NONE op
+  lazyCF = val & 1; // keep lazyCF in sync for instructions that read it directly
+  lazyExplicitFlags = val | 0x02; // store all bits explicitly
 }
 
 function setFlagsArith(op, res, op1, op2, size) {
@@ -410,11 +412,7 @@ function execBlock(cpuP, ramB, maxInsn) {
   let esBase = segBase(S_ES);
 
   // Initialize lazy flags from current RFLAGS
-  lazyCF = flags & 1;
-  lazyOp = OP_NONE;
-  lazyRes = 0;
-  if (!(flags & 0x40)) lazyRes = 1; // ZF
-  if (flags & 0x80) lazyRes |= 0x8000; // SF
+  loadFlags(flags);
   lazySize = 2; // default 16-bit
 
   // Bail if executing in ROM space without a ROM buffer
@@ -2245,11 +2243,12 @@ function execBlock(cpuP, ramB, maxInsn) {
 
     // ──── RETF (0xCB) ────
     case 0xCB: {
+      // In protected mode, RETF requires GDT lookup for CS — bail to IEM.
+      if (!realMode) { lastBailOp = b; iter = maxInsn; break; }
       if (opSize === 2) {
         const newIP = pop16(ssBase);
         const newCS = pop16(ssBase);
-        wr16(S_CS + SEG_SEL, newCS);
-        if (realMode) wr64(S_CS + SEG_BASE, newCS << 4);
+        wr16(S_CS + SEG_SEL, newCS); wr64(S_CS + SEG_BASE, newCS << 4);
         ip = newIP;
         ilen = 0; executed++; wr16(R_IP, ip); continue;
       } else {

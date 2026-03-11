@@ -2499,7 +2499,8 @@ globalThis.VBoxJIT = (function() {
             }
             if (opSize === 2) push16(val, ssBase); else push32(val, ssBase);
           } else {
-            // CALL/JMP far — fallback
+            // CALL/JMP far or undefined /7 — fallback
+            if (statTotalCalls < 100) console.log("[JIT] FF/" + op + " modrm=0x" + modrm.toString(16) + " at " + csBase.toString(16) + ":" + ip.toString(16) + " ci+1=" + mem8[ci].toString(16) + "," + mem8[ci + 1].toString(16) + "," + mem8[ci + 2].toString(16));
             lastBailOp = 65280 | op;
             iter = maxInsn;
             break;

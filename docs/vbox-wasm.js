@@ -698,6 +698,9 @@ globalThis.VBoxJIT = (function() {
       codePhys = csBase + ip;
       if (codePhys < 0 || codePhys + 15 > ramSize) break;
       // safety
+      // Skip ROM regions — JIT can only access flat RAM, not VBox ROM mappings
+      // BIOS ROM: 0xC0000-0xFFFFF, High BIOS: 0xFFF00000+
+      if (codePhys >= 786432 && codePhys < 1048576) break;
       // Read up to 15 bytes of instruction
       const c0 = mem8[ramBase + codePhys];
       // ── Prefix handling ──

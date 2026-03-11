@@ -1883,52 +1883,22 @@ globalThis.VBoxJIT = (function() {
 
        // ──── MOVZX r16/32, r/m8 (0x0F 0xB6) — handled in 0x0F block ────
         // ──── MOVSX r16/32, r/m8 (0x0F 0xBE) — handled in 0x0F block ────
-        // ──── IN AL, imm8 (0xE4) ────
+        // ──── IN/OUT: bail to IEM for proper I/O port handling ────
+        // IN/OUT must go through VBox's I/O port infrastructure so devices
+        // (keyboard controller, PIT, PIC, VGA, IDE) respond correctly.
+        // Without this, portIn returns 0xFF causing infinite polling loops.
         case 228:
-        sr8(0, portIn(mem8[ci + 1], 1));
-        ilen += 2;
-        break;
-
-       // ──── IN AX, imm8 (0xE5) ────
-        case 229:
-        if (opSize === 2) sr16(0, portIn(mem8[ci + 1], 2)); else sr32(0, portIn(mem8[ci + 1], 4));
-        ilen += 2;
-        break;
-
-       // ──── IN AL, DX (0xEC) ────
-        case 236:
-        sr8(0, portIn(gr16(2), 1));
-        ilen += 1;
-        break;
-
-       // ──── IN AX, DX (0xED) ────
-        case 237:
-        if (opSize === 2) sr16(0, portIn(gr16(2), 2)); else sr32(0, portIn(gr16(2), 4));
-        ilen += 1;
-        break;
-
-       // ──── OUT imm8, AL (0xE6) ────
+       case 229:
+       case 236:
+       case 237:
+       // IN
         case 230:
-        portOut(mem8[ci + 1], 1, gr8(0));
-        ilen += 2;
-        break;
-
-       // ──── OUT imm8, AX (0xE7) ────
-        case 231:
-        if (opSize === 2) portOut(mem8[ci + 1], 2, gr16(0)); else portOut(mem8[ci + 1], 4, gr32(0));
-        ilen += 2;
-        break;
-
-       // ──── OUT DX, AL (0xEE) ────
-        case 238:
-        portOut(gr16(2), 1, gr8(0));
-        ilen += 1;
-        break;
-
-       // ──── OUT DX, AX (0xEF) ────
-        case 239:
-        if (opSize === 2) portOut(gr16(2), 2, gr16(0)); else portOut(gr16(2), 4, gr32(0));
-        ilen += 1;
+       case 231:
+       case 238:
+       case 239:
+        // OUT
+        lastBailOp = b;
+        iter = maxInsn;
         break;
 
        // ──── REP/REPNE + string ops ────
@@ -9734,10 +9704,6 @@ function wasmJitExecBlock(pCpumCtx, pvRAM, maxInsn) {
   return globalThis.VBoxJIT.execBlock(Number(pCpumCtx), Number(pvRAM), maxInsn);
 }
 
-function wasmJitSetRomBuffer(pvROM, cbROM, uGCPhysStart) {
-  if (typeof globalThis.VBoxJIT !== "undefined" && globalThis.VBoxJIT.setRomBuffer) globalThis.VBoxJIT.setRomBuffer(Number(pvROM), cbROM, uGCPhysStart);
-}
-
 // Imports from the Wasm binary.
 var _main, _wasmJitSetGuestRAM, _wasmJitGetGuestRAM, _pthread_self, _wasmDisplayGetFB, _wasmDisplayGetWidth, _wasmDisplayGetHeight, _wasmDisplayCheckDirty, _wasmDisplayGetFBSize, _wasmDisplayRefresh, _wasmDisplayGetRefreshCount, _wasmDisplayGetUpdateRectCount, _malloc, __emscripten_tls_init, __emscripten_proxy_main, __emscripten_thread_init, __emscripten_thread_crashed, _htonl, _htons, _ntohs, __emscripten_run_js_on_main_thread_done, __emscripten_run_js_on_main_thread, __emscripten_thread_free_data, __emscripten_thread_exit, __emscripten_check_mailbox, _setThrew, _emscripten_stack_set_limits, __emscripten_stack_restore, __emscripten_stack_alloc, _emscripten_stack_get_current, __indirect_function_table, wasmTable;
 
@@ -9914,8 +9880,7 @@ function assignWasmImports() {
     /** @export */ memory: wasmMemory,
     /** @export */ proc_exit: _proc_exit,
     /** @export */ wasmCallFuncPtrTrampoline,
-    /** @export */ wasmJitExecBlock,
-    /** @export */ wasmJitSetRomBuffer
+    /** @export */ wasmJitExecBlock
   };
 }
 

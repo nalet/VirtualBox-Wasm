@@ -375,6 +375,16 @@
         let hash = 0;
         for (let i = 0; i < 4000; i++) hash = (hash + mem[textBufAddr + i]) | 0;
         if (hash === 0) return false; // all zeros = text buffer not yet written
+
+        // Validate: check if data looks like real text mode (not memory test garbage)
+        // In valid text mode, most char bytes should be printable ASCII or null
+        let printableCount = 0;
+        for (let i = 0; i < 4000; i += 2) {
+          const ch = mem[textBufAddr + i];
+          if (ch === 0 || (ch >= 0x20 && ch <= 0x7E)) printableCount++;
+        }
+        if (printableCount < 1600) return false; // <80% printable = garbage
+
         if (hash === this.lastTextHash) return true; // no change
         this.lastTextHash = hash;
 

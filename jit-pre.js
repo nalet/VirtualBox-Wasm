@@ -1293,56 +1293,13 @@ function execBlock(cpuP, ramB, maxInsn) {
     // ──── MOVZX r16/32, r/m8 (0x0F 0xB6) — handled in 0x0F block ────
     // ──── MOVSX r16/32, r/m8 (0x0F 0xBE) — handled in 0x0F block ────
 
-    // ──── IN AL, imm8 (0xE4) ────
-    case 0xE4:
-      sr8(0, portIn(mem8[ci+1], 1));
-      ilen += 2;
-      break;
-
-    // ──── IN AX, imm8 (0xE5) ────
-    case 0xE5:
-      if (opSize === 2) sr16(0, portIn(mem8[ci+1], 2));
-      else sr32(0, portIn(mem8[ci+1], 4));
-      ilen += 2;
-      break;
-
-    // ──── IN AL, DX (0xEC) ────
-    case 0xEC:
-      sr8(0, portIn(gr16(2), 1));
-      ilen += 1;
-      break;
-
-    // ──── IN AX, DX (0xED) ────
-    case 0xED:
-      if (opSize === 2) sr16(0, portIn(gr16(2), 2));
-      else sr32(0, portIn(gr16(2), 4));
-      ilen += 1;
-      break;
-
-    // ──── OUT imm8, AL (0xE6) ────
-    case 0xE6:
-      portOut(mem8[ci+1], 1, gr8(0));
-      ilen += 2;
-      break;
-
-    // ──── OUT imm8, AX (0xE7) ────
-    case 0xE7:
-      if (opSize === 2) portOut(mem8[ci+1], 2, gr16(0));
-      else portOut(mem8[ci+1], 4, gr32(0));
-      ilen += 2;
-      break;
-
-    // ──── OUT DX, AL (0xEE) ────
-    case 0xEE:
-      portOut(gr16(2), 1, gr8(0));
-      ilen += 1;
-      break;
-
-    // ──── OUT DX, AX (0xEF) ────
-    case 0xEF:
-      if (opSize === 2) portOut(gr16(2), 2, gr16(0));
-      else portOut(gr16(2), 4, gr32(0));
-      ilen += 1;
+    // ──── IN/OUT: bail to IEM for proper I/O port handling ────
+    // IN/OUT must go through VBox's I/O port infrastructure so devices
+    // (keyboard controller, PIT, PIC, VGA, IDE) respond correctly.
+    // Without this, portIn returns 0xFF causing infinite polling loops.
+    case 0xE4: case 0xE5: case 0xEC: case 0xED:  // IN
+    case 0xE6: case 0xE7: case 0xEE: case 0xEF:  // OUT
+      lastBailOp = b; iter = maxInsn;
       break;
 
     // ──── REP/REPNE + string ops ────

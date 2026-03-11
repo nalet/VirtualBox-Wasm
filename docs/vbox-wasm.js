@@ -712,10 +712,9 @@ globalThis.VBoxJIT = (function() {
     // SF
     lazySize = 2;
     // default 16-bit
-    // Bail if executing in ROM space — PGM stores ROM separately from flat RAM,
-    // so JIT reads garbage. Let IEM handle all ROM code via PGM page handlers.
+    // Bail if executing in ROM space without a ROM buffer
     const linearPC = csBase + ip;
-    if (linearPC >= 786432) return 0;
+    if (linearPC >= 786432 && romBufSize === 0) return 0;
     // Check if we're in real mode or protected mode
     const cr0 = rr32(R_CR0);
     const realMode = !(cr0 & 1);
@@ -9570,12 +9569,6 @@ function _futimes(...args) {
 
 _futimes.stub = true;
 
-function _iemAImpl_cmpxchg16b_locked(...args) {
-  abort("missing function: iemAImpl_cmpxchg16b_locked");
-}
-
-_iemAImpl_cmpxchg16b_locked.stub = true;
-
 var stringToUTF8OnStack = str => {
   var size = lengthBytesUTF8(str) + 1;
   var ret = stackAlloc(size);
@@ -9712,6 +9705,10 @@ function wasmJitExecBlock(pCpumCtx, pvRAM, maxInsn) {
     globalThis.VBoxJIT._initialized = true;
   }
   return globalThis.VBoxJIT.execBlock(Number(pCpumCtx), Number(pvRAM), maxInsn);
+}
+
+function wasmJitSetRomBuffer(pvROM, cbROM, uGCPhysStart) {
+  if (typeof globalThis.VBoxJIT !== "undefined" && globalThis.VBoxJIT.setRomBuffer) globalThis.VBoxJIT.setRomBuffer(Number(pvROM), cbROM, uGCPhysStart);
 }
 
 // Imports from the Wasm binary.
@@ -9870,7 +9867,6 @@ function assignWasmImports() {
     /** @export */ fd_sync: _fd_sync,
     /** @export */ fd_write: _fd_write,
     /** @export */ futimes: _futimes,
-    /** @export */ iemAImpl_cmpxchg16b_locked: _iemAImpl_cmpxchg16b_locked,
     /** @export */ invoke_i,
     /** @export */ invoke_ii,
     /** @export */ invoke_ij,
@@ -9891,7 +9887,8 @@ function assignWasmImports() {
     /** @export */ memory: wasmMemory,
     /** @export */ proc_exit: _proc_exit,
     /** @export */ wasmCallFuncPtrTrampoline,
-    /** @export */ wasmJitExecBlock
+    /** @export */ wasmJitExecBlock,
+    /** @export */ wasmJitSetRomBuffer
   };
 }
 

@@ -182,6 +182,11 @@ EM_JS(int, wasmJitExecBlock, (void *pCpumCtx, void *pvRAM, int maxInsn), {
     return globalThis.VBoxJIT.execBlock(Number(pCpumCtx), Number(pvRAM), maxInsn);
 });
 
+EM_JS(void, wasmJitSetRomBuffer, (void *pvROM, int cbROM, int uGCPhysStart), {
+    if (typeof globalThis.VBoxJIT !== 'undefined' && globalThis.VBoxJIT.setRomBuffer)
+        globalThis.VBoxJIT.setRomBuffer(Number(pvROM), cbROM, uGCPhysStart);
+});
+
 static void    *s_pvJitRAM = NULL;
 static bool     s_fJitInitDone = false;
 
@@ -193,6 +198,8 @@ static void iemJitEnsureInit(PVMCC pVM)
     if (RT_LIKELY(s_fJitInitDone))
         return;
     s_fJitInitDone = true;
+
+    /* Get flat RAM pointer */
     PGMPAGEMAPLOCK Lock;
     void *pv = NULL;
     int rc = PGMPhysGCPhys2CCPtr(pVM, 0 /*GCPhys*/, &pv, &Lock);
@@ -200,10 +207,56 @@ static void iemJitEnsureInit(PVMCC pVM)
     {
         s_pvJitRAM = pv;
         wasmJitSetGuestRAM(pv);
-        LogRel(("[JIT] PGMPhysGCPhys2CCPtr OK: RAM=%p\n", pv));
+        LogRel(("[JIT] RAM base: %p\n", pv));
     }
     else
-        LogRel(("[JIT] PGMPhysGCPhys2CCPtr FAILED: rc=%d pv=%p\n", rc, pv));
+    {
+        LogRel(("[JIT] PGMPhysGCPhys2CCPtr FAILED: rc=%d\n", rc));
+        return;
+    }
+
+    /* Copy ROM (0xC0000-0xFFFFF = 256KB) page by page using ReadOnly pointers.
+     * PGMPhysGCPhys2CCPtrReadOnly returns the currently active page, which for
+     * ROM pages in Virgin mode is the actual ROM content (not shadow RAM). */
+    const uint32_t cbROM     = 0x40000;  /* 256 KB */
+    const uint32_t uROMStart = 0xC0000;
+    void *pvROM = RTMemAllocZ(cbROM);
+    if (pvROM)
+    {
+        uint32_t cPagesOK = 0, cPagesFail = 0;
+        for (uint32_t off = 0; off < cbROM; off += GUEST_PAGE_SIZE)
+        {
+            PGMPAGEMAPLOCK RomLock;
+            const void *pvPage = NULL;
+            int rcPage = PGMPhysGCPhys2CCPtrReadOnly(pVM, (RTGCPHYS)(uROMStart + off),
+                                                     &pvPage, &RomLock);
+            if (RT_SUCCESS(rcPage) && pvPage)
+            {
+                memcpy((uint8_t *)pvROM + off, pvPage, GUEST_PAGE_SIZE);
+                cPagesOK++;
+            }
+            else
+                cPagesFail++;
+        }
+        LogRel(("[JIT] ROM buffer: %u pages OK, %u failed (0x%X-0x%X)\n",
+                cPagesOK, cPagesFail, uROMStart, uROMStart + cbROM - 1));
+
+        /* Verify: check if we got real ROM content (not all 0xFF or 0x00) */
+        uint32_t cNonTrivial = 0;
+        uint8_t *pb = (uint8_t *)pvROM;
+        for (uint32_t i = 0; i < RT_MIN(cbROM, 0x1000); i++)
+            if (pb[i] != 0xFF && pb[i] != 0x00)
+                cNonTrivial++;
+        LogRel(("[JIT] ROM first 4KB: %u non-trivial bytes (expect >100 for real ROM)\n", cNonTrivial));
+
+        if (cPagesOK > 0 && cNonTrivial > 100)
+            wasmJitSetRomBuffer(pvROM, (int)cbROM, (int)uROMStart);
+        else
+        {
+            LogRel(("[JIT] ROM buffer rejected: content looks empty\n"));
+            RTMemFree(pvROM);
+        }
+    }
 }
 #endif /* __EMSCRIPTEN__ */
 
@@ -1045,16 +1098,10 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                  * Do the decoding and emulation.
                  */
 #ifdef __EMSCRIPTEN__
-                /* JIT fast path: try JS interpreter before IEM decode.
-                 * Skip the expensive EM_JS call when executing in ROM space
-                 * (>= 0xC0000) — the JIT can only handle RAM-resident code. */
+                /* JIT fast path: try JS interpreter before IEM decode. */
                 iemJitEnsureInit(pVM);
                 if (s_pvJitRAM)
                 {
-                    uint64_t uLinearPC = (uint64_t)pVCpu->cpum.GstCtx.cs.u64Base + pVCpu->cpum.GstCtx.rip;
-                    if (uLinearPC < 0xC0000)
-                    {
-                    /* Limit batch to remaining instructions, leave room for timer polls */
                     uint32_t cBatch = RT_MIN(cMaxInstructionsGccStupidity, 4096);
                     int cJitInsns = wasmJitExecBlock(&pVCpu->cpum.GstCtx, s_pvJitRAM, cBatch);
                     if (cJitInsns > 0)
@@ -1083,7 +1130,6 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                         rcStrict = VINF_SUCCESS;
                         break;
                     }
-                    } /* uLinearPC < 0xC0000 */
                 }
 #endif
                 rcStrict = iemExecDecodeAndInterpretTargetInstruction(pVCpu);

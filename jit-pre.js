@@ -379,14 +379,20 @@ function execBlock(cpuP, ramB, maxInsn) {
   const cr0 = rr32(R_CR0);
   const realMode = !(cr0 & 1); // PE bit
   // For now, only handle real mode and simple protected mode (no paging)
-  if (cr0 & 0x80000000) return 0; // PG bit set = paging enabled, bail
+  if (cr0 & 0x80000000) {
+    if (statTotalCalls < 5) console.log('[JIT] bail: paging enabled cr0=0x' + cr0.toString(16));
+    return 0; // PG bit set = paging enabled, bail
+  }
 
   let executed = 0;
   const ramSize = mem8.length - ramBase; // available RAM
 
   // Pre-read a chunk of code for fast access
   let codePhys = csBase + ip;
-  if (codePhys + 16 > ramSize) return 0;
+  if (codePhys + 16 > ramSize) {
+    if (statTotalCalls < 5) console.log('[JIT] bail: codePhys=0x' + codePhys.toString(16) + ' ramSize=0x' + ramSize.toString(16) + ' ramBase=0x' + ramBase.toString(16) + ' csBase=0x' + csBase.toString(16) + ' ip=0x' + ip.toString(16));
+    return 0;
+  }
 
   for (let iter = 0; iter < maxInsn; iter++) {
     codePhys = csBase + ip;
@@ -1966,6 +1972,7 @@ function execBlock(cpuP, ramB, maxInsn) {
     // ──── Unsupported — fallback to IEM ────
     default:
       // INT, IRET, HLT, CPUID, RDTSC, etc. — let IEM handle
+      if (statTotalCalls < 20) console.log('[JIT] unsupported opcode 0x' + c0.toString(16) + ' at cs:ip=' + csBase.toString(16) + ':' + ip.toString(16) + ' phys=0x' + codePhys.toString(16) + ' executed=' + executed);
       iter = maxInsn;
       break;
     } // end switch

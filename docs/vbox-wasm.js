@@ -679,14 +679,19 @@ globalThis.VBoxJIT = (function() {
     const realMode = !(cr0 & 1);
     // PE bit
     // For now, only handle real mode and simple protected mode (no paging)
-    if (cr0 & 2147483648) return 0;
-    // PG bit set = paging enabled, bail
+    if (cr0 & 2147483648) {
+      if (statTotalCalls < 5) console.log("[JIT] bail: paging enabled cr0=0x" + cr0.toString(16));
+      return 0;
+    }
     let executed = 0;
     const ramSize = mem8.length - ramBase;
     // available RAM
     // Pre-read a chunk of code for fast access
     let codePhys = csBase + ip;
-    if (codePhys + 16 > ramSize) return 0;
+    if (codePhys + 16 > ramSize) {
+      if (statTotalCalls < 5) console.log("[JIT] bail: codePhys=0x" + codePhys.toString(16) + " ramSize=0x" + ramSize.toString(16) + " ramBase=0x" + ramBase.toString(16) + " csBase=0x" + csBase.toString(16) + " ip=0x" + ip.toString(16));
+      return 0;
+    }
     for (let iter = 0; iter < maxInsn; iter++) {
       codePhys = csBase + ip;
       if (codePhys < 0 || codePhys + 15 > ramSize) break;
@@ -2812,6 +2817,7 @@ globalThis.VBoxJIT = (function() {
        // ──── Unsupported — fallback to IEM ────
         default:
         // INT, IRET, HLT, CPUID, RDTSC, etc. — let IEM handle
+        if (statTotalCalls < 20) console.log("[JIT] unsupported opcode 0x" + c0.toString(16) + " at cs:ip=" + csBase.toString(16) + ":" + ip.toString(16) + " phys=0x" + codePhys.toString(16) + " executed=" + executed);
         iter = maxInsn;
         break;
       }
@@ -8795,12 +8801,6 @@ function _futimes(...args) {
 
 _futimes.stub = true;
 
-function _iemAImpl_cmpxchg16b_locked(...args) {
-  abort("missing function: iemAImpl_cmpxchg16b_locked");
-}
-
-_iemAImpl_cmpxchg16b_locked.stub = true;
-
 var stringToUTF8OnStack = str => {
   var size = lengthBytesUTF8(str) + 1;
   var ret = stackAlloc(size);
@@ -9095,7 +9095,6 @@ function assignWasmImports() {
     /** @export */ fd_sync: _fd_sync,
     /** @export */ fd_write: _fd_write,
     /** @export */ futimes: _futimes,
-    /** @export */ iemAImpl_cmpxchg16b_locked: _iemAImpl_cmpxchg16b_locked,
     /** @export */ invoke_i,
     /** @export */ invoke_ii,
     /** @export */ invoke_ij,

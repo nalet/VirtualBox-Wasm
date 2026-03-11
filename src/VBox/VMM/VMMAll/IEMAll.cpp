@@ -169,6 +169,33 @@
 # include "target-armv8/IEMInlineExec-armv8.h"
 #endif
 
+#ifdef __EMSCRIPTEN__
+# include <emscripten.h>
+
+EM_JS(int, wasmJitExecBlock, (void *pCpumCtx, void *pvRAM, int maxInsn), {
+    if (typeof globalThis.VBoxJIT === 'undefined') return 0;
+    if (!globalThis.VBoxJIT._initialized) {
+        globalThis.VBoxJIT.init(wasmMemory);
+        globalThis.VBoxJIT._initialized = true;
+    }
+    return globalThis.VBoxJIT.execBlock(Number(pCpumCtx), Number(pvRAM), maxInsn);
+});
+
+static void    *s_pvJitRAM = NULL;
+static bool     s_fJitInitDone = false;
+
+static void iemJitEnsureInit(PVMCC pVM)
+{
+    if (RT_LIKELY(s_fJitInitDone))
+        return;
+    s_fJitInitDone = true;
+    PGMPAGEMAPLOCK Lock;
+    void *pv = NULL;
+    int rc = PGMPhysGCPhys2CCPtr(pVM, 0 /*GCPhys*/, &pv, &Lock);
+    if (RT_SUCCESS(rc) && pv)
+        s_pvJitRAM = pv;
+}
+#endif /* __EMSCRIPTEN__ */
 
 
 /**
@@ -1007,6 +1034,23 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                 /*
                  * Do the decoding and emulation.
                  */
+#ifdef __EMSCRIPTEN__
+                /* JIT fast path: try JS interpreter before IEM decode. */
+                iemJitEnsureInit(pVM);
+                if (s_pvJitRAM)
+                {
+                    int cJitInsns = wasmJitExecBlock(&pVCpu->cpum.GstCtx, s_pvJitRAM, 4096);
+                    if (cJitInsns > 0)
+                    {
+                        pVCpu->iem.s.cInstructions += cJitInsns;
+                        rcStrict = VINF_SUCCESS;
+                        if (   !VM_FF_IS_ANY_SET(pVM, VM_FF_ALL_MASK)
+                            && !VMCPU_FF_IS_ANY_SET(pVCpu, VMCPU_FF_ALL_MASK))
+                            continue;
+                        break;
+                    }
+                }
+#endif
                 rcStrict = iemExecDecodeAndInterpretTargetInstruction(pVCpu);
 #if defined(VBOX_STRICT) && defined(VBOX_VMM_TARGET_X86)
                 CPUMAssertGuestRFlagsCookie(pVM, pVCpu);

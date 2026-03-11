@@ -146,10 +146,9 @@ VBOX_WITH_NESTED_HWVIRT_SVM           :=
 VBOX_WITH_NESTED_HWVIRT_VMX           :=
 VBOX_WITH_NESTED_HWVIRT_VMX_EPT       :=
 
-# IEM threaded recompiler: ENABLED for Wasm (3-10x speedup over pure interpreter)
-# Translates x86 into threaded TB function-pointer chains — portable to Wasm.
-# Native recompiler stays disabled (generates x86/ARM64 machine code, not portable).
-VBOX_WITH_IEM_RECOMPILER              := 1
+# IEM threaded recompiler: DISABLED — crashes with OOB in Wasm64 (invoke_ijji dispatch)
+# The JS JIT in jit-pre.js provides acceleration instead.
+VBOX_WITH_IEM_RECOMPILER              :=
 VBOX_WITH_IEM_NATIVE_RECOMPILER       :=
 
 # No raw-mode / ring-0

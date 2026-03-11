@@ -90,34 +90,7 @@
 # include "IEMN8veRecompiler.h"
 #endif
 
-#ifdef __EMSCRIPTEN__
-# include <emscripten.h>
-# include <VBox/vmm/pgm.h>
-
-EM_JS(int, wasmJitExecBlock, (void *pCpumCtx, void *pvRAM, int maxInsn), {
-    if (typeof globalThis.VBoxJIT === 'undefined') return 0;
-    if (!globalThis.VBoxJIT._initialized) {
-        globalThis.VBoxJIT.init(wasmMemory);
-        globalThis.VBoxJIT._initialized = true;
-    }
-    return globalThis.VBoxJIT.execBlock(Number(pCpumCtx), Number(pvRAM), maxInsn);
-});
-
-static void    *s_pvJitRAM = NULL;
-static bool     s_fJitInitDone = false;
-
-static void iemJitEnsureInit(PVMCC pVM)
-{
-    if (RT_LIKELY(s_fJitInitDone))
-        return;
-    s_fJitInitDone = true;
-    PGMPAGEMAPLOCK Lock;
-    void *pv = NULL;
-    int rc = PGMPhysGCPhys2CCPtr(pVM, 0 /*GCPhys*/, &pv, &Lock);
-    if (RT_SUCCESS(rc) && pv)
-        s_pvJitRAM = pv;
-}
-#endif /* __EMSCRIPTEN__ */
+/* JIT hook moved to IEMAll.cpp (works with both pure IEM and threaded recompiler) */
 
 
 /*
@@ -3932,19 +3905,6 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecRecompiler(PVMCC pVM, PVMCPUCC pVCpu, bool fWa
                 {
                     uint32_t const fExtraFlags = iemGetTbFlagsForCurrentPc(pVCpu);
 
-#ifdef __EMSCRIPTEN__
-                    /* JIT fast path: try JS interpreter before threaded TB dispatch. */
-                    iemJitEnsureInit(pVM);
-                    if (s_pvJitRAM)
-                    {
-                        int cJitInsns = wasmJitExecBlock(&pVCpu->cpum.GstCtx, s_pvJitRAM, 4096);
-                        if (cJitInsns > 0)
-                        {
-                            rcStrict = VINF_SUCCESS;
-                            continue;
-                        }
-                    }
-#endif
                     PIEMTB const   pTb         = iemTbCacheLookup(pVCpu, pTbCache, GCPhysPc, fExtraFlags);
                     if (pTb)
                         rcStrict = iemTbExec(pVCpu, pTb);

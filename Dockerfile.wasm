@@ -223,7 +223,7 @@ RUN . /opt/emsdk/emsdk_env.sh 2>/dev/null \
 RUN . /opt/emsdk/emsdk_env.sh 2>/dev/null \
     && echo "=== Phase 5: Linking vbox-wasm.js (full VM harness) ==" \
     && mkdir -p docs \
-    && em++ -O2 -o docs/vbox-wasm.js wasm-main.cpp wasm-stubs.cpp wasm-display-drv.cpp \
+    && em++ -O1 -o docs/vbox-wasm.js wasm-main.cpp wasm-stubs.cpp wasm-display-drv.cpp \
         /tmp/extra-o/*.o \
         -I include -I out/linux.amd64/release \
         -I src/VBox/Runtime/include \
@@ -263,6 +263,7 @@ RUN . /opt/emsdk/emsdk_env.sh 2>/dev/null \
         -sEXIT_RUNTIME=0 \
         -sALLOW_BLOCKING_ON_MAIN_THREAD=1 \
         -sPROXY_TO_PTHREAD \
+        -sFORCE_FILESYSTEM=1 \
         -sDEFAULT_PTHREAD_STACK_SIZE=1048576 \
         -Wno-unused-command-line-argument \
         -sERROR_ON_UNDEFINED_SYMBOLS=0 \

@@ -94,14 +94,6 @@
 # include <emscripten.h>
 # include <VBox/vmm/pgm.h>
 
-/**
- * EM_JS trampoline: calls the JavaScript JIT interpreter.
- *
- * @returns Number of x86 instructions executed (>0), or 0 if fallback needed.
- * @param   pCpumCtx    Pointer to CPUMCTX in Wasm linear memory.
- * @param   pvRAM       Pointer to guest RAM base in Wasm linear memory.
- * @param   maxInsn     Maximum instructions to execute.
- */
 EM_JS(int, wasmJitExecBlock, (void *pCpumCtx, void *pvRAM, int maxInsn), {
     if (typeof globalThis.VBoxJIT === 'undefined') return 0;
     if (!globalThis.VBoxJIT._initialized) {

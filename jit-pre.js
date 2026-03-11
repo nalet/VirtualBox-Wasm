@@ -452,7 +452,7 @@ function execBlock(cpuP, ramB, maxInsn) {
   // Bail periodically to let IEM deliver hardware interrupts (PIT timer, etc.)
   // Without this, the JIT blocks interrupt delivery for the entire batch,
   // causing BIOS POST to stall waiting for timer ticks.
-  const interruptCheckInterval = 2048;
+  const interruptCheckInterval = 8192;
 
   for (let iter = 0; iter < maxInsn; iter++) {
     // Periodic bail for interrupt delivery
@@ -1346,15 +1346,15 @@ function execBlock(cpuP, ramB, maxInsn) {
             if (dir === 1 && addr + cx <= ramSize) {
               // Fast path: forward direction, all in RAM
               const writeEnd = addr + cx;
+              // Self-modifying code check BEFORE writing: if this REP STOSB would
+              // overwrite the current code segment in RAM, bail to IEM without writing.
+              // (ROM code at csBase >= 0xC0000 can't be overwritten via Wasm RAM.)
+              if (codeSegStart < 0xC0000 && writeEnd > codeSegStart && addr < codeSegEnd) {
+                ilen = 0; iter = maxInsn; break; // let IEM handle via PGM
+              }
               mem8.fill(val, ramBase + addr, ramBase + writeEnd);
               di = (di + cx) & 0xFFFF;
               cx = 0;
-              // Self-modifying code check: bail if write overlaps code segment
-              if (writeEnd > codeSegStart && addr < codeSegEnd) {
-                sr16(7, di); sr16(1, 0);
-                iter = maxInsn; // bail to IEM
-                break;
-              }
             } else {
               while (cx > 0) {
                 wb(esBase + di, val);
@@ -1372,13 +1372,13 @@ function execBlock(cpuP, ramB, maxInsn) {
               const addr = esBase + di;
               if (dir === 1 && addr + cx * 2 <= ramSize) {
                 const writeEnd2 = addr + cx * 2;
+                if (codeSegStart < 0xC0000 && writeEnd2 > codeSegStart && addr < codeSegEnd) {
+                  ilen = 0; iter = maxInsn; break;
+                }
                 let off = ramBase + addr;
                 for (let i = 0; i < cx; i++) { dv.setUint16(off, v, true); off += 2; }
                 di = (di + cx * 2) & 0xFFFF;
                 cx = 0;
-                if (writeEnd2 > codeSegStart && addr < codeSegEnd) {
-                  sr16(7, di); sr16(1, 0); iter = maxInsn; break;
-                }
               } else {
                 while (cx > 0) { ww(esBase + di, v); di = (di + dir * 2) & 0xFFFF; cx--; }
               }
@@ -1387,13 +1387,13 @@ function execBlock(cpuP, ramB, maxInsn) {
               const addr = esBase + di;
               if (dir === 1 && addr + cx * 4 <= ramSize) {
                 const writeEnd4 = addr + cx * 4;
+                if (codeSegStart < 0xC0000 && writeEnd4 > codeSegStart && addr < codeSegEnd) {
+                  ilen = 0; iter = maxInsn; break;
+                }
                 let off = ramBase + addr;
                 for (let i = 0; i < cx; i++) { dv.setUint32(off, v, true); off += 4; }
                 di = (di + cx * 4) & 0xFFFF;
                 cx = 0;
-                if (writeEnd4 > codeSegStart && addr < codeSegEnd) {
-                  sr16(7, di); sr16(1, 0); iter = maxInsn; break;
-                }
               } else {
                 while (cx > 0) { wd(esBase + di, v); di = (di + dir * 4) & 0xFFFF; cx--; }
               }
@@ -1408,15 +1408,13 @@ function execBlock(cpuP, ramB, maxInsn) {
             if (dir === 1 && srcAddr + cx <= ramSize && dstAddr + cx <= ramSize) {
               // Fast path: forward direction, both in RAM
               const dstEnd = dstAddr + cx;
+              if (codeSegStart < 0xC0000 && dstEnd > codeSegStart && dstAddr < codeSegEnd) {
+                ilen = 0; iter = maxInsn; break;
+              }
               mem8.copyWithin(ramBase + dstAddr, ramBase + srcAddr, ramBase + srcAddr + cx);
               si = (si + cx) & 0xFFFF;
               di = (di + cx) & 0xFFFF;
               cx = 0;
-              // Self-modifying code check
-              if (dstEnd > codeSegStart && dstAddr < codeSegEnd) {
-                sr16(6, si); sr16(7, di); sr16(1, 0);
-                iter = maxInsn; break;
-              }
             } else {
               while (cx > 0) {
                 wb(esBase + di, rb(srcSeg + si));
@@ -1435,11 +1433,11 @@ function execBlock(cpuP, ramB, maxInsn) {
             if (opSize === 2) {
               if (dir === 1 && srcAddr5 + cx * 2 <= ramSize && dstAddr5 + cx * 2 <= ramSize) {
                 const dstEnd2 = dstAddr5 + cx * 2;
+                if (codeSegStart < 0xC0000 && dstEnd2 > codeSegStart && dstAddr5 < codeSegEnd) {
+                  ilen = 0; iter = maxInsn; break;
+                }
                 mem8.copyWithin(ramBase + dstAddr5, ramBase + srcAddr5, ramBase + srcAddr5 + cx * 2);
                 si = (si + cx * 2) & 0xFFFF; di = (di + cx * 2) & 0xFFFF; cx = 0;
-                if (dstEnd2 > codeSegStart && dstAddr5 < codeSegEnd) {
-                  sr16(6, si); sr16(7, di); sr16(1, 0); iter = maxInsn; break;
-                }
               } else {
                 while (cx > 0) {
                   ww(esBase + di, rw(srcSeg + si));
@@ -1449,11 +1447,11 @@ function execBlock(cpuP, ramB, maxInsn) {
             } else {
               if (dir === 1 && srcAddr5 + cx * 4 <= ramSize && dstAddr5 + cx * 4 <= ramSize) {
                 const dstEnd4 = dstAddr5 + cx * 4;
+                if (codeSegStart < 0xC0000 && dstEnd4 > codeSegStart && dstAddr5 < codeSegEnd) {
+                  ilen = 0; iter = maxInsn; break;
+                }
                 mem8.copyWithin(ramBase + dstAddr5, ramBase + srcAddr5, ramBase + srcAddr5 + cx * 4);
                 si = (si + cx * 4) & 0xFFFF; di = (di + cx * 4) & 0xFFFF; cx = 0;
-                if (dstEnd4 > codeSegStart && dstAddr5 < codeSegEnd) {
-                  sr16(6, si); sr16(7, di); sr16(1, 0); iter = maxInsn; break;
-                }
               } else {
                 while (cx > 0) {
                   wd(esBase + di, rd(srcSeg + si));

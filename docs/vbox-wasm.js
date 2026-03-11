@@ -746,7 +746,7 @@ globalThis.VBoxJIT = (function() {
     // Bail periodically to let IEM deliver hardware interrupts (PIT timer, etc.)
     // Without this, the JIT blocks interrupt delivery for the entire batch,
     // causing BIOS POST to stall waiting for timer ticks.
-    const interruptCheckInterval = 2048;
+    const interruptCheckInterval = 8192;
     for (let iter = 0; iter < maxInsn; iter++) {
       // Periodic bail for interrupt delivery
       if (executed > 0 && (executed & (interruptCheckInterval - 1)) === 0) break;
@@ -1951,17 +1951,17 @@ globalThis.VBoxJIT = (function() {
                 if (dir === 1 && addr + cx <= ramSize) {
                   // Fast path: forward direction, all in RAM
                   const writeEnd = addr + cx;
+                  // Self-modifying code check BEFORE writing: if this REP STOSB would
+                  // overwrite the current code segment in RAM, bail to IEM without writing.
+                  // (ROM code at csBase >= 0xC0000 can't be overwritten via Wasm RAM.)
+                  if (codeSegStart < 786432 && writeEnd > codeSegStart && addr < codeSegEnd) {
+                    ilen = 0;
+                    iter = maxInsn;
+                    break;
+                  }
                   mem8.fill(val, ramBase + addr, ramBase + writeEnd);
                   di = (di + cx) & 65535;
                   cx = 0;
-                  // Self-modifying code check: bail if write overlaps code segment
-                  if (writeEnd > codeSegStart && addr < codeSegEnd) {
-                    sr16(7, di);
-                    sr16(1, 0);
-                    iter = maxInsn;
-                    // bail to IEM
-                    break;
-                  }
                 } else {
                   while (cx > 0) {
                     wb(esBase + di, val);
@@ -1983,6 +1983,11 @@ globalThis.VBoxJIT = (function() {
                   const addr = esBase + di;
                   if (dir === 1 && addr + cx * 2 <= ramSize) {
                     const writeEnd2 = addr + cx * 2;
+                    if (codeSegStart < 786432 && writeEnd2 > codeSegStart && addr < codeSegEnd) {
+                      ilen = 0;
+                      iter = maxInsn;
+                      break;
+                    }
                     let off = ramBase + addr;
                     for (let i = 0; i < cx; i++) {
                       dv.setUint16(off, v, true);
@@ -1990,12 +1995,6 @@ globalThis.VBoxJIT = (function() {
                     }
                     di = (di + cx * 2) & 65535;
                     cx = 0;
-                    if (writeEnd2 > codeSegStart && addr < codeSegEnd) {
-                      sr16(7, di);
-                      sr16(1, 0);
-                      iter = maxInsn;
-                      break;
-                    }
                   } else {
                     while (cx > 0) {
                       ww(esBase + di, v);
@@ -2008,6 +2007,11 @@ globalThis.VBoxJIT = (function() {
                   const addr = esBase + di;
                   if (dir === 1 && addr + cx * 4 <= ramSize) {
                     const writeEnd4 = addr + cx * 4;
+                    if (codeSegStart < 786432 && writeEnd4 > codeSegStart && addr < codeSegEnd) {
+                      ilen = 0;
+                      iter = maxInsn;
+                      break;
+                    }
                     let off = ramBase + addr;
                     for (let i = 0; i < cx; i++) {
                       dv.setUint32(off, v, true);
@@ -2015,12 +2019,6 @@ globalThis.VBoxJIT = (function() {
                     }
                     di = (di + cx * 4) & 65535;
                     cx = 0;
-                    if (writeEnd4 > codeSegStart && addr < codeSegEnd) {
-                      sr16(7, di);
-                      sr16(1, 0);
-                      iter = maxInsn;
-                      break;
-                    }
                   } else {
                     while (cx > 0) {
                       wd(esBase + di, v);
@@ -2043,18 +2041,15 @@ globalThis.VBoxJIT = (function() {
                 if (dir === 1 && srcAddr + cx <= ramSize && dstAddr + cx <= ramSize) {
                   // Fast path: forward direction, both in RAM
                   const dstEnd = dstAddr + cx;
+                  if (codeSegStart < 786432 && dstEnd > codeSegStart && dstAddr < codeSegEnd) {
+                    ilen = 0;
+                    iter = maxInsn;
+                    break;
+                  }
                   mem8.copyWithin(ramBase + dstAddr, ramBase + srcAddr, ramBase + srcAddr + cx);
                   si = (si + cx) & 65535;
                   di = (di + cx) & 65535;
                   cx = 0;
-                  // Self-modifying code check
-                  if (dstEnd > codeSegStart && dstAddr < codeSegEnd) {
-                    sr16(6, si);
-                    sr16(7, di);
-                    sr16(1, 0);
-                    iter = maxInsn;
-                    break;
-                  }
                 } else {
                   while (cx > 0) {
                     wb(esBase + di, rb(srcSeg + si));
@@ -2078,17 +2073,15 @@ globalThis.VBoxJIT = (function() {
                 if (opSize === 2) {
                   if (dir === 1 && srcAddr5 + cx * 2 <= ramSize && dstAddr5 + cx * 2 <= ramSize) {
                     const dstEnd2 = dstAddr5 + cx * 2;
+                    if (codeSegStart < 786432 && dstEnd2 > codeSegStart && dstAddr5 < codeSegEnd) {
+                      ilen = 0;
+                      iter = maxInsn;
+                      break;
+                    }
                     mem8.copyWithin(ramBase + dstAddr5, ramBase + srcAddr5, ramBase + srcAddr5 + cx * 2);
                     si = (si + cx * 2) & 65535;
                     di = (di + cx * 2) & 65535;
                     cx = 0;
-                    if (dstEnd2 > codeSegStart && dstAddr5 < codeSegEnd) {
-                      sr16(6, si);
-                      sr16(7, di);
-                      sr16(1, 0);
-                      iter = maxInsn;
-                      break;
-                    }
                   } else {
                     while (cx > 0) {
                       ww(esBase + di, rw(srcSeg + si));
@@ -2100,17 +2093,15 @@ globalThis.VBoxJIT = (function() {
                 } else {
                   if (dir === 1 && srcAddr5 + cx * 4 <= ramSize && dstAddr5 + cx * 4 <= ramSize) {
                     const dstEnd4 = dstAddr5 + cx * 4;
+                    if (codeSegStart < 786432 && dstEnd4 > codeSegStart && dstAddr5 < codeSegEnd) {
+                      ilen = 0;
+                      iter = maxInsn;
+                      break;
+                    }
                     mem8.copyWithin(ramBase + dstAddr5, ramBase + srcAddr5, ramBase + srcAddr5 + cx * 4);
                     si = (si + cx * 4) & 65535;
                     di = (di + cx * 4) & 65535;
                     cx = 0;
-                    if (dstEnd4 > codeSegStart && dstAddr5 < codeSegEnd) {
-                      sr16(6, si);
-                      sr16(7, di);
-                      sr16(1, 0);
-                      iter = maxInsn;
-                      break;
-                    }
                   } else {
                     while (cx > 0) {
                       wd(esBase + di, rd(srcSeg + si));
@@ -9836,15 +9827,6 @@ function wasmJitExecBlock(pCpumCtx, pvRAM, maxInsn) {
   return globalThis.VBoxJIT.execBlock(Number(pCpumCtx), Number(pvRAM), maxInsn);
 }
 
-function wasmJitLog(pszMsg) {
-  console.log("[JIT-C] " + UTF8ToString(Number(pszMsg)));
-}
-
-function wasmJitSetRomBuffer(pvROM, cbROM, uGCPhysStart) {
-  console.log("[JIT] setRomBuffer: ptr=0x" + Number(pvROM).toString(16) + " size=" + cbROM + " start=0x" + uGCPhysStart.toString(16));
-  if (typeof globalThis.VBoxJIT !== "undefined" && globalThis.VBoxJIT.setRomBuffer) globalThis.VBoxJIT.setRomBuffer(Number(pvROM), cbROM, uGCPhysStart);
-}
-
 // Imports from the Wasm binary.
 var _main, _wasmJitSetGuestRAM, _wasmJitGetGuestRAM, _pthread_self, _wasmDisplayGetFB, _wasmDisplayGetWidth, _wasmDisplayGetHeight, _wasmDisplayCheckDirty, _wasmDisplayGetFBSize, _wasmDisplayRefresh, _wasmDisplayGetRefreshCount, _wasmDisplayGetUpdateRectCount, _malloc, __emscripten_tls_init, __emscripten_proxy_main, __emscripten_thread_init, __emscripten_thread_crashed, _htonl, _htons, _ntohs, __emscripten_run_js_on_main_thread_done, __emscripten_run_js_on_main_thread, __emscripten_thread_free_data, __emscripten_thread_exit, __emscripten_check_mailbox, _setThrew, _emscripten_stack_set_limits, __emscripten_stack_restore, __emscripten_stack_alloc, _emscripten_stack_get_current, __indirect_function_table, wasmTable;
 
@@ -10021,9 +10003,7 @@ function assignWasmImports() {
     /** @export */ memory: wasmMemory,
     /** @export */ proc_exit: _proc_exit,
     /** @export */ wasmCallFuncPtrTrampoline,
-    /** @export */ wasmJitExecBlock,
-    /** @export */ wasmJitLog,
-    /** @export */ wasmJitSetRomBuffer
+    /** @export */ wasmJitExecBlock
   };
 }
 

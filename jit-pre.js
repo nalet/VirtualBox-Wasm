@@ -2376,6 +2376,8 @@ function execBlock(cpuP, ramB, maxInsn) {
     case 0xCD: {
       if (!realMode) { lastBailOp = b; iter = maxInsn; break; } // protected mode INT needs IDT
       const intNum = mem8[ci+1];
+      // Bail to IEM for video BIOS (INT 10h) — needs MMIO for VGA memory writes
+      if (intNum === 0x10) { lastBailOp = b; iter = maxInsn; break; }
       // Materialize FLAGS: arithmetic bits from lazy, IF/DF/IOPL from stored flags
       const arithFlags = flagsToWord();
       const pushFlags = (flags & ~0x8D5) | (arithFlags & 0x8D5);

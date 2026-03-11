@@ -2846,8 +2846,15 @@ globalThis.VBoxJIT = (function() {
     // Track bail opcode if we exited early
     if (executed < maxInsn && executed > 0) {
       const bailPhys = csBase + ip;
-      if (bailPhys >= 0 && bailPhys < ramSize) {
-        const bailByte = mem8[ramBase + bailPhys];
+      if (bailPhys >= 0 && bailPhys + 2 < ramSize) {
+        let bailByte = mem8[ramBase + bailPhys];
+        // For opcodes with modrm reg field (0x80-0x83, 0xF6/F7, 0xFF), include /reg
+        if (bailByte === 255 || bailByte === 246 || bailByte === 247) {
+          const modrm = mem8[ramBase + bailPhys + 1];
+          bailByte = (bailByte << 4) | ((modrm >> 3) & 7);
+        } else if (bailByte === 15) {
+          bailByte = (bailByte << 8) | mem8[ramBase + bailPhys + 1];
+        }
         fallbackOpcodes.set(bailByte, (fallbackOpcodes.get(bailByte) || 0) + 1);
       }
     }

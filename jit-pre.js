@@ -1996,8 +1996,15 @@ function execBlock(cpuP, ramB, maxInsn) {
   // Track bail opcode if we exited early
   if (executed < maxInsn && executed > 0) {
     const bailPhys = csBase + ip;
-    if (bailPhys >= 0 && bailPhys < ramSize) {
-      const bailByte = mem8[ramBase + bailPhys];
+    if (bailPhys >= 0 && bailPhys + 2 < ramSize) {
+      let bailByte = mem8[ramBase + bailPhys];
+      // For opcodes with modrm reg field (0x80-0x83, 0xF6/F7, 0xFF), include /reg
+      if (bailByte === 0xFF || bailByte === 0xF6 || bailByte === 0xF7) {
+        const modrm = mem8[ramBase + bailPhys + 1];
+        bailByte = (bailByte << 4) | ((modrm >> 3) & 7); // e.g., 0xFF0 for FF/0
+      } else if (bailByte === 0x0F) {
+        bailByte = (bailByte << 8) | mem8[ramBase + bailPhys + 1]; // 0x0Fxx
+      }
       fallbackOpcodes.set(bailByte, (fallbackOpcodes.get(bailByte) || 0) + 1);
     }
   }

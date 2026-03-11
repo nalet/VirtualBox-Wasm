@@ -743,7 +743,11 @@ globalThis.VBoxJIT = (function() {
           addrSizeOverride = true;
           break;
 
-         case 242:
+         case 240:
+          break;
+
+         // LOCK prefix — consumed, no special behavior in JIT
+          case 242:
           repPrefix = 242;
           break;
 
@@ -1174,7 +1178,9 @@ globalThis.VBoxJIT = (function() {
 
        // ──── ALU r/m8, imm8 (0x80) ────
         case 128:
+       case 130:
         {
+          // 0x82 is undocumented alias for 0x80
           const modrm = mem8[ci + 1];
           ilen += 2;
           const op = (modrm >> 3) & 7;
@@ -2846,11 +2852,11 @@ globalThis.VBoxJIT = (function() {
     } else {
       statFallbacks++;
     }
-    // Log stats every 100000 calls
+    // Log stats every 5 seconds
     const now = Date.now();
     if (now - statLastReport > 5e3) {
       statLastReport = now;
-      if (statTotalCalls > 0 && (statTotalCalls % 1e3 < 10)) {
+      {
         console.log("[JIT] calls=" + statTotalCalls + " insns=" + statTotalInsns + " fallbacks=" + statFallbacks + " avg=" + (statTotalInsns / Math.max(1, statTotalCalls - statFallbacks)).toFixed(1));
       }
     }

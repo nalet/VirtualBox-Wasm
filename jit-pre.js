@@ -420,6 +420,7 @@ function execBlock(cpuP, ramB, maxInsn) {
         case 0x65: segOverride = S_GS; break;
         case 0x66: opSizeOverride = true; break;
         case 0x67: addrSizeOverride = true; break;
+        case 0xF0: break; // LOCK prefix — consumed, no special behavior in JIT
         case 0xF2: repPrefix = 0xF2; break;
         case 0xF3: repPrefix = 0xF3; break;
         default: scanning = false; continue;
@@ -759,7 +760,8 @@ function execBlock(cpuP, ramB, maxInsn) {
     }
 
     // ──── ALU r/m8, imm8 (0x80) ────
-    case 0x80: {
+    case 0x80:
+    case 0x82: { // 0x82 is undocumented alias for 0x80
       const modrm = mem8[ci+1]; ilen += 2;
       const op = (modrm >> 3) & 7;
       if ((modrm >> 6) === 3) {
@@ -2004,11 +2006,11 @@ function execBlockWrapped(cpuP, ramB, maxInsn) {
   } else {
     statFallbacks++;
   }
-  // Log stats every 100000 calls
+  // Log stats every 5 seconds
   const now = Date.now();
   if (now - statLastReport > 5000) {
     statLastReport = now;
-    if (statTotalCalls > 0 && (statTotalCalls % 1000 < 10)) {
+    {
       console.log('[JIT] calls=' + statTotalCalls +
         ' insns=' + statTotalInsns +
         ' fallbacks=' + statFallbacks +

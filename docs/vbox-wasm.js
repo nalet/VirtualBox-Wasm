@@ -9570,6 +9570,12 @@ function _futimes(...args) {
 
 _futimes.stub = true;
 
+function _iemAImpl_cmpxchg16b_locked(...args) {
+  abort("missing function: iemAImpl_cmpxchg16b_locked");
+}
+
+_iemAImpl_cmpxchg16b_locked.stub = true;
+
 var stringToUTF8OnStack = str => {
   var size = lengthBytesUTF8(str) + 1;
   var ret = stackAlloc(size);
@@ -9864,6 +9870,7 @@ function assignWasmImports() {
     /** @export */ fd_sync: _fd_sync,
     /** @export */ fd_write: _fd_write,
     /** @export */ futimes: _futimes,
+    /** @export */ iemAImpl_cmpxchg16b_locked: _iemAImpl_cmpxchg16b_locked,
     /** @export */ invoke_i,
     /** @export */ invoke_ii,
     /** @export */ invoke_ij,

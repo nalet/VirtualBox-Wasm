@@ -9707,7 +9707,12 @@ function wasmJitExecBlock(pCpumCtx, pvRAM, maxInsn) {
   return globalThis.VBoxJIT.execBlock(Number(pCpumCtx), Number(pvRAM), maxInsn);
 }
 
+function wasmJitLog(pszMsg) {
+  console.log("[JIT-C] " + UTF8ToString(Number(pszMsg)));
+}
+
 function wasmJitSetRomBuffer(pvROM, cbROM, uGCPhysStart) {
+  console.log("[JIT] setRomBuffer: ptr=0x" + Number(pvROM).toString(16) + " size=" + cbROM + " start=0x" + uGCPhysStart.toString(16));
   if (typeof globalThis.VBoxJIT !== "undefined" && globalThis.VBoxJIT.setRomBuffer) globalThis.VBoxJIT.setRomBuffer(Number(pvROM), cbROM, uGCPhysStart);
 }
 
@@ -9888,6 +9893,7 @@ function assignWasmImports() {
     /** @export */ proc_exit: _proc_exit,
     /** @export */ wasmCallFuncPtrTrampoline,
     /** @export */ wasmJitExecBlock,
+    /** @export */ wasmJitLog,
     /** @export */ wasmJitSetRomBuffer
   };
 }

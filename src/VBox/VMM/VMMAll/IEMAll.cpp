@@ -182,7 +182,12 @@ EM_JS(int, wasmJitExecBlock, (void *pCpumCtx, void *pvRAM, int maxInsn), {
     return globalThis.VBoxJIT.execBlock(Number(pCpumCtx), Number(pvRAM), maxInsn);
 });
 
+EM_JS(void, wasmJitLog, (const char *pszMsg), {
+    console.log('[JIT-C] ' + UTF8ToString(Number(pszMsg)));
+});
+
 EM_JS(void, wasmJitSetRomBuffer, (void *pvROM, int cbROM, int uGCPhysStart), {
+    console.log('[JIT] setRomBuffer: ptr=0x' + Number(pvROM).toString(16) + ' size=' + cbROM + ' start=0x' + uGCPhysStart.toString(16));
     if (typeof globalThis.VBoxJIT !== 'undefined' && globalThis.VBoxJIT.setRomBuffer)
         globalThis.VBoxJIT.setRomBuffer(Number(pvROM), cbROM, uGCPhysStart);
 });
@@ -218,12 +223,14 @@ static void iemJitEnsureInit(PVMCC pVM)
     /* Copy ROM (0xC0000-0xFFFFF = 256KB) page by page using ReadOnly pointers.
      * PGMPhysGCPhys2CCPtrReadOnly returns the currently active page, which for
      * ROM pages in Virgin mode is the actual ROM content (not shadow RAM). */
+    wasmJitLog("Copying ROM 0xC0000-0xFFFFF...");
     const uint32_t cbROM     = 0x40000;  /* 256 KB */
     const uint32_t uROMStart = 0xC0000;
     void *pvROM = RTMemAllocZ(cbROM);
-    if (pvROM)
+    if (!pvROM) { wasmJitLog("RTMemAllocZ failed for ROM buffer"); return; }
     {
         uint32_t cPagesOK = 0, cPagesFail = 0;
+        int lastFailRc = 0;
         for (uint32_t off = 0; off < cbROM; off += GUEST_PAGE_SIZE)
         {
             PGMPAGEMAPLOCK RomLock;
@@ -236,10 +243,11 @@ static void iemJitEnsureInit(PVMCC pVM)
                 cPagesOK++;
             }
             else
+            {
                 cPagesFail++;
+                lastFailRc = rcPage;
+            }
         }
-        LogRel(("[JIT] ROM buffer: %u pages OK, %u failed (0x%X-0x%X)\n",
-                cPagesOK, cPagesFail, uROMStart, uROMStart + cbROM - 1));
 
         /* Verify: check if we got real ROM content (not all 0xFF or 0x00) */
         uint32_t cNonTrivial = 0;
@@ -247,13 +255,19 @@ static void iemJitEnsureInit(PVMCC pVM)
         for (uint32_t i = 0; i < RT_MIN(cbROM, 0x1000); i++)
             if (pb[i] != 0xFF && pb[i] != 0x00)
                 cNonTrivial++;
-        LogRel(("[JIT] ROM first 4KB: %u non-trivial bytes (expect >100 for real ROM)\n", cNonTrivial));
+
+        /* Log results via EM_JS (visible in browser console) */
+        char szMsg[256];
+        RTStrPrintf(szMsg, sizeof(szMsg),
+                    "ROM: %u pages OK, %u fail (lastRc=%d), first4KB: %u non-trivial, byte[0]=0x%02x",
+                    cPagesOK, cPagesFail, lastFailRc, cNonTrivial, pb[0]);
+        wasmJitLog(szMsg);
 
         if (cPagesOK > 0 && cNonTrivial > 100)
             wasmJitSetRomBuffer(pvROM, (int)cbROM, (int)uROMStart);
         else
         {
-            LogRel(("[JIT] ROM buffer rejected: content looks empty\n"));
+            wasmJitLog("ROM buffer REJECTED: content looks empty");
             RTMemFree(pvROM);
         }
     }

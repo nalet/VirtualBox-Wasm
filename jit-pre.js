@@ -2493,8 +2493,15 @@ function execBlock(cpuP, ramB, maxInsn) {
     fallbackOpcodes.set(lastBailOp, (fallbackOpcodes.get(lastBailOp) || 0) + 1);
   }
 
-  // Store CS:IP for diagnostics
+  // Store diagnostics
   statLastCSIP = (csBase>>>4).toString(16) + ':' + ip.toString(16);
+  statLastFlags = newFlags;
+  // Read code bytes at current CS:IP
+  const diagAddr = csBase + ip;
+  let cb = '';
+  for (let i = 0; i < 8 && (diagAddr + i) < ramSize; i++)
+    cb += guestRb(diagAddr + i).toString(16).padStart(2, '0');
+  statLastCodeBytes = cb;
 
   return executed;
 }
@@ -2502,6 +2509,8 @@ function execBlock(cpuP, ramB, maxInsn) {
 // ── Stats ──
 let statTotalInsns = 0, statTotalCalls = 0, statFallbacks = 0;
 let statLastCSIP = '';
+let statLastFlags = 0;
+let statLastCodeBytes = '';
 let statLastReport = 0;
 const fallbackOpcodes = new Map(); // opcode -> count
 
@@ -2521,11 +2530,12 @@ function execBlockWrapped(cpuP, ramB, maxInsn) {
       // Top fallback opcodes
       const sorted = [...fallbackOpcodes.entries()].sort((a,b) => b[1]-a[1]).slice(0,8);
       const topStr = sorted.map(([op,cnt]) => '0x' + op.toString(16) + ':' + cnt).join(' ');
+      const ifStr = (statLastFlags & 0x200) ? 'IF=1' : 'IF=0';
       console.log('[JIT] calls=' + statTotalCalls +
         ' insns=' + statTotalInsns +
         ' fallbacks=' + statFallbacks +
         ' avg=' + (statTotalInsns / Math.max(1, statTotalCalls - statFallbacks)).toFixed(1) +
-        ' @' + statLastCSIP +
+        ' @' + statLastCSIP + ' ' + ifStr + ' code=' + statLastCodeBytes +
         ' top=[' + topStr + ']');
     }
   }

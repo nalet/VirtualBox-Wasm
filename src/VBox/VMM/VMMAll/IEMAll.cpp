@@ -182,13 +182,7 @@ EM_JS(int, wasmJitExecBlock, (void *pCpumCtx, void *pvRAM, int maxInsn), {
     return globalThis.VBoxJIT.execBlock(Number(pCpumCtx), Number(pvRAM), maxInsn);
 });
 
-EM_JS(void, wasmJitSetRomBuffer, (void *pvROM, int cbROM, int uGCPhysStart), {
-    if (typeof globalThis.VBoxJIT !== 'undefined' && globalThis.VBoxJIT.setRomBuffer)
-        globalThis.VBoxJIT.setRomBuffer(Number(pvROM), cbROM, uGCPhysStart);
-});
-
 static void    *s_pvJitRAM = NULL;
-static void    *s_pvJitROM = NULL;
 static bool     s_fJitInitDone = false;
 
 /* Defined in wasm-main.cpp — stores RAM base in shared Wasm memory for JS display */
@@ -208,25 +202,9 @@ static void iemJitEnsureInit(PVMCC pVM)
         wasmJitSetGuestRAM(pv);
     }
 
-    /* Copy BIOS ROM (0xC0000-0xFFFFF = 256KB) into a flat buffer for JS JIT */
-    const uint32_t cbROM = 0x40000;  /* 256 KB */
-    const uint32_t uROMStart = 0xC0000;
-    s_pvJitROM = RTMemAlloc(cbROM);
-    if (s_pvJitROM)
-    {
-        VBOXSTRICTRC rcStrict = PGMPhysRead(pVM, (RTGCPHYS)uROMStart, s_pvJitROM, cbROM, PGMACCESSORIGIN_IEM);
-        if (RT_SUCCESS((int)rcStrict))
-        {
-            LogRel(("[JIT] ROM buffer: copied %u KB from 0x%X-0x%X\n", cbROM / 1024, uROMStart, uROMStart + cbROM - 1));
-            wasmJitSetRomBuffer(s_pvJitROM, (int)cbROM, (int)uROMStart);
-        }
-        else
-        {
-            LogRel(("[JIT] ROM buffer: PGMPhysRead failed rc=%d\n", (int)rcStrict));
-            RTMemFree(s_pvJitROM);
-            s_pvJitROM = NULL;
-        }
-    }
+    /* ROM buffer disabled: PGMPhysRead returns shadow RAM (0xFF) for ROM pages,
+     * not the actual ROM content. This causes JIT/IEM code mismatches.
+     * IEM handles all ROM code correctly via PGM's ROM page handlers. */
 }
 #endif /* __EMSCRIPTEN__ */
 

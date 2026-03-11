@@ -1039,14 +1039,33 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                 iemJitEnsureInit(pVM);
                 if (s_pvJitRAM)
                 {
-                    int cJitInsns = wasmJitExecBlock(&pVCpu->cpum.GstCtx, s_pvJitRAM, 4096);
+                    /* Limit batch to remaining instructions, leave room for timer polls */
+                    uint32_t cBatch = RT_MIN(cMaxInstructionsGccStupidity, 512);
+                    int cJitInsns = wasmJitExecBlock(&pVCpu->cpum.GstCtx, s_pvJitRAM, cBatch);
                     if (cJitInsns > 0)
                     {
                         pVCpu->iem.s.cInstructions += cJitInsns;
+                        cMaxInstructionsGccStupidity -= RT_MIN((uint32_t)cJitInsns, cMaxInstructionsGccStupidity);
+
+                        /* Check forced actions and poll timers */
+                        uint64_t fCpu = pVCpu->fLocalForcedActions;
+                        fCpu &= VMCPU_FF_ALL_MASK & ~(  VMCPU_FF_PGM_SYNC_CR3
+                                                       | VMCPU_FF_PGM_SYNC_CR3_NON_GLOBAL
+                                                       | VMCPU_FF_TLB_FLUSH
+                                                       | VMCPU_FF_UNHALT );
+                        if (RT_LIKELY(   !fCpu
+                                      && !VM_FF_IS_ANY_SET(pVM, VM_FF_ALL_MASK)
+                                      && cMaxInstructionsGccStupidity > 0))
+                        {
+                            /* Poll timers periodically */
+                            if (   (cMaxInstructionsGccStupidity & cPollRate) != 0
+                                || !TMTimerPollBool(pVM, pVCpu))
+                            {
+                                iemReInitDecoder(pVCpu);
+                                continue;
+                            }
+                        }
                         rcStrict = VINF_SUCCESS;
-                        if (   !VM_FF_IS_ANY_SET(pVM, VM_FF_ALL_MASK)
-                            && !VMCPU_FF_IS_ANY_SET(pVCpu, VMCPU_FF_ALL_MASK))
-                            continue;
                         break;
                     }
                 }

@@ -712,6 +712,10 @@ globalThis.VBoxJIT = (function() {
     // SF
     lazySize = 2;
     // default 16-bit
+    // Bail if executing in ROM space — PGM stores ROM separately from flat RAM,
+    // so JIT reads garbage. Let IEM handle all ROM code via PGM page handlers.
+    const linearPC = csBase + ip;
+    if (linearPC >= 786432) return 0;
     // Check if we're in real mode or protected mode
     const cr0 = rr32(R_CR0);
     const realMode = !(cr0 & 1);

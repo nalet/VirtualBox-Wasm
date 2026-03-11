@@ -421,6 +421,13 @@ function execBlock(cpuP, ramB, maxInsn) {
   const linearPC = csBase + ip;
   if (linearPC >= 0xC0000 && romBufSize === 0) return 0;
 
+  // Bail when interrupts are disabled (IF=0). The BIOS memory test runs
+  // with CLI and does REP STOSB that overwrites ALL low RAM including the
+  // code segment. The JIT writes directly to Wasm memory, bypassing PGM's
+  // memory management, so self-modifying code and overlapping writes corrupt
+  // the instruction stream. Let IEM handle these phases correctly.
+  if (!(flags & 0x200)) return 0;
+
   // Check if we're in real mode or protected mode
   const cr0 = rr32(R_CR0);
   const realMode = !(cr0 & 1); // PE bit

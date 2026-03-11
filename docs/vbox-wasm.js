@@ -715,6 +715,12 @@ globalThis.VBoxJIT = (function() {
     // Bail if executing in ROM space without a ROM buffer
     const linearPC = csBase + ip;
     if (linearPC >= 786432 && romBufSize === 0) return 0;
+    // Bail when interrupts are disabled (IF=0). The BIOS memory test runs
+    // with CLI and does REP STOSB that overwrites ALL low RAM including the
+    // code segment. The JIT writes directly to Wasm memory, bypassing PGM's
+    // memory management, so self-modifying code and overlapping writes corrupt
+    // the instruction stream. Let IEM handle these phases correctly.
+    if (!(flags & 512)) return 0;
     // Check if we're in real mode or protected mode
     const cr0 = rr32(R_CR0);
     const realMode = !(cr0 & 1);

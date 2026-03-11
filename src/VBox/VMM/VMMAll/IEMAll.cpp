@@ -1137,9 +1137,10 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                                       && !VM_FF_IS_ANY_SET(pVM, VM_FF_ALL_MASK)
                                       && cMaxInstructionsGccStupidity > 0))
                         {
-                            /* Poll timers periodically */
-                            if (   (cMaxInstructionsGccStupidity & cPollRate) != 0
-                                || !TMTimerPollBool(pVM, pVCpu))
+                            /* Always poll timers after JIT batch — the JIT skips
+                               cPollRate alignment so we must poll every return to
+                               ensure PIT timer interrupts get delivered. */
+                            if (!TMTimerPollBool(pVM, pVCpu))
                             {
                                 iemReInitDecoder(pVCpu);
                                 continue;

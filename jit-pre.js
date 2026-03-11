@@ -1993,6 +1993,15 @@ function execBlock(cpuP, ramB, maxInsn) {
   const newFlags = (flags & 0xFFFFF000) | flagsToWord();
   wr32(R_FLAGS, newFlags);
 
+  // Track bail opcode if we exited early
+  if (executed < maxInsn && executed > 0) {
+    const bailPhys = csBase + ip;
+    if (bailPhys >= 0 && bailPhys < ramSize) {
+      const bailByte = mem8[ramBase + bailPhys];
+      fallbackOpcodes.set(bailByte, (fallbackOpcodes.get(bailByte) || 0) + 1);
+    }
+  }
+
   return executed;
 }
 

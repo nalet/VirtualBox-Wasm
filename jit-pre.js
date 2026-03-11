@@ -443,7 +443,15 @@ function execBlock(cpuP, ramB, maxInsn) {
     return 0;
   }
 
+  // Bail periodically to let IEM deliver hardware interrupts (PIT timer, etc.)
+  // Without this, the JIT blocks interrupt delivery for the entire batch,
+  // causing BIOS POST to stall waiting for timer ticks.
+  const interruptCheckInterval = 512;
+
   for (let iter = 0; iter < maxInsn; iter++) {
+    // Periodic bail for interrupt delivery
+    if (executed > 0 && (executed & (interruptCheckInterval - 1)) === 0) break;
+
     codePhys = csBase + ip;
     if (codePhys < 0 || (!addrAccessible(codePhys))) break; // safety
 
@@ -2437,11 +2445,15 @@ function execBlock(cpuP, ramB, maxInsn) {
     fallbackOpcodes.set(lastBailOp, (fallbackOpcodes.get(lastBailOp) || 0) + 1);
   }
 
+  // Store CS:IP for diagnostics
+  statLastCSIP = (csBase>>>4).toString(16) + ':' + ip.toString(16);
+
   return executed;
 }
 
 // ── Stats ──
 let statTotalInsns = 0, statTotalCalls = 0, statFallbacks = 0;
+let statLastCSIP = '';
 let statLastReport = 0;
 const fallbackOpcodes = new Map(); // opcode -> count
 
@@ -2465,6 +2477,7 @@ function execBlockWrapped(cpuP, ramB, maxInsn) {
         ' insns=' + statTotalInsns +
         ' fallbacks=' + statFallbacks +
         ' avg=' + (statTotalInsns / Math.max(1, statTotalCalls - statFallbacks)).toFixed(1) +
+        ' @' + statLastCSIP +
         ' top=[' + topStr + ']');
     }
   }

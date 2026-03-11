@@ -490,7 +490,7 @@ function execBlock(cpuP, ramB, maxInsn) {
   // Bail periodically to let IEM deliver hardware interrupts (PIT timer, etc.)
   // Without this, the JIT blocks interrupt delivery for the entire batch,
   // causing BIOS POST to stall waiting for timer ticks.
-  const interruptCheckInterval = 512;
+  const interruptCheckInterval = 2048;
 
   for (let iter = 0; iter < maxInsn; iter++) {
     // Periodic bail for interrupt delivery
@@ -2538,6 +2538,7 @@ return {
 };
 
 })(); // end VBoxJIT IIFE
+
 
 var arguments_ = [];
 

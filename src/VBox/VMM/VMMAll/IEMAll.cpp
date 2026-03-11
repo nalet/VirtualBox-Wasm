@@ -220,47 +220,51 @@ static void iemJitEnsureInit(PVMCC pVM)
         return;
     }
 
-    /* Copy ROM (0xC0000-0xFFFFF = 256KB) page by page using ReadOnly pointers.
-     * PGMPhysGCPhys2CCPtrReadOnly returns the currently active page, which for
-     * ROM pages in Virgin mode is the actual ROM content (not shadow RAM). */
-    wasmJitLog("Copying ROM 0xC0000-0xFFFFF...");
+    /* Copy ROM (0xC0000-0xFFFFF = 256KB) using PGMPhysRead with IEM origin.
+     * PGMPhysRead goes through the ROM access handler which correctly returns
+     * the Virgin (original ROM) page content. */
+    wasmJitLog("Copying ROM 0xC0000-0xFFFFF via PGMPhysRead...");
     const uint32_t cbROM     = 0x40000;  /* 256 KB */
     const uint32_t uROMStart = 0xC0000;
     void *pvROM = RTMemAllocZ(cbROM);
     if (!pvROM) { wasmJitLog("RTMemAllocZ failed for ROM buffer"); return; }
     {
+        /* Read page by page to track failures */
         uint32_t cPagesOK = 0, cPagesFail = 0;
         int lastFailRc = 0;
         for (uint32_t off = 0; off < cbROM; off += GUEST_PAGE_SIZE)
         {
-            PGMPAGEMAPLOCK RomLock;
-            const void *pvPage = NULL;
-            int rcPage = PGMPhysGCPhys2CCPtrReadOnly(pVM, (RTGCPHYS)(uROMStart + off),
-                                                     &pvPage, &RomLock);
-            if (RT_SUCCESS(rcPage) && pvPage)
-            {
-                memcpy((uint8_t *)pvROM + off, pvPage, GUEST_PAGE_SIZE);
+            VBOXSTRICTRC rcPage = PGMPhysRead(pVM, (RTGCPHYS)(uROMStart + off),
+                                              (uint8_t *)pvROM + off, GUEST_PAGE_SIZE,
+                                              PGMACCESSORIGIN_IEM);
+            if (RT_SUCCESS((int)rcPage))
                 cPagesOK++;
-            }
             else
             {
                 cPagesFail++;
-                lastFailRc = rcPage;
+                lastFailRc = (int)rcPage;
             }
         }
 
-        /* Verify: check if we got real ROM content (not all 0xFF or 0x00) */
-        uint32_t cNonTrivial = 0;
+        /* Verify: check if we got real ROM content */
         uint8_t *pb = (uint8_t *)pvROM;
-        for (uint32_t i = 0; i < RT_MIN(cbROM, 0x1000); i++)
+        uint32_t cNonTrivial = 0;
+        for (uint32_t i = 0; i < cbROM; i++)
             if (pb[i] != 0xFF && pb[i] != 0x00)
                 cNonTrivial++;
 
-        /* Log results via EM_JS (visible in browser console) */
+        /* Check specific ROM signatures */
+        /* VGA BIOS at 0xC0000 starts with 0x55 0xAA */
+        /* System BIOS at 0xF0000 starts with actual code */
+        uint8_t vgaSig0 = pb[0], vgaSig1 = pb[1];
+        uint8_t biosSig = pb[0x30000]; /* 0xF0000 - 0xC0000 = offset 0x30000 */
+
         char szMsg[256];
         RTStrPrintf(szMsg, sizeof(szMsg),
-                    "ROM: %u pages OK, %u fail (lastRc=%d), first4KB: %u non-trivial, byte[0]=0x%02x",
-                    cPagesOK, cPagesFail, lastFailRc, cNonTrivial, pb[0]);
+                    "ROM: %u pages OK, %u fail (lastRc=%d), non-trivial=%u, "
+                    "vga[0:1]=0x%02x,0x%02x bios[F0000]=0x%02x",
+                    cPagesOK, cPagesFail, lastFailRc, cNonTrivial,
+                    vgaSig0, vgaSig1, biosSig);
         wasmJitLog(szMsg);
 
         if (cPagesOK > 0 && cNonTrivial > 100)

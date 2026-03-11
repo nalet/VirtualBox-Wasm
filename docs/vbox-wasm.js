@@ -715,12 +715,12 @@ globalThis.VBoxJIT = (function() {
     // Bail if executing in ROM space without a ROM buffer
     const linearPC = csBase + ip;
     if (linearPC >= 786432 && romBufSize === 0) return 0;
-    // Bail when interrupts are disabled (IF=0). The BIOS memory test runs
-    // with CLI and does REP STOSB that overwrites ALL low RAM including the
-    // code segment. The JIT writes directly to Wasm memory, bypassing PGM's
-    // memory management, so self-modifying code and overlapping writes corrupt
-    // the instruction stream. Let IEM handle these phases correctly.
-    if (!(flags & 512)) return 0;
+    // Track code segment range for self-modifying code detection.
+    // REP STOSB/MOVSB can overwrite the current code segment (e.g. BIOS memory
+    // test). We detect this and bail to IEM rather than executing corrupted code.
+    const codeSegStart = csBase;
+    const codeSegEnd = csBase + 65536;
+    // 64KB segment
     // Check if we're in real mode or protected mode
     const cr0 = rr32(R_CR0);
     const realMode = !(cr0 & 1);
@@ -1950,9 +1950,18 @@ globalThis.VBoxJIT = (function() {
                 const addr = esBase + di;
                 if (dir === 1 && addr + cx <= ramSize) {
                   // Fast path: forward direction, all in RAM
-                  mem8.fill(val, ramBase + addr, ramBase + addr + cx);
+                  const writeEnd = addr + cx;
+                  mem8.fill(val, ramBase + addr, ramBase + writeEnd);
                   di = (di + cx) & 65535;
                   cx = 0;
+                  // Self-modifying code check: bail if write overlaps code segment
+                  if (writeEnd > codeSegStart && addr < codeSegEnd) {
+                    sr16(7, di);
+                    sr16(1, 0);
+                    iter = maxInsn;
+                    // bail to IEM
+                    break;
+                  }
                 } else {
                   while (cx > 0) {
                     wb(esBase + di, val);
@@ -1973,7 +1982,7 @@ globalThis.VBoxJIT = (function() {
                   const v = gr16(0);
                   const addr = esBase + di;
                   if (dir === 1 && addr + cx * 2 <= ramSize) {
-                    // Fast path: fill 16-bit values using DataView
+                    const writeEnd2 = addr + cx * 2;
                     let off = ramBase + addr;
                     for (let i = 0; i < cx; i++) {
                       dv.setUint16(off, v, true);
@@ -1981,6 +1990,12 @@ globalThis.VBoxJIT = (function() {
                     }
                     di = (di + cx * 2) & 65535;
                     cx = 0;
+                    if (writeEnd2 > codeSegStart && addr < codeSegEnd) {
+                      sr16(7, di);
+                      sr16(1, 0);
+                      iter = maxInsn;
+                      break;
+                    }
                   } else {
                     while (cx > 0) {
                       ww(esBase + di, v);
@@ -1992,6 +2007,7 @@ globalThis.VBoxJIT = (function() {
                   const v = gr32(0);
                   const addr = esBase + di;
                   if (dir === 1 && addr + cx * 4 <= ramSize) {
+                    const writeEnd4 = addr + cx * 4;
                     let off = ramBase + addr;
                     for (let i = 0; i < cx; i++) {
                       dv.setUint32(off, v, true);
@@ -1999,6 +2015,12 @@ globalThis.VBoxJIT = (function() {
                     }
                     di = (di + cx * 4) & 65535;
                     cx = 0;
+                    if (writeEnd4 > codeSegStart && addr < codeSegEnd) {
+                      sr16(7, di);
+                      sr16(1, 0);
+                      iter = maxInsn;
+                      break;
+                    }
                   } else {
                     while (cx > 0) {
                       wd(esBase + di, v);
@@ -2020,10 +2042,19 @@ globalThis.VBoxJIT = (function() {
                 const dstAddr = esBase + di;
                 if (dir === 1 && srcAddr + cx <= ramSize && dstAddr + cx <= ramSize) {
                   // Fast path: forward direction, both in RAM
+                  const dstEnd = dstAddr + cx;
                   mem8.copyWithin(ramBase + dstAddr, ramBase + srcAddr, ramBase + srcAddr + cx);
                   si = (si + cx) & 65535;
                   di = (di + cx) & 65535;
                   cx = 0;
+                  // Self-modifying code check
+                  if (dstEnd > codeSegStart && dstAddr < codeSegEnd) {
+                    sr16(6, si);
+                    sr16(7, di);
+                    sr16(1, 0);
+                    iter = maxInsn;
+                    break;
+                  }
                 } else {
                   while (cx > 0) {
                     wb(esBase + di, rb(srcSeg + si));
@@ -2046,10 +2077,18 @@ globalThis.VBoxJIT = (function() {
                 const dstAddr5 = esBase + di;
                 if (opSize === 2) {
                   if (dir === 1 && srcAddr5 + cx * 2 <= ramSize && dstAddr5 + cx * 2 <= ramSize) {
+                    const dstEnd2 = dstAddr5 + cx * 2;
                     mem8.copyWithin(ramBase + dstAddr5, ramBase + srcAddr5, ramBase + srcAddr5 + cx * 2);
                     si = (si + cx * 2) & 65535;
                     di = (di + cx * 2) & 65535;
                     cx = 0;
+                    if (dstEnd2 > codeSegStart && dstAddr5 < codeSegEnd) {
+                      sr16(6, si);
+                      sr16(7, di);
+                      sr16(1, 0);
+                      iter = maxInsn;
+                      break;
+                    }
                   } else {
                     while (cx > 0) {
                       ww(esBase + di, rw(srcSeg + si));
@@ -2060,10 +2099,18 @@ globalThis.VBoxJIT = (function() {
                   }
                 } else {
                   if (dir === 1 && srcAddr5 + cx * 4 <= ramSize && dstAddr5 + cx * 4 <= ramSize) {
+                    const dstEnd4 = dstAddr5 + cx * 4;
                     mem8.copyWithin(ramBase + dstAddr5, ramBase + srcAddr5, ramBase + srcAddr5 + cx * 4);
                     si = (si + cx * 4) & 65535;
                     di = (di + cx * 4) & 65535;
                     cx = 0;
+                    if (dstEnd4 > codeSegStart && dstAddr5 < codeSegEnd) {
+                      sr16(6, si);
+                      sr16(7, di);
+                      sr16(1, 0);
+                      iter = maxInsn;
+                      break;
+                    }
                   } else {
                     while (cx > 0) {
                       wd(esBase + di, rd(srcSeg + si));

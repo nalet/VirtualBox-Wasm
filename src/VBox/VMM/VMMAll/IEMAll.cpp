@@ -191,6 +191,9 @@ static void    *s_pvJitRAM = NULL;
 static void    *s_pvJitROM = NULL;
 static bool     s_fJitInitDone = false;
 
+/* Defined in wasm-main.cpp — stores RAM base in shared Wasm memory for JS display */
+extern "C" void wasmJitSetGuestRAM(void *pv);
+
 static void iemJitEnsureInit(PVMCC pVM)
 {
     if (RT_LIKELY(s_fJitInitDone))
@@ -200,7 +203,10 @@ static void iemJitEnsureInit(PVMCC pVM)
     void *pv = NULL;
     int rc = PGMPhysGCPhys2CCPtr(pVM, 0 /*GCPhys*/, &pv, &Lock);
     if (RT_SUCCESS(rc) && pv)
+    {
         s_pvJitRAM = pv;
+        wasmJitSetGuestRAM(pv);
+    }
 
     /* Copy BIOS ROM (0xC0000-0xFFFFF = 256KB) into a flat buffer for JS JIT */
     const uint32_t cbROM = 0x40000;  /* 256 KB */

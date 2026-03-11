@@ -171,6 +171,7 @@
 
 #ifdef __EMSCRIPTEN__
 # include <emscripten.h>
+# include <iprt/mem.h>
 
 EM_JS(int, wasmJitExecBlock, (void *pCpumCtx, void *pvRAM, int maxInsn), {
     if (typeof globalThis.VBoxJIT === 'undefined') return 0;
@@ -181,7 +182,13 @@ EM_JS(int, wasmJitExecBlock, (void *pCpumCtx, void *pvRAM, int maxInsn), {
     return globalThis.VBoxJIT.execBlock(Number(pCpumCtx), Number(pvRAM), maxInsn);
 });
 
+EM_JS(void, wasmJitSetRomBuffer, (void *pvROM, int cbROM, int uGCPhysStart), {
+    if (typeof globalThis.VBoxJIT !== 'undefined' && globalThis.VBoxJIT.setRomBuffer)
+        globalThis.VBoxJIT.setRomBuffer(Number(pvROM), cbROM, uGCPhysStart);
+});
+
 static void    *s_pvJitRAM = NULL;
+static void    *s_pvJitROM = NULL;
 static bool     s_fJitInitDone = false;
 
 static void iemJitEnsureInit(PVMCC pVM)
@@ -194,6 +201,26 @@ static void iemJitEnsureInit(PVMCC pVM)
     int rc = PGMPhysGCPhys2CCPtr(pVM, 0 /*GCPhys*/, &pv, &Lock);
     if (RT_SUCCESS(rc) && pv)
         s_pvJitRAM = pv;
+
+    /* Copy BIOS ROM (0xC0000-0xFFFFF = 256KB) into a flat buffer for JS JIT */
+    const uint32_t cbROM = 0x40000;  /* 256 KB */
+    const uint32_t uROMStart = 0xC0000;
+    s_pvJitROM = RTMemAlloc(cbROM);
+    if (s_pvJitROM)
+    {
+        VBOXSTRICTRC rcStrict = PGMPhysRead(pVM, (RTGCPHYS)uROMStart, s_pvJitROM, cbROM, PGMACCESSORIGIN_IEM);
+        if (RT_SUCCESS((int)rcStrict))
+        {
+            LogRel(("[JIT] ROM buffer: copied %u KB from 0x%X-0x%X\n", cbROM / 1024, uROMStart, uROMStart + cbROM - 1));
+            wasmJitSetRomBuffer(s_pvJitROM, (int)cbROM, (int)uROMStart);
+        }
+        else
+        {
+            LogRel(("[JIT] ROM buffer: PGMPhysRead failed rc=%d\n", (int)rcStrict));
+            RTMemFree(s_pvJitROM);
+            s_pvJitROM = NULL;
+        }
+    }
 }
 #endif /* __EMSCRIPTEN__ */
 
@@ -1040,7 +1067,7 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                 if (s_pvJitRAM)
                 {
                     /* Limit batch to remaining instructions, leave room for timer polls */
-                    uint32_t cBatch = RT_MIN(cMaxInstructionsGccStupidity, 512);
+                    uint32_t cBatch = RT_MIN(cMaxInstructionsGccStupidity, 4096);
                     int cJitInsns = wasmJitExecBlock(&pVCpu->cpum.GstCtx, s_pvJitRAM, cBatch);
                     if (cJitInsns > 0)
                     {

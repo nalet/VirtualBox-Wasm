@@ -443,3 +443,33 @@ int main(int argc, char **argv)
 
     return 0;
 }
+
+
+/*************************************************************************
+ * JIT integration — guest RAM pointer set from IEM hook side
+ *
+ * The JIT hook in IEMAllThrdRecompiler.cpp passes &pVCpu->cpum.GstCtx
+ * directly, so we don't need to export CPUMCTX from here.
+ * The guest RAM base is obtained from the IEM code TLB.
+ *************************************************************************/
+
+/* Global guest RAM pointer, set by the IEM JIT hook via wasmJitSetGuestRAM */
+static void *g_pvJitGuestRAM = NULL;
+
+extern "C" {
+
+EMSCRIPTEN_KEEPALIVE
+void wasmJitSetGuestRAM(void *pv)
+{
+    g_pvJitGuestRAM = pv;
+    if (pv)
+        RTPrintf("[JIT] Guest RAM base set: %p\n", pv);
+}
+
+EMSCRIPTEN_KEEPALIVE
+void *wasmJitGetGuestRAM(void)
+{
+    return g_pvJitGuestRAM;
+}
+
+} /* extern "C" */

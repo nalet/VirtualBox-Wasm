@@ -1,0 +1,2022 @@
+// jit-pre.js — x86 fast interpreter for VirtualBox/Wasm
+// Embedded via --pre-js. Runs in all threads (main + workers).
+// Called from EM_JS hook in IEM execution loop.
+// V8/SpiderMonkey JIT-compiles this interpreter into fast native code.
+'use strict';
+
+globalThis.VBoxJIT = (function() {
+
+// ── CPUMCTX register offsets (from cpumctx-x86-amd64.h) ──
+const R_AX=0,R_CX=8,R_DX=0x10,R_BX=0x18,R_SP=0x20,R_BP=0x28,R_SI=0x30,R_DI=0x38;
+const R_IP=0x140, R_FLAGS=0x148;
+// Segment registers: each 24 bytes (sel[2],pad[2],validSel[2],flags[2],base[8],limit[4],attr[4])
+const S_ES=0x80,S_CS=0x98,S_SS=0xB0,S_DS=0xC8,S_FS=0xE0,S_GS=0xF8;
+const SEG_BASE=8, SEG_LIMIT=16, SEG_ATTR=20, SEG_SEL=0;
+// CR0
+const R_CR0=0x160;
+
+// ── Lazy flags ──
+const OP_NONE=0,OP_ADD=1,OP_SUB=2,OP_AND=3,OP_OR=4,OP_XOR=5,OP_INC=6,OP_DEC=7,OP_SHL=8,OP_SHR=9,OP_SAR=10,OP_ROL=11,OP_ROR=12;
+let lazyOp=OP_NONE, lazyRes=0, lazyOp1=0, lazyOp2=0, lazySize=16, lazyCF=0;
+
+// Parity lookup (even parity = 1)
+const parityTable = new Uint8Array(256);
+for (let i = 0; i < 256; i++) {
+  let b = i, p = 0;
+  for (let j = 0; j < 8; j++) { p ^= (b & 1); b >>= 1; }
+  parityTable[i] = p ? 0 : 1; // PF=1 means even parity
+}
+
+const SIZE_MASK = [0, 0xFF, 0xFFFF, 0, 0xFFFFFFFF];
+const SIZE_SIGN = [0, 0x80, 0x8000, 0, 0x80000000];
+
+function getCF() {
+  switch (lazyOp) {
+    case OP_NONE: return lazyCF;
+    case OP_ADD: return (lazyRes & SIZE_MASK[lazySize]) < (lazyOp1 & SIZE_MASK[lazySize]) ? 1 : 0;
+    case OP_SUB: return (lazyOp1 & SIZE_MASK[lazySize]) < (lazyOp2 & SIZE_MASK[lazySize]) ? 1 : 0;
+    case OP_AND: case OP_OR: case OP_XOR: return 0;
+    case OP_INC: case OP_DEC: return lazyCF; // unchanged
+    case OP_SHL: return lazyCF;
+    case OP_SHR: case OP_SAR: return lazyCF;
+    default: return lazyCF;
+  }
+}
+
+function getZF() {
+  return ((lazyRes & SIZE_MASK[lazySize]) === 0) ? 1 : 0;
+}
+
+function getSF() {
+  return ((lazyRes & SIZE_SIGN[lazySize]) !== 0) ? 1 : 0;
+}
+
+function getOF() {
+  const m = SIZE_MASK[lazySize], s = SIZE_SIGN[lazySize];
+  switch (lazyOp) {
+    case OP_NONE: return 0;
+    case OP_ADD: return ((~(lazyOp1 ^ lazyOp2) & (lazyOp1 ^ lazyRes)) & s) ? 1 : 0;
+    case OP_SUB: return (((lazyOp1 ^ lazyOp2) & (lazyOp1 ^ lazyRes)) & s) ? 1 : 0;
+    case OP_AND: case OP_OR: case OP_XOR: return 0;
+    case OP_INC: return ((lazyRes & m) === (s & m)) ? 1 : 0; // overflow if result is 0x80..
+    case OP_DEC: return ((lazyRes & m) === ((s - 1) & m)) ? 1 : 0;
+    default: return 0;
+  }
+}
+
+function getPF() { return parityTable[lazyRes & 0xFF]; }
+
+function getAF() {
+  if (lazyOp === OP_ADD || lazyOp === OP_SUB || lazyOp === OP_INC || lazyOp === OP_DEC)
+    return ((lazyOp1 ^ lazyOp2 ^ lazyRes) & 0x10) ? 1 : 0;
+  return 0;
+}
+
+function flagsToWord() {
+  return (getCF()) | (getPF() << 2) | (getAF() << 4) | (getZF() << 6) |
+         (getSF() << 7) | (getOF() << 11) | 0x02; // bit 1 always set
+}
+
+function loadFlags(val) {
+  lazyOp = OP_NONE;
+  lazyCF = val & 1;
+  // Reconstruct lazy state from explicit flags
+  lazyRes = 0;
+  if (!(val & 0x40)) lazyRes = 1; // ZF=0 means result != 0
+  if (val & 0x80) lazyRes |= SIZE_SIGN[lazySize]; // SF
+  // PF, AF, OF stored in lazyCF / flags word for NONE op
+}
+
+function setFlagsArith(op, res, op1, op2, size) {
+  lazyOp = op; lazyRes = res; lazyOp1 = op1; lazyOp2 = op2; lazySize = size;
+}
+
+// ── Memory access helpers ──
+let mem8, dv;
+let cpuPtr = 0, ramBase = 0;
+
+function init(memory) {
+  mem8 = new Uint8Array(memory.buffer);
+  dv = new DataView(memory.buffer);
+}
+
+function refreshViews() {
+  if (mem8.buffer !== wasmMemory.buffer) {
+    mem8 = new Uint8Array(wasmMemory.buffer);
+    dv = new DataView(wasmMemory.buffer);
+  }
+}
+
+// Read CPU register (64-bit, return as Number — safe for 32-bit values)
+function rr64(off) { return Number(dv.getBigUint64(cpuPtr + off, true)); }
+function wr64(off, v) { dv.setBigUint64(cpuPtr + off, BigInt(v) & 0xFFFFFFFFFFFFFFFFn, true); }
+function rr32(off) { return dv.getUint32(cpuPtr + off, true); }
+function wr32(off, v) { dv.setUint32(cpuPtr + off, v >>> 0, true); }
+function rr16(off) { return dv.getUint16(cpuPtr + off, true); }
+function wr16(off, v) { dv.setUint16(cpuPtr + off, v & 0xFFFF, true); }
+function rr8(off) { return dv.getUint8(cpuPtr + off); }
+function wr8(off, v) { dv.setUint8(cpuPtr + off, v & 0xFF); }
+
+// Segment base (cached)
+function segBase(segOff) { return Number(dv.getBigUint64(cpuPtr + segOff + SEG_BASE, true)); }
+
+// Guest physical memory read/write
+function rb(addr) { return mem8[ramBase + addr]; }
+function rw(addr) { return dv.getUint16(ramBase + addr, true); }
+function rd(addr) { return dv.getUint32(ramBase + addr, true); }
+function wb(addr, v) { mem8[ramBase + addr] = v; }
+function ww(addr, v) { dv.setUint16(ramBase + addr, v & 0xFFFF, true); }
+function wd(addr, v) { dv.setUint32(ramBase + addr, v >>> 0, true); }
+
+// ── GPR access by index ──
+const GPR_OFFS = [R_AX,R_CX,R_DX,R_BX,R_SP,R_BP,R_SI,R_DI];
+function gr16(idx) { return rr16(GPR_OFFS[idx]); }
+function sr16(idx, v) { wr16(GPR_OFFS[idx], v); }
+function gr32(idx) { return rr32(GPR_OFFS[idx]); }
+function sr32(idx, v) { wr32(GPR_OFFS[idx], v); }
+// 8-bit: 0-3 = AL,CL,DL,BL; 4-7 = AH,CH,DH,BH
+function gr8(idx) {
+  if (idx < 4) return rr8(GPR_OFFS[idx]);
+  return rr8(GPR_OFFS[idx - 4] + 1); // high byte
+}
+function sr8(idx, v) {
+  if (idx < 4) wr8(GPR_OFFS[idx], v);
+  else wr8(GPR_OFFS[idx - 4] + 1, v);
+}
+
+// ── Segment register access by index ──
+const SEG_OFFS = [S_ES, S_CS, S_SS, S_DS, S_FS, S_GS, 0, 0]; // SREG encoding: 0=ES,1=CS,2=SS,3=DS,4=FS,5=GS
+
+// ── Port I/O callback (set by C++ side) ──
+let portInFn = null, portOutFn = null;
+
+function portIn(port, size) {
+  if (portInFn) return portInFn(port, size);
+  return 0xFF; // floating bus
+}
+function portOut(port, size, val) {
+  if (portOutFn) portOutFn(port, size, val);
+}
+
+// ── ModR/M decoding (16-bit addressing) ──
+// Returns { ea: effective address (physical), disp: bytes consumed }
+function decodeModRM16(modrm, code, codeOff, dsBase, ssBase) {
+  const mod = (modrm >> 6) & 3;
+  const rm = modrm & 7;
+
+  if (mod === 3) return { ea: -1, reg: rm, len: 0 }; // register operand
+
+  let ea = 0, len = 0;
+  switch (rm) {
+    case 0: ea = (gr16(3) + gr16(6)) & 0xFFFF; break; // BX+SI
+    case 1: ea = (gr16(3) + gr16(7)) & 0xFFFF; break; // BX+DI
+    case 2: ea = (gr16(5) + gr16(6)) & 0xFFFF; break; // BP+SI
+    case 3: ea = (gr16(5) + gr16(7)) & 0xFFFF; break; // BP+DI
+    case 4: ea = gr16(6); break; // SI
+    case 5: ea = gr16(7); break; // DI
+    case 6:
+      if (mod === 0) {
+        ea = code[codeOff] | (code[codeOff+1] << 8);
+        len = 2;
+      } else {
+        ea = gr16(5); // BP
+      }
+      break;
+    case 7: ea = gr16(3); break; // BX
+  }
+
+  // Default segment: SS for BP-based, DS for others
+  let base = (rm === 2 || rm === 3 || (rm === 6 && mod !== 0)) ? ssBase : dsBase;
+
+  if (mod === 1) {
+    let d = code[codeOff + len];
+    if (d > 127) d -= 256; // sign extend
+    ea = (ea + d) & 0xFFFF;
+    len += 1;
+  } else if (mod === 2) {
+    ea = (ea + (code[codeOff + len] | (code[codeOff + len + 1] << 8))) & 0xFFFF;
+    len += 2;
+  }
+
+  return { ea: base + ea, len: len };
+}
+
+// ── ModR/M decoding (32-bit addressing) ──
+function decodeModRM32(modrm, code, codeOff, dsBase, ssBase) {
+  const mod = (modrm >> 6) & 3;
+  const rm = modrm & 7;
+
+  if (mod === 3) return { ea: -1, reg: rm, len: 0 };
+
+  let ea = 0, len = 0;
+  let base = dsBase;
+
+  if (rm === 4) {
+    // SIB byte
+    const sib = code[codeOff]; len = 1;
+    const scale = (sib >> 6) & 3;
+    const index = (sib >> 3) & 7;
+    const sibBase = sib & 7;
+
+    if (sibBase === 5 && mod === 0) {
+      ea = code[codeOff+1] | (code[codeOff+2]<<8) | (code[codeOff+3]<<16) | (code[codeOff+4]<<24);
+      len = 5;
+    } else {
+      ea = gr32(sibBase);
+      if (sibBase === 4 || sibBase === 5) base = ssBase;
+    }
+    if (index !== 4) {
+      ea = (ea + (gr32(index) << scale)) >>> 0;
+    }
+  } else if (rm === 5 && mod === 0) {
+    ea = code[codeOff] | (code[codeOff+1]<<8) | (code[codeOff+2]<<16) | (code[codeOff+3]<<24);
+    len = 4;
+  } else {
+    ea = gr32(rm);
+    if (rm === 4 || rm === 5) base = ssBase;
+  }
+
+  if (mod === 1) {
+    let d = code[codeOff + len]; if (d > 127) d -= 256;
+    ea = (ea + d) >>> 0;
+    len += 1;
+  } else if (mod === 2) {
+    ea = (ea + (code[codeOff+len] | (code[codeOff+len+1]<<8) | (code[codeOff+len+2]<<16) | (code[codeOff+len+3]<<24))) >>> 0;
+    len += 4;
+  }
+
+  return { ea: (base + ea) >>> 0, len: len };
+}
+
+// ── ALU operations ──
+function alu8(op, a, b) {
+  let r;
+  switch (op) {
+    case 0: r = a + b; setFlagsArith(OP_ADD,r,a,b,1); lazyCF = (r > 0xFF) ? 1 : 0; return r & 0xFF;
+    case 1: r = a | b; setFlagsArith(OP_OR,r,a,b,1); return r & 0xFF;
+    case 2: r = a + b + getCF(); setFlagsArith(OP_ADD,r,a,b+getCF(),1); lazyCF = (r > 0xFF) ? 1 : 0; return r & 0xFF;
+    case 3: r = a - b - getCF(); setFlagsArith(OP_SUB,r,a,b+getCF(),1); lazyCF = (r < 0) ? 1 : 0; return ((r & 0xFF) + 256) & 0xFF;
+    case 4: r = a & b; setFlagsArith(OP_AND,r,a,b,1); return r & 0xFF;
+    case 5: r = a - b; setFlagsArith(OP_SUB,r,a,b,1); lazyCF = (a < b) ? 1 : 0; return ((r & 0xFF) + 256) & 0xFF;
+    case 6: r = a ^ b; setFlagsArith(OP_XOR,r,a,b,1); return r & 0xFF;
+    case 7: r = a - b; setFlagsArith(OP_SUB,r,a,b,1); lazyCF = (a < b) ? 1 : 0; return a; // CMP: don't store
+    default: return a;
+  }
+}
+
+function alu16(op, a, b) {
+  a &= 0xFFFF; b &= 0xFFFF;
+  let r;
+  switch (op) {
+    case 0: r = a + b; setFlagsArith(OP_ADD,r,a,b,2); lazyCF = (r > 0xFFFF) ? 1 : 0; return r & 0xFFFF;
+    case 1: r = a | b; setFlagsArith(OP_OR,r,a,b,2); return r & 0xFFFF;
+    case 2: { const c = getCF(); r = a + b + c; setFlagsArith(OP_ADD,r,a,b+c,2); lazyCF = (r > 0xFFFF) ? 1 : 0; return r & 0xFFFF; }
+    case 3: { const c = getCF(); r = a - b - c; setFlagsArith(OP_SUB,r,a,b+c,2); lazyCF = (r < 0) ? 1 : 0; return r & 0xFFFF; }
+    case 4: r = a & b; setFlagsArith(OP_AND,r,a,b,2); return r;
+    case 5: r = a - b; setFlagsArith(OP_SUB,r,a,b,2); lazyCF = (a < b) ? 1 : 0; return r & 0xFFFF;
+    case 6: r = a ^ b; setFlagsArith(OP_XOR,r,a,b,2); return r;
+    case 7: r = a - b; setFlagsArith(OP_SUB,r,a,b,2); lazyCF = (a < b) ? 1 : 0; return a;
+    default: return a;
+  }
+}
+
+function alu32(op, a, b) {
+  a = a >>> 0; b = b >>> 0;
+  let r;
+  switch (op) {
+    case 0: r = (a + b) >>> 0; setFlagsArith(OP_ADD,r,a,b,4); lazyCF = (r < a) ? 1 : 0; return r;
+    case 1: r = (a | b) >>> 0; setFlagsArith(OP_OR,r,a,b,4); return r;
+    case 2: { const c = getCF(); r = (a + b + c) >>> 0; setFlagsArith(OP_ADD,r,a,b+c,4); lazyCF = (c ? r <= a : r < a) ? 1 : 0; return r; }
+    case 3: { const c = getCF(); r = (a - b - c) >>> 0; setFlagsArith(OP_SUB,r,a,b+c,4); lazyCF = (c ? a <= b : a < b) ? 1 : 0; return r; }
+    case 4: r = (a & b) >>> 0; setFlagsArith(OP_AND,r,a,b,4); return r;
+    case 5: r = (a - b) >>> 0; setFlagsArith(OP_SUB,r,a,b,4); lazyCF = (a < b) ? 1 : 0; return r;
+    case 6: r = (a ^ b) >>> 0; setFlagsArith(OP_XOR,r,a,b,4); return r;
+    case 7: r = (a - b) >>> 0; setFlagsArith(OP_SUB,r,a,b,4); lazyCF = (a < b) ? 1 : 0; return a;
+    default: return a;
+  }
+}
+
+// ── Condition code testing ──
+function testCC(cc) {
+  switch (cc) {
+    case 0x0: return getOF();                       // O
+    case 0x1: return !getOF();                      // NO
+    case 0x2: return getCF();                       // B/C
+    case 0x3: return !getCF();                      // AE/NC
+    case 0x4: return getZF();                       // E/Z
+    case 0x5: return !getZF();                      // NE/NZ
+    case 0x6: return getCF() || getZF();            // BE
+    case 0x7: return !getCF() && !getZF();          // A
+    case 0x8: return getSF();                       // S
+    case 0x9: return !getSF();                      // NS
+    case 0xA: return getPF();                       // P
+    case 0xB: return !getPF();                      // NP
+    case 0xC: return getSF() !== getOF();           // L
+    case 0xD: return getSF() === getOF();           // GE
+    case 0xE: return getZF() || (getSF() !== getOF()); // LE
+    case 0xF: return !getZF() && (getSF() === getOF()); // G
+  }
+  return false;
+}
+
+// ── Stack operations ──
+function push16(v, ssBase) {
+  let sp = (gr16(4) - 2) & 0xFFFF;
+  sr16(4, sp);
+  ww(ssBase + sp, v);
+}
+function pop16(ssBase) {
+  const sp = gr16(4);
+  const v = rw(ssBase + sp);
+  sr16(4, (sp + 2) & 0xFFFF);
+  return v;
+}
+function push32(v, ssBase) {
+  // In real mode, SP is always 16-bit
+  let sp = (gr16(4) - 4) & 0xFFFF;
+  sr16(4, sp);
+  wd(ssBase + sp, v);
+}
+function pop32(ssBase) {
+  const sp = gr16(4);
+  const v = rd(ssBase + sp);
+  sr16(4, (sp + 4) & 0xFFFF);
+  return v;
+}
+
+// ═══════════════════════════════════════════════════════
+// MAIN INTERPRETER LOOP
+// ═══════════════════════════════════════════════════════
+//
+// Returns: number of instructions executed (>0), or 0 for fallback needed
+//
+// cpuP:    pointer to CPUMCTX in Wasm linear memory
+// ramB:    pointer to guest RAM base in Wasm linear memory
+// maxInsn: max instructions to execute before returning
+//
+function execBlock(cpuP, ramB, maxInsn) {
+  cpuPtr = cpuP;
+  ramBase = ramB;
+  refreshViews();
+
+  // Load frequently-used state
+  let ip = rr16(R_IP);  // only low 16 bits for real mode
+  let flags = rr32(R_FLAGS);
+  const csBase = segBase(S_CS);
+  let dsBase = segBase(S_DS);
+  let ssBase = segBase(S_SS);
+  let esBase = segBase(S_ES);
+
+  // Initialize lazy flags from current RFLAGS
+  lazyCF = flags & 1;
+  lazyOp = OP_NONE;
+  lazyRes = 0;
+  if (!(flags & 0x40)) lazyRes = 1; // ZF
+  if (flags & 0x80) lazyRes |= 0x8000; // SF
+  lazySize = 2; // default 16-bit
+
+  // Check if we're in real mode or protected mode
+  const cr0 = rr32(R_CR0);
+  const realMode = !(cr0 & 1); // PE bit
+  // For now, only handle real mode and simple protected mode (no paging)
+  if (cr0 & 0x80000000) return 0; // PG bit set = paging enabled, bail
+
+  let executed = 0;
+  const ramSize = mem8.length - ramBase; // available RAM
+
+  // Pre-read a chunk of code for fast access
+  let codePhys = csBase + ip;
+  if (codePhys + 16 > ramSize) return 0;
+
+  for (let iter = 0; iter < maxInsn; iter++) {
+    codePhys = csBase + ip;
+    if (codePhys < 0 || codePhys + 15 > ramSize) break; // safety
+
+    // Read up to 15 bytes of instruction
+    const c0 = mem8[ramBase+codePhys];
+
+    // ── Prefix handling ──
+    let segOverride = -1; // -1 = default
+    let opSizeOverride = false;
+    let addrSizeOverride = false;
+    let repPrefix = 0; // 0=none, 0xF2=REPNE, 0xF3=REP/REPE
+    let pos = 0; // bytes consumed for prefixes
+
+    let b = c0;
+    let scanning = true;
+    while (scanning && pos < 4) {
+      switch (b) {
+        case 0x26: segOverride = S_ES; break;
+        case 0x2E: segOverride = S_CS; break;
+        case 0x36: segOverride = S_SS; break;
+        case 0x3E: segOverride = S_DS; break;
+        case 0x64: segOverride = S_FS; break;
+        case 0x65: segOverride = S_GS; break;
+        case 0x66: opSizeOverride = true; break;
+        case 0x67: addrSizeOverride = true; break;
+        case 0xF2: repPrefix = 0xF2; break;
+        case 0xF3: repPrefix = 0xF3; break;
+        default: scanning = false; continue;
+      }
+      pos++;
+      b = mem8[ramBase + codePhys + pos];
+    }
+
+    // Effective segment bases
+    const effDS = segOverride >= 0 ? segBase(segOverride) : dsBase;
+    const effSS = ssBase; // stack segment rarely overridden
+    // operand size: default 16-bit in real mode
+    const opSize = opSizeOverride ? 4 : 2;
+    // address size: default 16-bit in real mode
+    const addrSize = addrSizeOverride ? 4 : 2;
+
+    // Code bytes after prefixes
+    const ci = ramBase + codePhys + pos;
+    let ilen = pos; // instruction length accumulator
+
+    // ── Opcode dispatch ──
+    switch (b) {
+
+    // ──── NOP ────
+    case 0x90:
+      ilen += 1;
+      break;
+
+    // ──── MOV r8, r/m8 (0x8A) ────
+    case 0x8A: {
+      const modrm = mem8[ci+1]; ilen += 2;
+      const reg = (modrm >> 3) & 7;
+      if ((modrm >> 6) === 3) {
+        sr8(reg, gr8(modrm & 7));
+      } else {
+        const m = addrSize === 2 ? decodeModRM16(modrm, mem8, ci+2, effDS, effSS)
+                                 : decodeModRM32(modrm, mem8, ci+2, effDS, effSS);
+        ilen += m.len;
+        sr8(reg, rb(m.ea));
+      }
+      break;
+    }
+
+    // ──── MOV r/m8, r8 (0x88) ────
+    case 0x88: {
+      const modrm = mem8[ci+1]; ilen += 2;
+      const reg = (modrm >> 3) & 7;
+      if ((modrm >> 6) === 3) {
+        sr8(modrm & 7, gr8(reg));
+      } else {
+        const m = addrSize === 2 ? decodeModRM16(modrm, mem8, ci+2, effDS, effSS)
+                                 : decodeModRM32(modrm, mem8, ci+2, effDS, effSS);
+        ilen += m.len;
+        wb(m.ea, gr8(reg));
+      }
+      break;
+    }
+
+    // ──── MOV r16/32, r/m16/32 (0x8B) ────
+    case 0x8B: {
+      const modrm = mem8[ci+1]; ilen += 2;
+      const reg = (modrm >> 3) & 7;
+      if ((modrm >> 6) === 3) {
+        if (opSize === 2) sr16(reg, gr16(modrm & 7));
+        else sr32(reg, gr32(modrm & 7));
+      } else {
+        const m = addrSize === 2 ? decodeModRM16(modrm, mem8, ci+2, effDS, effSS)
+                                 : decodeModRM32(modrm, mem8, ci+2, effDS, effSS);
+        ilen += m.len;
+        if (opSize === 2) sr16(reg, rw(m.ea));
+        else sr32(reg, rd(m.ea));
+      }
+      break;
+    }
+
+    // ──── MOV r/m16/32, r16/32 (0x89) ────
+    case 0x89: {
+      const modrm = mem8[ci+1]; ilen += 2;
+      const reg = (modrm >> 3) & 7;
+      if ((modrm >> 6) === 3) {
+        if (opSize === 2) sr16(modrm & 7, gr16(reg));
+        else sr32(modrm & 7, gr32(reg));
+      } else {
+        const m = addrSize === 2 ? decodeModRM16(modrm, mem8, ci+2, effDS, effSS)
+                                 : decodeModRM32(modrm, mem8, ci+2, effDS, effSS);
+        ilen += m.len;
+        if (opSize === 2) ww(m.ea, gr16(reg));
+        else wd(m.ea, gr32(reg));
+      }
+      break;
+    }
+
+    // ──── MOV r/m8, imm8 (0xC6) ────
+    case 0xC6: {
+      const modrm = mem8[ci+1]; ilen += 2;
+      if ((modrm >> 6) === 3) {
+        sr8(modrm & 7, mem8[ci+2]); ilen += 1;
+      } else {
+        const m = addrSize === 2 ? decodeModRM16(modrm, mem8, ci+2, effDS, effSS)
+                                 : decodeModRM32(modrm, mem8, ci+2, effDS, effSS);
+        ilen += m.len;
+        wb(m.ea, mem8[ci+2+m.len]); ilen += 1;
+      }
+      break;
+    }
+
+    // ──── MOV r/m16/32, imm16/32 (0xC7) ────
+    case 0xC7: {
+      const modrm = mem8[ci+1]; ilen += 2;
+      if ((modrm >> 6) === 3) {
+        if (opSize === 2) { sr16(modrm & 7, mem8[ci+2] | (mem8[ci+3] << 8)); ilen += 2; }
+        else { sr32(modrm & 7, mem8[ci+2]|(mem8[ci+3]<<8)|(mem8[ci+4]<<16)|(mem8[ci+5]<<24)); ilen += 4; }
+      } else {
+        const m = addrSize === 2 ? decodeModRM16(modrm, mem8, ci+2, effDS, effSS)
+                                 : decodeModRM32(modrm, mem8, ci+2, effDS, effSS);
+        ilen += m.len;
+        const imOff = ci + 2 + m.len;
+        if (opSize === 2) { ww(m.ea, mem8[imOff] | (mem8[imOff+1] << 8)); ilen += 2; }
+        else { wd(m.ea, mem8[imOff]|(mem8[imOff+1]<<8)|(mem8[imOff+2]<<16)|(mem8[imOff+3]<<24)); ilen += 4; }
+      }
+      break;
+    }
+
+    // ──── MOV r16/32, imm (0xB8-0xBF) ────
+    case 0xB8:case 0xB9:case 0xBA:case 0xBB:case 0xBC:case 0xBD:case 0xBE:case 0xBF: {
+      const reg = b - 0xB8;
+      if (opSize === 2) {
+        sr16(reg, mem8[ci+1] | (mem8[ci+2] << 8));
+        ilen += 3;
+      } else {
+        sr32(reg, mem8[ci+1]|(mem8[ci+2]<<8)|(mem8[ci+3]<<16)|(mem8[ci+4]<<24));
+        ilen += 5;
+      }
+      break;
+    }
+
+    // ──── MOV r8, imm8 (0xB0-0xB7) ────
+    case 0xB0:case 0xB1:case 0xB2:case 0xB3:case 0xB4:case 0xB5:case 0xB6:case 0xB7:
+      sr8(b - 0xB0, mem8[ci+1]);
+      ilen += 2;
+      break;
+
+    // ──── MOV AL, moffs8 (0xA0) ────
+    case 0xA0: {
+      const addr = addrSize === 2 ? (mem8[ci+1] | (mem8[ci+2] << 8)) :
+        (mem8[ci+1]|(mem8[ci+2]<<8)|(mem8[ci+3]<<16)|(mem8[ci+4]<<24));
+      sr8(0, rb(effDS + addr));
+      ilen += 1 + addrSize;
+      break;
+    }
+    // ──── MOV moffs8, AL (0xA2) ────
+    case 0xA2: {
+      const addr = addrSize === 2 ? (mem8[ci+1] | (mem8[ci+2] << 8)) :
+        (mem8[ci+1]|(mem8[ci+2]<<8)|(mem8[ci+3]<<16)|(mem8[ci+4]<<24));
+      wb(effDS + addr, gr8(0));
+      ilen += 1 + addrSize;
+      break;
+    }
+    // ──── MOV AX, moffs16 (0xA1) ────
+    case 0xA1: {
+      const addr = addrSize === 2 ? (mem8[ci+1] | (mem8[ci+2] << 8)) :
+        (mem8[ci+1]|(mem8[ci+2]<<8)|(mem8[ci+3]<<16)|(mem8[ci+4]<<24));
+      if (opSize === 2) sr16(0, rw(effDS + addr));
+      else sr32(0, rd(effDS + addr));
+      ilen += 1 + addrSize;
+      break;
+    }
+    // ──── MOV moffs16, AX (0xA3) ────
+    case 0xA3: {
+      const addr = addrSize === 2 ? (mem8[ci+1] | (mem8[ci+2] << 8)) :
+        (mem8[ci+1]|(mem8[ci+2]<<8)|(mem8[ci+3]<<16)|(mem8[ci+4]<<24));
+      if (opSize === 2) ww(effDS + addr, gr16(0));
+      else wd(effDS + addr, gr32(0));
+      ilen += 1 + addrSize;
+      break;
+    }
+
+    // ──── MOV Sreg, r/m16 (0x8E) ────
+    case 0x8E: {
+      const modrm = mem8[ci+1]; ilen += 2;
+      const sreg = (modrm >> 3) & 7;
+      let val;
+      if ((modrm >> 6) === 3) {
+        val = gr16(modrm & 7);
+      } else {
+        const m = addrSize === 2 ? decodeModRM16(modrm, mem8, ci+2, effDS, effSS)
+                                 : decodeModRM32(modrm, mem8, ci+2, effDS, effSS);
+        ilen += m.len;
+        val = rw(m.ea);
+      }
+      // Update selector and base (real mode: base = sel << 4)
+      const sOff = SEG_OFFS[sreg];
+      if (!sOff && sreg !== 0) { ip = (ip + ilen) & 0xFFFF; break; } // invalid sreg
+      wr16(sOff + SEG_SEL, val);
+      if (realMode) {
+        wr64(sOff + SEG_BASE, val << 4);
+        // Refresh cached bases
+        if (sreg === 3) dsBase = val << 4;
+        else if (sreg === 2) ssBase = val << 4;
+        else if (sreg === 0) esBase = val << 4;
+      }
+      break;
+    }
+
+    // ──── MOV r/m16, Sreg (0x8C) ────
+    case 0x8C: {
+      const modrm = mem8[ci+1]; ilen += 2;
+      const sreg = (modrm >> 3) & 7;
+      const sOff = SEG_OFFS[sreg];
+      const val = sOff ? rr16(sOff + SEG_SEL) : (sreg === 0 ? rr16(S_ES + SEG_SEL) : 0);
+      if ((modrm >> 6) === 3) {
+        sr16(modrm & 7, val);
+      } else {
+        const m = addrSize === 2 ? decodeModRM16(modrm, mem8, ci+2, effDS, effSS)
+                                 : decodeModRM32(modrm, mem8, ci+2, effDS, effSS);
+        ilen += m.len;
+        ww(m.ea, val);
+      }
+      break;
+    }
+
+    // ──── ALU r/m8, r8 (0x00,0x08,0x10,0x18,0x20,0x28,0x30,0x38) ────
+    case 0x00:case 0x08:case 0x10:case 0x18:case 0x20:case 0x28:case 0x30:case 0x38: {
+      const op = b >> 3;
+      const modrm = mem8[ci+1]; ilen += 2;
+      const reg = (modrm >> 3) & 7;
+      const rv = gr8(reg);
+      if ((modrm >> 6) === 3) {
+        const rm = modrm & 7;
+        const res = alu8(op, gr8(rm), rv);
+        if (op !== 7) sr8(rm, res); // CMP doesn't store
+      } else {
+        const m = addrSize === 2 ? decodeModRM16(modrm, mem8, ci+2, effDS, effSS)
+                                 : decodeModRM32(modrm, mem8, ci+2, effDS, effSS);
+        ilen += m.len;
+        const res = alu8(op, rb(m.ea), rv);
+        if (op !== 7) wb(m.ea, res);
+      }
+      break;
+    }
+
+    // ──── ALU r8, r/m8 (0x02,0x0A,0x12,0x1A,0x22,0x2A,0x32,0x3A) ────
+    case 0x02:case 0x0A:case 0x12:case 0x1A:case 0x22:case 0x2A:case 0x32:case 0x3A: {
+      const op = (b - 2) >> 3;
+      const modrm = mem8[ci+1]; ilen += 2;
+      const reg = (modrm >> 3) & 7;
+      let val;
+      if ((modrm >> 6) === 3) {
+        val = gr8(modrm & 7);
+      } else {
+        const m = addrSize === 2 ? decodeModRM16(modrm, mem8, ci+2, effDS, effSS)
+                                 : decodeModRM32(modrm, mem8, ci+2, effDS, effSS);
+        ilen += m.len;
+        val = rb(m.ea);
+      }
+      const res = alu8(op, gr8(reg), val);
+      if (op !== 7) sr8(reg, res);
+      break;
+    }
+
+    // ──── ALU r/m16/32, r16/32 (0x01,0x09,0x11,0x19,0x21,0x29,0x31,0x39) ────
+    case 0x01:case 0x09:case 0x11:case 0x19:case 0x21:case 0x29:case 0x31:case 0x39: {
+      const op = (b - 1) >> 3;
+      const modrm = mem8[ci+1]; ilen += 2;
+      const reg = (modrm >> 3) & 7;
+      if ((modrm >> 6) === 3) {
+        const rm = modrm & 7;
+        if (opSize === 2) {
+          const res = alu16(op, gr16(rm), gr16(reg));
+          if (op !== 7) sr16(rm, res);
+        } else {
+          const res = alu32(op, gr32(rm), gr32(reg));
+          if (op !== 7) sr32(rm, res);
+        }
+      } else {
+        const m = addrSize === 2 ? decodeModRM16(modrm, mem8, ci+2, effDS, effSS)
+                                 : decodeModRM32(modrm, mem8, ci+2, effDS, effSS);
+        ilen += m.len;
+        if (opSize === 2) {
+          const res = alu16(op, rw(m.ea), gr16(reg));
+          if (op !== 7) ww(m.ea, res);
+        } else {
+          const res = alu32(op, rd(m.ea), gr32(reg));
+          if (op !== 7) wd(m.ea, res);
+        }
+      }
+      break;
+    }
+
+    // ──── ALU r16/32, r/m16/32 (0x03,0x0B,0x13,0x1B,0x23,0x2B,0x33,0x3B) ────
+    case 0x03:case 0x0B:case 0x13:case 0x1B:case 0x23:case 0x2B:case 0x33:case 0x3B: {
+      const op = (b - 3) >> 3;
+      const modrm = mem8[ci+1]; ilen += 2;
+      const reg = (modrm >> 3) & 7;
+      let val;
+      if ((modrm >> 6) === 3) {
+        val = opSize === 2 ? gr16(modrm & 7) : gr32(modrm & 7);
+      } else {
+        const m = addrSize === 2 ? decodeModRM16(modrm, mem8, ci+2, effDS, effSS)
+                                 : decodeModRM32(modrm, mem8, ci+2, effDS, effSS);
+        ilen += m.len;
+        val = opSize === 2 ? rw(m.ea) : rd(m.ea);
+      }
+      if (opSize === 2) {
+        const res = alu16(op, gr16(reg), val);
+        if (op !== 7) sr16(reg, res);
+      } else {
+        const res = alu32(op, gr32(reg), val);
+        if (op !== 7) sr32(reg, res);
+      }
+      break;
+    }
+
+    // ──── ALU AL, imm8 (0x04,0x0C,0x14,0x1C,0x24,0x2C,0x34,0x3C) ────
+    case 0x04:case 0x0C:case 0x14:case 0x1C:case 0x24:case 0x2C:case 0x34:case 0x3C: {
+      const op = (b - 4) >> 3;
+      const imm = mem8[ci+1]; ilen += 2;
+      const res = alu8(op, gr8(0), imm);
+      if (op !== 7) sr8(0, res);
+      break;
+    }
+
+    // ──── ALU AX, imm16/32 (0x05,0x0D,0x15,0x1D,0x25,0x2D,0x35,0x3D) ────
+    case 0x05:case 0x0D:case 0x15:case 0x1D:case 0x25:case 0x2D:case 0x35:case 0x3D: {
+      const op = (b - 5) >> 3;
+      ilen += 1;
+      if (opSize === 2) {
+        const imm = mem8[ci+1] | (mem8[ci+2] << 8); ilen += 2;
+        const res = alu16(op, gr16(0), imm);
+        if (op !== 7) sr16(0, res);
+      } else {
+        const imm = mem8[ci+1]|(mem8[ci+2]<<8)|(mem8[ci+3]<<16)|(mem8[ci+4]<<24); ilen += 4;
+        const res = alu32(op, gr32(0), imm);
+        if (op !== 7) sr32(0, res);
+      }
+      break;
+    }
+
+    // ──── ALU r/m8, imm8 (0x80) ────
+    case 0x80: {
+      const modrm = mem8[ci+1]; ilen += 2;
+      const op = (modrm >> 3) & 7;
+      if ((modrm >> 6) === 3) {
+        const imm = mem8[ci+2]; ilen += 1;
+        const res = alu8(op, gr8(modrm & 7), imm);
+        if (op !== 7) sr8(modrm & 7, res);
+      } else {
+        const m = addrSize === 2 ? decodeModRM16(modrm, mem8, ci+2, effDS, effSS)
+                                 : decodeModRM32(modrm, mem8, ci+2, effDS, effSS);
+        ilen += m.len;
+        const imm = mem8[ci+2+m.len]; ilen += 1;
+        const res = alu8(op, rb(m.ea), imm);
+        if (op !== 7) wb(m.ea, res);
+      }
+      break;
+    }
+
+    // ──── ALU r/m16/32, imm16/32 (0x81) ────
+    case 0x81: {
+      const modrm = mem8[ci+1]; ilen += 2;
+      const op = (modrm >> 3) & 7;
+      if ((modrm >> 6) === 3) {
+        const rm = modrm & 7;
+        if (opSize === 2) {
+          const imm = mem8[ci+2] | (mem8[ci+3] << 8); ilen += 2;
+          const res = alu16(op, gr16(rm), imm);
+          if (op !== 7) sr16(rm, res);
+        } else {
+          const imm = mem8[ci+2]|(mem8[ci+3]<<8)|(mem8[ci+4]<<16)|(mem8[ci+5]<<24); ilen += 4;
+          const res = alu32(op, gr32(rm), imm);
+          if (op !== 7) sr32(rm, res);
+        }
+      } else {
+        const m = addrSize === 2 ? decodeModRM16(modrm, mem8, ci+2, effDS, effSS)
+                                 : decodeModRM32(modrm, mem8, ci+2, effDS, effSS);
+        ilen += m.len;
+        const imOff = ci + 2 + m.len;
+        if (opSize === 2) {
+          const imm = mem8[imOff] | (mem8[imOff+1] << 8); ilen += 2;
+          const res = alu16(op, rw(m.ea), imm);
+          if (op !== 7) ww(m.ea, res);
+        } else {
+          const imm = mem8[imOff]|(mem8[imOff+1]<<8)|(mem8[imOff+2]<<16)|(mem8[imOff+3]<<24); ilen += 4;
+          const res = alu32(op, rd(m.ea), imm);
+          if (op !== 7) wd(m.ea, res);
+        }
+      }
+      break;
+    }
+
+    // ──── ALU r/m16/32, imm8 sign-extended (0x83) ────
+    case 0x83: {
+      const modrm = mem8[ci+1]; ilen += 2;
+      const op = (modrm >> 3) & 7;
+      let imm = mem8[ci+2]; ilen += 1;
+      // But wait — imm is after modrm+displacement, not at ci+2 for memory operands
+      // Need to handle this correctly
+      if ((modrm >> 6) === 3) {
+        // imm is at ci+2
+        if (imm > 127) imm = opSize === 2 ? (imm | 0xFF00) : ((imm | 0xFFFFFF00) >>> 0);
+        if (opSize === 2) {
+          const res = alu16(op, gr16(modrm & 7), imm & 0xFFFF);
+          if (op !== 7) sr16(modrm & 7, res);
+        } else {
+          const res = alu32(op, gr32(modrm & 7), imm);
+          if (op !== 7) sr32(modrm & 7, res);
+        }
+      } else {
+        ilen -= 1; // undo imm consumption, recalculate after displacement
+        const m = addrSize === 2 ? decodeModRM16(modrm, mem8, ci+2, effDS, effSS)
+                                 : decodeModRM32(modrm, mem8, ci+2, effDS, effSS);
+        ilen += m.len;
+        imm = mem8[ci + 2 + m.len]; ilen += 1;
+        if (imm > 127) imm = opSize === 2 ? (imm | 0xFF00) : ((imm | 0xFFFFFF00) >>> 0);
+        if (opSize === 2) {
+          const res = alu16(op, rw(m.ea), imm & 0xFFFF);
+          if (op !== 7) ww(m.ea, res);
+        } else {
+          const res = alu32(op, rd(m.ea), imm);
+          if (op !== 7) wd(m.ea, res);
+        }
+      }
+      break;
+    }
+
+    // ──── TEST r/m8, r8 (0x84) ────
+    case 0x84: {
+      const modrm = mem8[ci+1]; ilen += 2;
+      const reg = (modrm >> 3) & 7;
+      let val;
+      if ((modrm >> 6) === 3) val = gr8(modrm & 7);
+      else {
+        const m = addrSize === 2 ? decodeModRM16(modrm, mem8, ci+2, effDS, effSS)
+                                 : decodeModRM32(modrm, mem8, ci+2, effDS, effSS);
+        ilen += m.len;
+        val = rb(m.ea);
+      }
+      alu8(4, val, gr8(reg)); // AND but don't store
+      break;
+    }
+
+    // ──── TEST r/m16/32, r16/32 (0x85) ────
+    case 0x85: {
+      const modrm = mem8[ci+1]; ilen += 2;
+      const reg = (modrm >> 3) & 7;
+      let val;
+      if ((modrm >> 6) === 3) val = opSize === 2 ? gr16(modrm & 7) : gr32(modrm & 7);
+      else {
+        const m = addrSize === 2 ? decodeModRM16(modrm, mem8, ci+2, effDS, effSS)
+                                 : decodeModRM32(modrm, mem8, ci+2, effDS, effSS);
+        ilen += m.len;
+        val = opSize === 2 ? rw(m.ea) : rd(m.ea);
+      }
+      if (opSize === 2) alu16(4, val, gr16(reg));
+      else alu32(4, val, gr32(reg));
+      break;
+    }
+
+    // ──── TEST AL, imm8 (0xA8) ────
+    case 0xA8:
+      alu8(4, gr8(0), mem8[ci+1]);
+      ilen += 2;
+      break;
+
+    // ──── TEST AX, imm16/32 (0xA9) ────
+    case 0xA9:
+      ilen += 1;
+      if (opSize === 2) { alu16(4, gr16(0), mem8[ci+1]|(mem8[ci+2]<<8)); ilen += 2; }
+      else { alu32(4, gr32(0), mem8[ci+1]|(mem8[ci+2]<<8)|(mem8[ci+3]<<16)|(mem8[ci+4]<<24)); ilen += 4; }
+      break;
+
+    // ──── INC r16/32 (0x40-0x47) ────
+    case 0x40:case 0x41:case 0x42:case 0x43:case 0x44:case 0x45:case 0x46:case 0x47: {
+      const reg = b - 0x40;
+      const oldCF = getCF();
+      if (opSize === 2) {
+        const v = (gr16(reg) + 1) & 0xFFFF;
+        sr16(reg, v);
+        setFlagsArith(OP_INC, v, v-1, 1, 2);
+      } else {
+        const v = (gr32(reg) + 1) >>> 0;
+        sr32(reg, v);
+        setFlagsArith(OP_INC, v, v-1, 1, 4);
+      }
+      lazyCF = oldCF;
+      ilen += 1;
+      break;
+    }
+
+    // ──── DEC r16/32 (0x48-0x4F) ────
+    case 0x48:case 0x49:case 0x4A:case 0x4B:case 0x4C:case 0x4D:case 0x4E:case 0x4F: {
+      const reg = b - 0x48;
+      const oldCF = getCF();
+      if (opSize === 2) {
+        const v = (gr16(reg) - 1) & 0xFFFF;
+        sr16(reg, v);
+        setFlagsArith(OP_DEC, v, v+1, 1, 2);
+      } else {
+        const v = (gr32(reg) - 1) >>> 0;
+        sr32(reg, v);
+        setFlagsArith(OP_DEC, v, v+1, 1, 4);
+      }
+      lazyCF = oldCF;
+      ilen += 1;
+      break;
+    }
+
+    // ──── PUSH r16/32 (0x50-0x57) ────
+    case 0x50:case 0x51:case 0x52:case 0x53:case 0x54:case 0x55:case 0x56:case 0x57:
+      if (opSize === 2) push16(gr16(b - 0x50), ssBase);
+      else push32(gr32(b - 0x50), ssBase);
+      ilen += 1;
+      break;
+
+    // ──── POP r16/32 (0x58-0x5F) ────
+    case 0x58:case 0x59:case 0x5A:case 0x5B:case 0x5C:case 0x5D:case 0x5E:case 0x5F:
+      if (opSize === 2) sr16(b - 0x58, pop16(ssBase));
+      else sr32(b - 0x58, pop32(ssBase));
+      ilen += 1;
+      break;
+
+    // ──── PUSH imm16/32 (0x68) ────
+    case 0x68:
+      ilen += 1;
+      if (opSize === 2) {
+        push16(mem8[ci+1] | (mem8[ci+2] << 8), ssBase);
+        ilen += 2;
+      } else {
+        push32(mem8[ci+1]|(mem8[ci+2]<<8)|(mem8[ci+3]<<16)|(mem8[ci+4]<<24), ssBase);
+        ilen += 4;
+      }
+      break;
+
+    // ──── PUSH imm8 sign-extended (0x6A) ────
+    case 0x6A: {
+      let v = mem8[ci+1];
+      if (v > 127) v = opSize === 2 ? (v | 0xFF00) : ((v | 0xFFFFFF00) >>> 0);
+      if (opSize === 2) push16(v & 0xFFFF, ssBase);
+      else push32(v, ssBase);
+      ilen += 2;
+      break;
+    }
+
+    // ──── PUSHF (0x9C) ────
+    case 0x9C: {
+      const f = flagsToWord() | (flags & 0xFFFFF000); // preserve upper bits
+      if (opSize === 2) push16(f & 0xFFFF, ssBase);
+      else push32(f, ssBase);
+      ilen += 1;
+      break;
+    }
+
+    // ──── POPF (0x9D) ────
+    case 0x9D: {
+      let f;
+      if (opSize === 2) f = pop16(ssBase);
+      else f = pop32(ssBase);
+      flags = f;
+      loadFlags(f);
+      ilen += 1;
+      break;
+    }
+
+    // ──── XCHG r16/32, AX (0x91-0x97) ────
+    case 0x91:case 0x92:case 0x93:case 0x94:case 0x95:case 0x96:case 0x97: {
+      const reg = b - 0x90;
+      if (opSize === 2) {
+        const t = gr16(0); sr16(0, gr16(reg)); sr16(reg, t);
+      } else {
+        const t = gr32(0); sr32(0, gr32(reg)); sr32(reg, t);
+      }
+      ilen += 1;
+      break;
+    }
+
+    // ──── XCHG r/m8, r8 (0x86) ────
+    case 0x86: {
+      const modrm = mem8[ci+1]; ilen += 2;
+      const reg = (modrm >> 3) & 7;
+      if ((modrm >> 6) === 3) {
+        const t = gr8(reg); sr8(reg, gr8(modrm & 7)); sr8(modrm & 7, t);
+      } else {
+        const m = addrSize === 2 ? decodeModRM16(modrm, mem8, ci+2, effDS, effSS)
+                                 : decodeModRM32(modrm, mem8, ci+2, effDS, effSS);
+        ilen += m.len;
+        const t = gr8(reg); sr8(reg, rb(m.ea)); wb(m.ea, t);
+      }
+      break;
+    }
+
+    // ──── XCHG r/m16/32, r16/32 (0x87) ────
+    case 0x87: {
+      const modrm = mem8[ci+1]; ilen += 2;
+      const reg = (modrm >> 3) & 7;
+      if ((modrm >> 6) === 3) {
+        if (opSize === 2) { const t = gr16(reg); sr16(reg, gr16(modrm&7)); sr16(modrm&7, t); }
+        else { const t = gr32(reg); sr32(reg, gr32(modrm&7)); sr32(modrm&7, t); }
+      } else {
+        const m = addrSize === 2 ? decodeModRM16(modrm, mem8, ci+2, effDS, effSS)
+                                 : decodeModRM32(modrm, mem8, ci+2, effDS, effSS);
+        ilen += m.len;
+        if (opSize === 2) { const t = gr16(reg); sr16(reg, rw(m.ea)); ww(m.ea, t); }
+        else { const t = gr32(reg); sr32(reg, rd(m.ea)); wd(m.ea, t); }
+      }
+      break;
+    }
+
+    // ──── LEA r16/32, m (0x8D) ────
+    case 0x8D: {
+      const modrm = mem8[ci+1]; ilen += 2;
+      const reg = (modrm >> 3) & 7;
+      // LEA computes effective address but doesn't add segment base
+      const m = addrSize === 2 ? decodeModRM16(modrm, mem8, ci+2, 0, 0) // base=0 to get raw offset
+                               : decodeModRM32(modrm, mem8, ci+2, 0, 0);
+      ilen += m.len;
+      if (opSize === 2) sr16(reg, m.ea & 0xFFFF);
+      else sr32(reg, m.ea);
+      break;
+    }
+
+    // ──── JMP rel8 (0xEB) ────
+    case 0xEB: {
+      let rel = mem8[ci+1];
+      if (rel > 127) rel -= 256;
+      ip = (ip + 2 + pos + rel) & 0xFFFF;
+      ilen = 0; // ip already set
+      executed++;
+      // Store state and continue from new IP
+      wr16(R_IP, ip);
+      continue; // skip ip update at bottom
+    }
+
+    // ──── JMP rel16/32 (0xE9) ────
+    case 0xE9: {
+      let rel;
+      if (opSize === 2) {
+        rel = mem8[ci+1] | (mem8[ci+2] << 8);
+        if (rel > 0x7FFF) rel -= 0x10000;
+        ip = (ip + 3 + pos + rel) & 0xFFFF;
+      } else {
+        rel = mem8[ci+1]|(mem8[ci+2]<<8)|(mem8[ci+3]<<16)|(mem8[ci+4]<<24);
+        ip = (ip + 5 + pos + rel) & 0xFFFF; // still 16-bit wrap in real mode
+      }
+      ilen = 0;
+      executed++;
+      wr16(R_IP, ip);
+      continue;
+    }
+
+    // ──── Jcc rel8 (0x70-0x7F) ────
+    case 0x70:case 0x71:case 0x72:case 0x73:case 0x74:case 0x75:case 0x76:case 0x77:
+    case 0x78:case 0x79:case 0x7A:case 0x7B:case 0x7C:case 0x7D:case 0x7E:case 0x7F: {
+      let rel = mem8[ci+1];
+      if (rel > 127) rel -= 256;
+      ilen += 2;
+      if (testCC(b - 0x70)) {
+        ip = (ip + ilen + rel) & 0xFFFF;
+        ilen = 0;
+        executed++;
+        wr16(R_IP, ip);
+        continue;
+      }
+      break;
+    }
+
+    // ──── LOOP/LOOPcc (0xE0-0xE2) ────
+    case 0xE2: { // LOOP rel8
+      let rel = mem8[ci+1]; if (rel > 127) rel -= 256;
+      ilen += 2;
+      const cx = (gr16(1) - 1) & 0xFFFF;
+      sr16(1, cx);
+      if (cx !== 0) {
+        ip = (ip + ilen + rel) & 0xFFFF;
+        ilen = 0; executed++; wr16(R_IP, ip); continue;
+      }
+      break;
+    }
+    case 0xE1: { // LOOPE rel8
+      let rel = mem8[ci+1]; if (rel > 127) rel -= 256;
+      ilen += 2;
+      const cx = (gr16(1) - 1) & 0xFFFF;
+      sr16(1, cx);
+      if (cx !== 0 && getZF()) {
+        ip = (ip + ilen + rel) & 0xFFFF;
+        ilen = 0; executed++; wr16(R_IP, ip); continue;
+      }
+      break;
+    }
+    case 0xE0: { // LOOPNE rel8
+      let rel = mem8[ci+1]; if (rel > 127) rel -= 256;
+      ilen += 2;
+      const cx = (gr16(1) - 1) & 0xFFFF;
+      sr16(1, cx);
+      if (cx !== 0 && !getZF()) {
+        ip = (ip + ilen + rel) & 0xFFFF;
+        ilen = 0; executed++; wr16(R_IP, ip); continue;
+      }
+      break;
+    }
+
+    // ──── CALL rel16/32 (0xE8) ────
+    case 0xE8: {
+      let rel;
+      if (opSize === 2) {
+        rel = mem8[ci+1] | (mem8[ci+2] << 8);
+        if (rel > 0x7FFF) rel -= 0x10000;
+        ilen += 3;
+        push16((ip + ilen) & 0xFFFF, ssBase);
+        ip = (ip + ilen + rel) & 0xFFFF;
+      } else {
+        rel = mem8[ci+1]|(mem8[ci+2]<<8)|(mem8[ci+3]<<16)|(mem8[ci+4]<<24);
+        ilen += 5;
+        push32((ip + ilen) & 0xFFFFFFFF, ssBase);
+        ip = (ip + ilen + rel) & 0xFFFF;
+      }
+      ilen = 0; executed++; wr16(R_IP, ip); continue;
+    }
+
+    // ──── RET near (0xC3) ────
+    case 0xC3:
+      if (opSize === 2) ip = pop16(ssBase);
+      else ip = pop32(ssBase) & 0xFFFF;
+      ilen = 0; executed++; wr16(R_IP, ip); continue;
+
+    // ──── RET near imm16 (0xC2) ────
+    case 0xC2: {
+      const imm = mem8[ci+1] | (mem8[ci+2] << 8);
+      if (opSize === 2) {
+        ip = pop16(ssBase);
+        sr16(4, (gr16(4) + imm) & 0xFFFF);
+      } else {
+        ip = pop32(ssBase) & 0xFFFF;
+        sr32(4, (gr32(4) + imm) >>> 0);
+      }
+      ilen = 0; executed++; wr16(R_IP, ip); continue;
+    }
+
+    // ──── CLI (0xFA), STI (0xFB) ────
+    case 0xFA: flags &= ~0x200; ilen += 1; break;
+    case 0xFB: flags |= 0x200; ilen += 1; break;
+
+    // ──── CLD (0xFC), STD (0xFD) ────
+    case 0xFC: flags &= ~0x400; ilen += 1; break;
+    case 0xFD: flags |= 0x400; ilen += 1; break;
+
+    // ──── CLC (0xF8), STC (0xF9), CMC (0xF5) ────
+    case 0xF8: lazyCF = 0; lazyOp = OP_NONE; ilen += 1; break;
+    case 0xF9: lazyCF = 1; lazyOp = OP_NONE; ilen += 1; break;
+    case 0xF5: lazyCF = getCF() ? 0 : 1; lazyOp = OP_NONE; ilen += 1; break;
+
+    // ──── CBW / CWDE (0x98) ────
+    case 0x98:
+      if (opSize === 2) {
+        let al = gr8(0); if (al > 127) al |= 0xFF00;
+        sr16(0, al & 0xFFFF);
+      } else {
+        let ax = gr16(0); if (ax > 0x7FFF) ax |= 0xFFFF0000;
+        sr32(0, ax >>> 0);
+      }
+      ilen += 1;
+      break;
+
+    // ──── CWD / CDQ (0x99) ────
+    case 0x99:
+      if (opSize === 2) {
+        sr16(2, (gr16(0) & 0x8000) ? 0xFFFF : 0); // DX
+      } else {
+        sr32(2, (gr32(0) & 0x80000000) ? 0xFFFFFFFF : 0);
+      }
+      ilen += 1;
+      break;
+
+    // ──── MOVZX r16/32, r/m8 (0x0F 0xB6) — handled in 0x0F block ────
+    // ──── MOVSX r16/32, r/m8 (0x0F 0xBE) — handled in 0x0F block ────
+
+    // ──── IN AL, imm8 (0xE4) ────
+    case 0xE4:
+      sr8(0, portIn(mem8[ci+1], 1));
+      ilen += 2;
+      break;
+
+    // ──── IN AX, imm8 (0xE5) ────
+    case 0xE5:
+      if (opSize === 2) sr16(0, portIn(mem8[ci+1], 2));
+      else sr32(0, portIn(mem8[ci+1], 4));
+      ilen += 2;
+      break;
+
+    // ──── IN AL, DX (0xEC) ────
+    case 0xEC:
+      sr8(0, portIn(gr16(2), 1));
+      ilen += 1;
+      break;
+
+    // ──── IN AX, DX (0xED) ────
+    case 0xED:
+      if (opSize === 2) sr16(0, portIn(gr16(2), 2));
+      else sr32(0, portIn(gr16(2), 4));
+      ilen += 1;
+      break;
+
+    // ──── OUT imm8, AL (0xE6) ────
+    case 0xE6:
+      portOut(mem8[ci+1], 1, gr8(0));
+      ilen += 2;
+      break;
+
+    // ──── OUT imm8, AX (0xE7) ────
+    case 0xE7:
+      if (opSize === 2) portOut(mem8[ci+1], 2, gr16(0));
+      else portOut(mem8[ci+1], 4, gr32(0));
+      ilen += 2;
+      break;
+
+    // ──── OUT DX, AL (0xEE) ────
+    case 0xEE:
+      portOut(gr16(2), 1, gr8(0));
+      ilen += 1;
+      break;
+
+    // ──── OUT DX, AX (0xEF) ────
+    case 0xEF:
+      if (opSize === 2) portOut(gr16(2), 2, gr16(0));
+      else portOut(gr16(2), 4, gr32(0));
+      ilen += 1;
+      break;
+
+    // ──── REP/REPNE + string ops ────
+    case 0xAA: case 0xAB: case 0xAC: case 0xAD:
+    case 0xAE: case 0xAF: case 0xA4: case 0xA5:
+    case 0xA6: case 0xA7: case 0x6C: case 0x6D:
+    case 0x6E: case 0x6F: {
+      // String operations
+      const dir = (flags & 0x400) ? -1 : 1; // DF flag
+      ilen += 1;
+
+      if (repPrefix && (b === 0xA4 || b === 0xA5 || b === 0xAA || b === 0xAB ||
+                         b === 0xAC || b === 0xAD || b === 0x6C || b === 0x6D ||
+                         b === 0x6E || b === 0x6F)) {
+        // REP prefix — repeat CX times
+        let cx = gr16(1);
+        if (cx === 0) break;
+
+        const srcSeg = segOverride >= 0 ? segBase(segOverride) : dsBase;
+
+        switch (b) {
+          case 0xAA: { // STOSB
+            let di = gr16(7);
+            while (cx > 0) {
+              wb(esBase + di, gr8(0));
+              di = (di + dir) & 0xFFFF;
+              cx--;
+            }
+            sr16(7, di); sr16(1, 0);
+            break;
+          }
+          case 0xAB: { // STOSW/STOSD
+            let di = gr16(7);
+            if (opSize === 2) {
+              const v = gr16(0);
+              while (cx > 0) { ww(esBase + di, v); di = (di + dir * 2) & 0xFFFF; cx--; }
+            } else {
+              const v = gr32(0);
+              while (cx > 0) { wd(esBase + di, v); di = (di + dir * 4) & 0xFFFF; cx--; }
+            }
+            sr16(7, di); sr16(1, 0);
+            break;
+          }
+          case 0xA4: { // MOVSB
+            let si = gr16(6), di = gr16(7);
+            while (cx > 0) {
+              wb(esBase + di, rb(srcSeg + si));
+              si = (si + dir) & 0xFFFF;
+              di = (di + dir) & 0xFFFF;
+              cx--;
+            }
+            sr16(6, si); sr16(7, di); sr16(1, 0);
+            break;
+          }
+          case 0xA5: { // MOVSW/MOVSD
+            let si = gr16(6), di = gr16(7);
+            if (opSize === 2) {
+              while (cx > 0) {
+                ww(esBase + di, rw(srcSeg + si));
+                si = (si + dir * 2) & 0xFFFF; di = (di + dir * 2) & 0xFFFF; cx--;
+              }
+            } else {
+              while (cx > 0) {
+                wd(esBase + di, rd(srcSeg + si));
+                si = (si + dir * 4) & 0xFFFF; di = (di + dir * 4) & 0xFFFF; cx--;
+              }
+            }
+            sr16(6, si); sr16(7, di); sr16(1, 0);
+            break;
+          }
+          case 0xAC: { // LODSB
+            let si = gr16(6);
+            while (cx > 0) {
+              sr8(0, rb(srcSeg + si));
+              si = (si + dir) & 0xFFFF; cx--;
+            }
+            sr16(6, si); sr16(1, 0);
+            break;
+          }
+          case 0xAD: { // LODSW/LODSD
+            let si = gr16(6);
+            while (cx > 0) {
+              if (opSize === 2) sr16(0, rw(srcSeg + si));
+              else sr32(0, rd(srcSeg + si));
+              si = (si + dir * opSize) & 0xFFFF; cx--;
+            }
+            sr16(6, si); sr16(1, 0);
+            break;
+          }
+          default:
+            // INSB/INSW/OUTSB/OUTSW — fall back to IEM
+            iter = maxInsn; // force exit
+            break;
+        }
+      } else if (repPrefix && (b === 0xAE || b === 0xAF)) {
+        // REPE/REPNE SCAS
+        let cx = gr16(1), di = gr16(7);
+        const isRepNE = (repPrefix === 0xF2);
+        if (b === 0xAE) { // SCASB
+          const al = gr8(0);
+          while (cx > 0) {
+            const v = rb(esBase + di);
+            di = (di + dir) & 0xFFFF; cx--;
+            alu8(7, al, v); // CMP
+            if (isRepNE ? getZF() : !getZF()) break;
+          }
+        } else { // SCASW/SCASD
+          if (opSize === 2) {
+            const ax = gr16(0);
+            while (cx > 0) {
+              const v = rw(esBase + di);
+              di = (di + dir * 2) & 0xFFFF; cx--;
+              alu16(7, ax, v);
+              if (isRepNE ? getZF() : !getZF()) break;
+            }
+          } else {
+            const eax = gr32(0);
+            while (cx > 0) {
+              const v = rd(esBase + di);
+              di = (di + dir * 4) & 0xFFFF; cx--;
+              alu32(7, eax, v);
+              if (isRepNE ? getZF() : !getZF()) break;
+            }
+          }
+        }
+        sr16(7, di); sr16(1, cx);
+      } else if (repPrefix && (b === 0xA6 || b === 0xA7)) {
+        // REPE/REPNE CMPS
+        let cx = gr16(1), si = gr16(6), di = gr16(7);
+        const isRepNE = (repPrefix === 0xF2);
+        const srcSeg = segOverride >= 0 ? segBase(segOverride) : dsBase;
+        if (b === 0xA6) { // CMPSB
+          while (cx > 0) {
+            const a = rb(srcSeg + si), bv = rb(esBase + di);
+            si = (si + dir) & 0xFFFF; di = (di + dir) & 0xFFFF; cx--;
+            alu8(7, a, bv);
+            if (isRepNE ? getZF() : !getZF()) break;
+          }
+        } else { // CMPSW/CMPSD
+          const sz = opSize;
+          while (cx > 0) {
+            const a = sz === 2 ? rw(srcSeg + si) : rd(srcSeg + si);
+            const bv = sz === 2 ? rw(esBase + di) : rd(esBase + di);
+            si = (si + dir * sz) & 0xFFFF; di = (di + dir * sz) & 0xFFFF; cx--;
+            if (sz === 2) alu16(7, a, bv); else alu32(7, a, bv);
+            if (isRepNE ? getZF() : !getZF()) break;
+          }
+        }
+        sr16(6, si); sr16(7, di); sr16(1, cx);
+      } else {
+        // Single string op (no REP prefix)
+        switch (b) {
+          case 0xAA: wb(esBase + gr16(7), gr8(0)); sr16(7, (gr16(7)+dir)&0xFFFF); break;
+          case 0xAB:
+            if (opSize===2) { ww(esBase+gr16(7), gr16(0)); sr16(7,(gr16(7)+dir*2)&0xFFFF); }
+            else { wd(esBase+gr16(7), gr32(0)); sr16(7,(gr16(7)+dir*4)&0xFFFF); }
+            break;
+          case 0xA4: {
+            const srcSeg2 = segOverride >= 0 ? segBase(segOverride) : dsBase;
+            wb(esBase+gr16(7), rb(srcSeg2+gr16(6)));
+            sr16(6,(gr16(6)+dir)&0xFFFF); sr16(7,(gr16(7)+dir)&0xFFFF);
+            break;
+          }
+          case 0xA5: {
+            const srcSeg2 = segOverride >= 0 ? segBase(segOverride) : dsBase;
+            if (opSize===2) ww(esBase+gr16(7), rw(srcSeg2+gr16(6)));
+            else wd(esBase+gr16(7), rd(srcSeg2+gr16(6)));
+            sr16(6,(gr16(6)+dir*opSize)&0xFFFF); sr16(7,(gr16(7)+dir*opSize)&0xFFFF);
+            break;
+          }
+          case 0xAC: {
+            const srcSeg2 = segOverride >= 0 ? segBase(segOverride) : dsBase;
+            sr8(0, rb(srcSeg2+gr16(6))); sr16(6,(gr16(6)+dir)&0xFFFF); break;
+          }
+          case 0xAD: {
+            const srcSeg2 = segOverride >= 0 ? segBase(segOverride) : dsBase;
+            if (opSize===2) sr16(0, rw(srcSeg2+gr16(6)));
+            else sr32(0, rd(srcSeg2+gr16(6)));
+            sr16(6,(gr16(6)+dir*opSize)&0xFFFF); break;
+          }
+          case 0xAE: alu8(7, gr8(0), rb(esBase+gr16(7))); sr16(7,(gr16(7)+dir)&0xFFFF); break;
+          case 0xAF:
+            if (opSize===2) alu16(7, gr16(0), rw(esBase+gr16(7)));
+            else alu32(7, gr32(0), rd(esBase+gr16(7)));
+            sr16(7,(gr16(7)+dir*opSize)&0xFFFF); break;
+          default:
+            iter = maxInsn; break;
+        }
+      }
+      break;
+    }
+
+    // ──── SAHF (0x9E), LAHF (0x9F) ────
+    case 0x9E: { // SAHF: load low 8 of flags from AH
+      const ah = gr8(4); // AH
+      lazyCF = ah & 1;
+      // Reconstruct lazy state
+      lazyOp = OP_NONE;
+      lazyRes = (ah & 0x40) ? 0 : 1; // ZF
+      if (ah & 0x80) lazyRes |= SIZE_SIGN[lazySize]; // SF
+      ilen += 1;
+      break;
+    }
+    case 0x9F: { // LAHF: store flags low 8 into AH
+      sr8(4, flagsToWord() & 0xFF);
+      ilen += 1;
+      break;
+    }
+
+    // ──── NOT / NEG (0xF6, 0xF7) ────
+    case 0xF6: {
+      const modrm = mem8[ci+1]; ilen += 2;
+      const op = (modrm >> 3) & 7;
+      if (op === 2) { // NOT r/m8
+        if ((modrm >> 6) === 3) sr8(modrm & 7, ~gr8(modrm & 7) & 0xFF);
+        else {
+          const m = addrSize === 2 ? decodeModRM16(modrm, mem8, ci+2, effDS, effSS)
+                                   : decodeModRM32(modrm, mem8, ci+2, effDS, effSS);
+          ilen += m.len; wb(m.ea, ~rb(m.ea) & 0xFF);
+        }
+      } else if (op === 3) { // NEG r/m8
+        let val;
+        if ((modrm >> 6) === 3) {
+          val = gr8(modrm & 7);
+          const r = (-val) & 0xFF;
+          sr8(modrm & 7, r);
+          setFlagsArith(OP_SUB, r, 0, val, 1); lazyCF = val !== 0 ? 1 : 0;
+        } else {
+          const m = addrSize === 2 ? decodeModRM16(modrm, mem8, ci+2, effDS, effSS)
+                                   : decodeModRM32(modrm, mem8, ci+2, effDS, effSS);
+          ilen += m.len;
+          val = rb(m.ea); const r = (-val) & 0xFF; wb(m.ea, r);
+          setFlagsArith(OP_SUB, r, 0, val, 1); lazyCF = val !== 0 ? 1 : 0;
+        }
+      } else if (op === 0) { // TEST r/m8, imm8
+        let val;
+        if ((modrm >> 6) === 3) {
+          val = gr8(modrm & 7);
+          alu8(4, val, mem8[ci+2]); ilen += 1;
+        } else {
+          const m = addrSize === 2 ? decodeModRM16(modrm, mem8, ci+2, effDS, effSS)
+                                   : decodeModRM32(modrm, mem8, ci+2, effDS, effSS);
+          ilen += m.len;
+          val = rb(m.ea);
+          alu8(4, val, mem8[ci+2+m.len]); ilen += 1;
+        }
+      } else {
+        // MUL, IMUL, DIV, IDIV — fallback
+        iter = maxInsn; break;
+      }
+      break;
+    }
+
+    case 0xF7: {
+      const modrm = mem8[ci+1]; ilen += 2;
+      const op = (modrm >> 3) & 7;
+      if (op === 2) { // NOT r/m16/32
+        if ((modrm >> 6) === 3) {
+          if (opSize===2) sr16(modrm&7, ~gr16(modrm&7) & 0xFFFF);
+          else sr32(modrm&7, ~gr32(modrm&7) >>> 0);
+        } else {
+          const m = addrSize === 2 ? decodeModRM16(modrm, mem8, ci+2, effDS, effSS)
+                                   : decodeModRM32(modrm, mem8, ci+2, effDS, effSS);
+          ilen += m.len;
+          if (opSize===2) ww(m.ea, ~rw(m.ea) & 0xFFFF);
+          else wd(m.ea, ~rd(m.ea) >>> 0);
+        }
+      } else if (op === 3) { // NEG r/m16/32
+        if ((modrm >> 6) === 3) {
+          if (opSize===2) {
+            const v = gr16(modrm&7), r = (-v) & 0xFFFF;
+            sr16(modrm&7, r); setFlagsArith(OP_SUB,r,0,v,2); lazyCF = v?1:0;
+          } else {
+            const v = gr32(modrm&7), r = (-v) >>> 0;
+            sr32(modrm&7, r); setFlagsArith(OP_SUB,r,0,v,4); lazyCF = v?1:0;
+          }
+        } else {
+          const m = addrSize === 2 ? decodeModRM16(modrm, mem8, ci+2, effDS, effSS)
+                                   : decodeModRM32(modrm, mem8, ci+2, effDS, effSS);
+          ilen += m.len;
+          if (opSize===2) {
+            const v = rw(m.ea), r = (-v) & 0xFFFF;
+            ww(m.ea, r); setFlagsArith(OP_SUB,r,0,v,2); lazyCF = v?1:0;
+          } else {
+            const v = rd(m.ea), r = (-v) >>> 0;
+            wd(m.ea, r); setFlagsArith(OP_SUB,r,0,v,4); lazyCF = v?1:0;
+          }
+        }
+      } else if (op === 0) { // TEST r/m16/32, imm
+        if ((modrm >> 6) === 3) {
+          if (opSize===2) { alu16(4, gr16(modrm&7), mem8[ci+2]|(mem8[ci+3]<<8)); ilen += 2; }
+          else { alu32(4, gr32(modrm&7), mem8[ci+2]|(mem8[ci+3]<<8)|(mem8[ci+4]<<16)|(mem8[ci+5]<<24)); ilen += 4; }
+        } else {
+          const m = addrSize === 2 ? decodeModRM16(modrm, mem8, ci+2, effDS, effSS)
+                                   : decodeModRM32(modrm, mem8, ci+2, effDS, effSS);
+          ilen += m.len;
+          const off = ci+2+m.len;
+          if (opSize===2) { alu16(4, rw(m.ea), mem8[off]|(mem8[off+1]<<8)); ilen += 2; }
+          else { alu32(4, rd(m.ea), mem8[off]|(mem8[off+1]<<8)|(mem8[off+2]<<16)|(mem8[off+3]<<24)); ilen += 4; }
+        }
+      } else {
+        iter = maxInsn; break;
+      }
+      break;
+    }
+
+    // ──── SHL/SHR/SAR/ROL/ROR (0xD0, 0xD1, 0xD2, 0xD3, 0xC0, 0xC1) ────
+    case 0xD0: case 0xD1: case 0xC0: case 0xC1: case 0xD2: case 0xD3: {
+      const modrm = mem8[ci+1]; ilen += 2;
+      const shOp = (modrm >> 3) & 7;
+      const isWord = (b & 1); // 0=byte, 1=word/dword
+      const sz = isWord ? opSize : 1;
+      let count;
+      if (b === 0xD0 || b === 0xD1) count = 1;
+      else if (b === 0xC0 || b === 0xC1) { count = mem8[ci+2] & 0x1F; ilen += 1; }
+      else count = gr8(1) & 0x1F; // CL
+
+      // Handle shift only for SHL(4), SHR(5), SAR(7)
+      if (count === 0) break;
+
+      let val;
+      let isMem = (modrm >> 6) !== 3;
+      let mea = 0, mlen = 0;
+      if (isMem) {
+        // Need to recalculate ilen for memory operand before count byte
+        if (b === 0xC0 || b === 0xC1) ilen -= 1; // undo count byte
+        const m = addrSize === 2 ? decodeModRM16(modrm, mem8, ci+2, effDS, effSS)
+                                 : decodeModRM32(modrm, mem8, ci+2, effDS, effSS);
+        mea = m.ea; mlen = m.len;
+        ilen += mlen;
+        if (b === 0xC0 || b === 0xC1) {
+          count = mem8[ci + 2 + mlen] & 0x1F;
+          ilen += 1;
+        }
+        if (sz === 1) val = rb(mea);
+        else if (sz === 2) val = rw(mea);
+        else val = rd(mea);
+      } else {
+        const rm = modrm & 7;
+        if (sz === 1) val = gr8(rm);
+        else if (sz === 2) val = gr16(rm);
+        else val = gr32(rm);
+      }
+
+      if (count === 0) break;
+
+      let res;
+      const mask = SIZE_MASK[sz];
+      switch (shOp) {
+        case 4: // SHL
+          lazyCF = ((val >> (sz * 8 - count)) & 1);
+          res = (val << count) & mask;
+          setFlagsArith(OP_SHL, res, val, count, sz);
+          break;
+        case 5: // SHR
+          lazyCF = ((val >> (count - 1)) & 1);
+          res = (val >>> count) & mask;
+          setFlagsArith(OP_SHR, res, val, count, sz);
+          break;
+        case 7: { // SAR
+          lazyCF = ((val >> (count - 1)) & 1);
+          let sv = val;
+          if (sv & SIZE_SIGN[sz]) sv |= ~mask; // sign extend
+          res = (sv >> count) & mask;
+          setFlagsArith(OP_SAR, res, val, count, sz);
+          break;
+        }
+        case 0: { // ROL
+          const bc = sz * 8;
+          res = ((val << (count % bc)) | (val >>> (bc - count % bc))) & mask;
+          lazyCF = res & 1;
+          lazyOp = OP_NONE;
+          break;
+        }
+        case 1: { // ROR
+          const bc = sz * 8;
+          res = ((val >>> (count % bc)) | (val << (bc - count % bc))) & mask;
+          lazyCF = (res >>> (bc - 1)) & 1;
+          lazyOp = OP_NONE;
+          break;
+        }
+        default:
+          iter = maxInsn; break; // RCL, RCR — complex, fallback
+      }
+
+      if (isMem) {
+        if (sz === 1) wb(mea, res);
+        else if (sz === 2) ww(mea, res);
+        else wd(mea, res);
+      } else {
+        const rm = modrm & 7;
+        if (sz === 1) sr8(rm, res);
+        else if (sz === 2) sr16(rm, res);
+        else sr32(rm, res);
+      }
+      break;
+    }
+
+    // ──── INC/DEC r/m8 (0xFE) ────
+    case 0xFE: {
+      const modrm = mem8[ci+1]; ilen += 2;
+      const op = (modrm >> 3) & 7;
+      if (op > 1) { iter = maxInsn; break; }
+      const oldCF = getCF();
+      if ((modrm >> 6) === 3) {
+        const rm = modrm & 7;
+        let v = gr8(rm);
+        if (op === 0) { v = (v+1)&0xFF; setFlagsArith(OP_INC,v,v-1,1,1); }
+        else { v = (v-1)&0xFF; setFlagsArith(OP_DEC,v,v+1,1,1); }
+        sr8(rm, v);
+      } else {
+        const m = addrSize === 2 ? decodeModRM16(modrm, mem8, ci+2, effDS, effSS)
+                                 : decodeModRM32(modrm, mem8, ci+2, effDS, effSS);
+        ilen += m.len;
+        let v = rb(m.ea);
+        if (op === 0) { v = (v+1)&0xFF; setFlagsArith(OP_INC,v,v-1,1,1); }
+        else { v = (v-1)&0xFF; setFlagsArith(OP_DEC,v,v+1,1,1); }
+        wb(m.ea, v);
+      }
+      lazyCF = oldCF;
+      break;
+    }
+
+    // ──── INC/DEC/CALL/JMP/PUSH r/m16/32 (0xFF) ────
+    case 0xFF: {
+      const modrm = mem8[ci+1]; ilen += 2;
+      const op = (modrm >> 3) & 7;
+
+      if (op === 0 || op === 1) { // INC / DEC
+        const oldCF = getCF();
+        if ((modrm >> 6) === 3) {
+          const rm = modrm & 7;
+          if (opSize === 2) {
+            let v = gr16(rm);
+            if (op===0) { v=(v+1)&0xFFFF; setFlagsArith(OP_INC,v,v-1,1,2); }
+            else { v=(v-1)&0xFFFF; setFlagsArith(OP_DEC,v,v+1,1,2); }
+            sr16(rm, v);
+          } else {
+            let v = gr32(rm);
+            if (op===0) { v=(v+1)>>>0; setFlagsArith(OP_INC,v,v-1,1,4); }
+            else { v=(v-1)>>>0; setFlagsArith(OP_DEC,v,v+1,1,4); }
+            sr32(rm, v);
+          }
+        } else {
+          const m = addrSize === 2 ? decodeModRM16(modrm, mem8, ci+2, effDS, effSS)
+                                   : decodeModRM32(modrm, mem8, ci+2, effDS, effSS);
+          ilen += m.len;
+          if (opSize === 2) {
+            let v = rw(m.ea);
+            if (op===0) { v=(v+1)&0xFFFF; setFlagsArith(OP_INC,v,v-1,1,2); }
+            else { v=(v-1)&0xFFFF; setFlagsArith(OP_DEC,v,v+1,1,2); }
+            ww(m.ea, v);
+          } else {
+            let v = rd(m.ea);
+            if (op===0) { v=(v+1)>>>0; setFlagsArith(OP_INC,v,v-1,1,4); }
+            else { v=(v-1)>>>0; setFlagsArith(OP_DEC,v,v+1,1,4); }
+            wd(m.ea, v);
+          }
+        }
+        lazyCF = oldCF;
+      } else if (op === 2) { // CALL r/m16/32 (indirect)
+        let target;
+        if ((modrm >> 6) === 3) {
+          target = opSize === 2 ? gr16(modrm & 7) : gr32(modrm & 7);
+        } else {
+          const m = addrSize === 2 ? decodeModRM16(modrm, mem8, ci+2, effDS, effSS)
+                                   : decodeModRM32(modrm, mem8, ci+2, effDS, effSS);
+          ilen += m.len;
+          target = opSize === 2 ? rw(m.ea) : rd(m.ea);
+        }
+        if (opSize === 2) push16((ip + ilen) & 0xFFFF, ssBase);
+        else push32((ip + ilen) & 0xFFFFFFFF, ssBase);
+        ip = target & 0xFFFF;
+        ilen = 0; executed++; wr16(R_IP, ip); continue;
+      } else if (op === 4) { // JMP r/m16/32 (indirect)
+        let target;
+        if ((modrm >> 6) === 3) {
+          target = opSize === 2 ? gr16(modrm & 7) : gr32(modrm & 7);
+        } else {
+          const m = addrSize === 2 ? decodeModRM16(modrm, mem8, ci+2, effDS, effSS)
+                                   : decodeModRM32(modrm, mem8, ci+2, effDS, effSS);
+          ilen += m.len;
+          target = opSize === 2 ? rw(m.ea) : rd(m.ea);
+        }
+        ip = target & 0xFFFF;
+        ilen = 0; executed++; wr16(R_IP, ip); continue;
+      } else if (op === 6) { // PUSH r/m16/32
+        let val;
+        if ((modrm >> 6) === 3) {
+          val = opSize === 2 ? gr16(modrm & 7) : gr32(modrm & 7);
+        } else {
+          const m = addrSize === 2 ? decodeModRM16(modrm, mem8, ci+2, effDS, effSS)
+                                   : decodeModRM32(modrm, mem8, ci+2, effDS, effSS);
+          ilen += m.len;
+          val = opSize === 2 ? rw(m.ea) : rd(m.ea);
+        }
+        if (opSize === 2) push16(val, ssBase);
+        else push32(val, ssBase);
+      } else {
+        // CALL/JMP far — fallback
+        iter = maxInsn; break;
+      }
+      break;
+    }
+
+    // ──── 0x0F two-byte opcodes ────
+    case 0x0F: {
+      const b2 = mem8[ci+1]; ilen += 2;
+      switch (b2) {
+        // Jcc rel16/32 (0x0F 0x80-0x8F)
+        case 0x80:case 0x81:case 0x82:case 0x83:case 0x84:case 0x85:case 0x86:case 0x87:
+        case 0x88:case 0x89:case 0x8A:case 0x8B:case 0x8C:case 0x8D:case 0x8E:case 0x8F: {
+          let rel;
+          if (opSize === 2) {
+            rel = mem8[ci+2] | (mem8[ci+3] << 8);
+            if (rel > 0x7FFF) rel -= 0x10000;
+            ilen += 2;
+          } else {
+            rel = mem8[ci+2]|(mem8[ci+3]<<8)|(mem8[ci+4]<<16)|(mem8[ci+5]<<24);
+            ilen += 4;
+          }
+          if (testCC(b2 - 0x80)) {
+            ip = (ip + ilen + rel) & 0xFFFF;
+            ilen = 0; executed++; wr16(R_IP, ip); continue;
+          }
+          break;
+        }
+
+        // MOVZX r16/32, r/m8 (0x0F 0xB6)
+        case 0xB6: {
+          const modrm = mem8[ci+2]; ilen += 1;
+          const reg = (modrm >> 3) & 7;
+          let val;
+          if ((modrm >> 6) === 3) val = gr8(modrm & 7);
+          else {
+            const m = addrSize === 2 ? decodeModRM16(modrm, mem8, ci+3, effDS, effSS)
+                                     : decodeModRM32(modrm, mem8, ci+3, effDS, effSS);
+            ilen += m.len;
+            val = rb(m.ea);
+          }
+          if (opSize === 2) sr16(reg, val);
+          else sr32(reg, val);
+          break;
+        }
+
+        // MOVZX r16/32, r/m16 (0x0F 0xB7)
+        case 0xB7: {
+          const modrm = mem8[ci+2]; ilen += 1;
+          const reg = (modrm >> 3) & 7;
+          let val;
+          if ((modrm >> 6) === 3) val = gr16(modrm & 7);
+          else {
+            const m = addrSize === 2 ? decodeModRM16(modrm, mem8, ci+3, effDS, effSS)
+                                     : decodeModRM32(modrm, mem8, ci+3, effDS, effSS);
+            ilen += m.len;
+            val = rw(m.ea);
+          }
+          sr32(reg, val); // zero-extend to 32
+          break;
+        }
+
+        // MOVSX r16/32, r/m8 (0x0F 0xBE)
+        case 0xBE: {
+          const modrm = mem8[ci+2]; ilen += 1;
+          const reg = (modrm >> 3) & 7;
+          let val;
+          if ((modrm >> 6) === 3) val = gr8(modrm & 7);
+          else {
+            const m = addrSize === 2 ? decodeModRM16(modrm, mem8, ci+3, effDS, effSS)
+                                     : decodeModRM32(modrm, mem8, ci+3, effDS, effSS);
+            ilen += m.len;
+            val = rb(m.ea);
+          }
+          if (val > 127) val |= (opSize === 2 ? 0xFF00 : 0xFFFFFF00);
+          if (opSize === 2) sr16(reg, val & 0xFFFF);
+          else sr32(reg, val >>> 0);
+          break;
+        }
+
+        // MOVSX r32, r/m16 (0x0F 0xBF)
+        case 0xBF: {
+          const modrm = mem8[ci+2]; ilen += 1;
+          const reg = (modrm >> 3) & 7;
+          let val;
+          if ((modrm >> 6) === 3) val = gr16(modrm & 7);
+          else {
+            const m = addrSize === 2 ? decodeModRM16(modrm, mem8, ci+3, effDS, effSS)
+                                     : decodeModRM32(modrm, mem8, ci+3, effDS, effSS);
+            ilen += m.len;
+            val = rw(m.ea);
+          }
+          if (val > 0x7FFF) val |= 0xFFFF0000;
+          sr32(reg, val >>> 0);
+          break;
+        }
+
+        // SETcc r/m8 (0x0F 0x90-0x9F)
+        case 0x90:case 0x91:case 0x92:case 0x93:case 0x94:case 0x95:case 0x96:case 0x97:
+        case 0x98:case 0x99:case 0x9A:case 0x9B:case 0x9C:case 0x9D:case 0x9E:case 0x9F: {
+          const modrm = mem8[ci+2]; ilen += 1;
+          const val = testCC(b2 - 0x90) ? 1 : 0;
+          if ((modrm >> 6) === 3) sr8(modrm & 7, val);
+          else {
+            const m = addrSize === 2 ? decodeModRM16(modrm, mem8, ci+3, effDS, effSS)
+                                     : decodeModRM32(modrm, mem8, ci+3, effDS, effSS);
+            ilen += m.len;
+            wb(m.ea, val);
+          }
+          break;
+        }
+
+        default:
+          // Unsupported 0x0F opcode — fallback
+          iter = maxInsn;
+          break;
+      }
+      break;
+    }
+
+    // ──── JMP far (0xEA) ────
+    case 0xEA: {
+      if (opSize === 2) {
+        const newIP = mem8[ci+1] | (mem8[ci+2] << 8);
+        const newCS = mem8[ci+3] | (mem8[ci+4] << 8);
+        ilen += 5;
+        // Update CS
+        wr16(S_CS + SEG_SEL, newCS);
+        if (realMode) wr64(S_CS + SEG_BASE, newCS << 4);
+        ip = newIP;
+        ilen = 0; executed++; wr16(R_IP, ip); continue;
+      } else {
+        iter = maxInsn; break; // 32-bit far jump — complex
+      }
+    }
+
+    // ──── CALL far (0x9A) ────
+    case 0x9A: {
+      if (opSize === 2) {
+        const newIP = mem8[ci+1] | (mem8[ci+2] << 8);
+        const newCS = mem8[ci+3] | (mem8[ci+4] << 8);
+        ilen += 5;
+        push16(rr16(S_CS + SEG_SEL), ssBase); // push CS
+        push16((ip + ilen) & 0xFFFF, ssBase); // push IP
+        wr16(S_CS + SEG_SEL, newCS);
+        if (realMode) wr64(S_CS + SEG_BASE, newCS << 4);
+        ip = newIP;
+        ilen = 0; executed++; wr16(R_IP, ip); continue;
+      } else {
+        iter = maxInsn; break;
+      }
+    }
+
+    // ──── RETF (0xCB) ────
+    case 0xCB: {
+      if (opSize === 2) {
+        const newIP = pop16(ssBase);
+        const newCS = pop16(ssBase);
+        wr16(S_CS + SEG_SEL, newCS);
+        if (realMode) wr64(S_CS + SEG_BASE, newCS << 4);
+        ip = newIP;
+        ilen = 0; executed++; wr16(R_IP, ip); continue;
+      } else {
+        iter = maxInsn; break;
+      }
+    }
+
+    // ──── PUSHA (0x60) ────
+    case 0x60: {
+      const sp0 = gr16(4);
+      if (opSize === 2) {
+        push16(gr16(0), ssBase); push16(gr16(1), ssBase); push16(gr16(2), ssBase); push16(gr16(3), ssBase);
+        push16(sp0, ssBase); push16(gr16(5), ssBase); push16(gr16(6), ssBase); push16(gr16(7), ssBase);
+      } else {
+        const esp0 = gr32(4);
+        push32(gr32(0), ssBase); push32(gr32(1), ssBase); push32(gr32(2), ssBase); push32(gr32(3), ssBase);
+        push32(esp0, ssBase); push32(gr32(5), ssBase); push32(gr32(6), ssBase); push32(gr32(7), ssBase);
+      }
+      ilen += 1;
+      break;
+    }
+
+    // ──── POPA (0x61) ────
+    case 0x61:
+      if (opSize === 2) {
+        sr16(7, pop16(ssBase)); sr16(6, pop16(ssBase)); sr16(5, pop16(ssBase));
+        pop16(ssBase); // skip SP
+        sr16(3, pop16(ssBase)); sr16(2, pop16(ssBase)); sr16(1, pop16(ssBase)); sr16(0, pop16(ssBase));
+      } else {
+        sr32(7, pop32(ssBase)); sr32(6, pop32(ssBase)); sr32(5, pop32(ssBase));
+        pop32(ssBase);
+        sr32(3, pop32(ssBase)); sr32(2, pop32(ssBase)); sr32(1, pop32(ssBase)); sr32(0, pop32(ssBase));
+      }
+      ilen += 1;
+      break;
+
+    // ──── PUSH ES/CS/SS/DS (0x06,0x0E,0x16,0x1E) ────
+    case 0x06: push16(rr16(S_ES + SEG_SEL), ssBase); ilen += 1; break;
+    case 0x0E: push16(rr16(S_CS + SEG_SEL), ssBase); ilen += 1; break;
+    case 0x16: push16(rr16(S_SS + SEG_SEL), ssBase); ilen += 1; break;
+    case 0x1E: push16(rr16(S_DS + SEG_SEL), ssBase); ilen += 1; break;
+
+    // ──── POP ES/SS/DS (0x07,0x17,0x1F) ────
+    case 0x07: {
+      const v = pop16(ssBase);
+      wr16(S_ES + SEG_SEL, v);
+      if (realMode) { wr64(S_ES + SEG_BASE, v << 4); esBase = v << 4; }
+      ilen += 1;
+      break;
+    }
+    case 0x17: {
+      const v = pop16(ssBase);
+      wr16(S_SS + SEG_SEL, v);
+      if (realMode) { wr64(S_SS + SEG_BASE, v << 4); ssBase = v << 4; }
+      ilen += 1;
+      break;
+    }
+    case 0x1F: {
+      const v = pop16(ssBase);
+      wr16(S_DS + SEG_SEL, v);
+      if (realMode) { wr64(S_DS + SEG_BASE, v << 4); dsBase = v << 4; }
+      ilen += 1;
+      break;
+    }
+
+    // ──── Unsupported — fallback to IEM ────
+    default:
+      // INT, IRET, HLT, CPUID, RDTSC, etc. — let IEM handle
+      iter = maxInsn;
+      break;
+    } // end switch
+
+    if (ilen > 0) {
+      ip = (ip + ilen) & 0xFFFF;
+      executed++;
+    }
+  } // end for
+
+  // ── Store state back ──
+  wr16(R_IP, ip);
+  // Reconstruct RFLAGS
+  const newFlags = (flags & 0xFFFFF000) | flagsToWord();
+  wr32(R_FLAGS, newFlags);
+
+  return executed;
+}
+
+// ── Stats ──
+let statTotalInsns = 0, statTotalCalls = 0, statFallbacks = 0;
+let statLastReport = 0;
+
+function execBlockWrapped(cpuP, ramB, maxInsn) {
+  statTotalCalls++;
+  const n = execBlock(cpuP, ramB, maxInsn);
+  if (n > 0) {
+    statTotalInsns += n;
+  } else {
+    statFallbacks++;
+  }
+  // Log stats every 100000 calls
+  const now = Date.now();
+  if (now - statLastReport > 5000) {
+    statLastReport = now;
+    if (statTotalCalls > 0 && (statTotalCalls % 1000 < 10)) {
+      console.log('[JIT] calls=' + statTotalCalls +
+        ' insns=' + statTotalInsns +
+        ' fallbacks=' + statFallbacks +
+        ' avg=' + (statTotalInsns / Math.max(1, statTotalCalls - statFallbacks)).toFixed(1));
+    }
+  }
+  return n;
+}
+
+// ── Public API ──
+return {
+  execBlock: execBlockWrapped,
+  init: init,
+  setPortIO: function(inFn, outFn) { portInFn = inFn; portOutFn = outFn; },
+  getStats: function() { return { totalInsns: statTotalInsns, totalCalls: statTotalCalls, fallbacks: statFallbacks }; }
+};
+
+})(); // end VBoxJIT IIFE

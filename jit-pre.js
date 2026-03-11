@@ -1078,7 +1078,7 @@ function execBlock(cpuP, ramB, maxInsn) {
 
     // ──── PUSHF (0x9C) ────
     case 0x9C: {
-      const f = flagsToWord() | (flags & 0xFFFFF000); // preserve upper bits
+      const f = flagsToWord() | (flags & 0xFFFFF700); // preserve TF/IF/DF/upper bits
       if (opSize === 2) push16(f & 0xFFFF, ssBase);
       else push32(f, ssBase);
       ilen += 1;
@@ -2515,7 +2515,7 @@ function execBlock(cpuP, ramB, maxInsn) {
   // ── Store state back ──
   wr16(R_IP, ip);
   // Reconstruct RFLAGS
-  const newFlags = (flags & 0xFFFFF000) | flagsToWord();
+  const newFlags = (flags & 0xFFFFF700) | flagsToWord(); // preserve TF/IF/DF (bits 8-10)
   wr32(R_FLAGS, newFlags);
 
   // Track bail opcode if we exited early

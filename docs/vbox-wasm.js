@@ -39,7 +39,7 @@ var ENVIRONMENT_IS_PTHREAD = ENVIRONMENT_IS_WORKER && globalThis.name == "em-pth
 
 // --pre-jses are emitted after the Module integration code, so that they can
 // refer to Module (if they choose; they can also define Module)
-// include: /build/vbox/jit-pre.js
+// include: jit-pre.js
 // jit-pre.js — x86 fast interpreter for VirtualBox/Wasm
 // Embedded via --pre-js. Runs in all threads (main + workers).
 // Called from EM_JS hook in IEM execution loop.
@@ -1545,8 +1545,8 @@ globalThis.VBoxJIT = (function() {
        // ──── PUSHF (0x9C) ────
         case 156:
         {
-          const f = flagsToWord() | (flags & 4294963200);
-          // preserve upper bits
+          const f = flagsToWord() | (flags & 4294964992);
+          // preserve TF/IF/DF/upper bits
           if (opSize === 2) push16(f & 65535, ssBase); else push32(f, ssBase);
           ilen += 1;
           break;
@@ -3703,7 +3703,8 @@ globalThis.VBoxJIT = (function() {
     // ── Store state back ──
     wr16(R_IP, ip);
     // Reconstruct RFLAGS
-    const newFlags = (flags & 4294963200) | flagsToWord();
+    const newFlags = (flags & 4294964992) | flagsToWord();
+    // preserve TF/IF/DF (bits 8-10)
     wr32(R_FLAGS, newFlags);
     // Track bail opcode if we exited early
     if (lastBailOp >= 0) {
@@ -3769,7 +3770,7 @@ globalThis.VBoxJIT = (function() {
 })();
 
 // end VBoxJIT IIFE
-// end include: /build/vbox/jit-pre.js
+// end include: jit-pre.js
 var arguments_ = [];
 
 var thisProgram = "./this.program";

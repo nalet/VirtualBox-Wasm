@@ -9115,8 +9115,7 @@ function assignWasmImports() {
     /** @export */ invoke_vjji,
     /** @export */ memory: wasmMemory,
     /** @export */ proc_exit: _proc_exit,
-    /** @export */ wasmCallFuncPtrTrampoline,
-    /** @export */ wasmJitExecBlock
+    /** @export */ wasmCallFuncPtrTrampoline
   };
 }
 

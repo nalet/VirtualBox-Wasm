@@ -1972,11 +1972,13 @@ function execBlock(cpuP, ramB, maxInsn) {
     }
 
     // ──── Unsupported — fallback to IEM ────
-    default:
+    default: {
       // INT, IRET, HLT, CPUID, RDTSC, etc. — let IEM handle
-      if (statTotalCalls < 20) console.log('[JIT] unsupported opcode 0x' + c0.toString(16) + ' at cs:ip=' + csBase.toString(16) + ':' + ip.toString(16) + ' phys=0x' + codePhys.toString(16) + ' executed=' + executed);
+      const key = b < 0x100 ? b : ((c0 << 8) | b); // track effective opcode (with 0x0F prefix)
+      fallbackOpcodes.set(key, (fallbackOpcodes.get(key) || 0) + 1);
       iter = maxInsn;
       break;
+    }
     } // end switch
 
     if (ilen > 0) {
@@ -1997,6 +1999,7 @@ function execBlock(cpuP, ramB, maxInsn) {
 // ── Stats ──
 let statTotalInsns = 0, statTotalCalls = 0, statFallbacks = 0;
 let statLastReport = 0;
+const fallbackOpcodes = new Map(); // opcode -> count
 
 function execBlockWrapped(cpuP, ramB, maxInsn) {
   statTotalCalls++;
@@ -2011,10 +2014,14 @@ function execBlockWrapped(cpuP, ramB, maxInsn) {
   if (now - statLastReport > 5000) {
     statLastReport = now;
     {
+      // Top fallback opcodes
+      const sorted = [...fallbackOpcodes.entries()].sort((a,b) => b[1]-a[1]).slice(0,8);
+      const topStr = sorted.map(([op,cnt]) => '0x' + op.toString(16) + ':' + cnt).join(' ');
       console.log('[JIT] calls=' + statTotalCalls +
         ' insns=' + statTotalInsns +
         ' fallbacks=' + statFallbacks +
-        ' avg=' + (statTotalInsns / Math.max(1, statTotalCalls - statFallbacks)).toFixed(1));
+        ' avg=' + (statTotalInsns / Math.max(1, statTotalCalls - statFallbacks)).toFixed(1) +
+        ' top=[' + topStr + ']');
     }
   }
   return n;

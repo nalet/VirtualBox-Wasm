@@ -200,11 +200,10 @@ static void iemJitEnsureInit(PVMCC pVM)
     {
         s_pvJitRAM = pv;
         wasmJitSetGuestRAM(pv);
+        LogRel(("[JIT] PGMPhysGCPhys2CCPtr OK: RAM=%p\n", pv));
     }
-
-    /* ROM buffer disabled: PGMPhysRead returns shadow RAM (0xFF) for ROM pages,
-     * not the actual ROM content. This causes JIT/IEM code mismatches.
-     * IEM handles all ROM code correctly via PGM's ROM page handlers. */
+    else
+        LogRel(("[JIT] PGMPhysGCPhys2CCPtr FAILED: rc=%d pv=%p\n", rc, pv));
 }
 #endif /* __EMSCRIPTEN__ */
 
@@ -1046,10 +1045,15 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                  * Do the decoding and emulation.
                  */
 #ifdef __EMSCRIPTEN__
-                /* JIT fast path: try JS interpreter before IEM decode. */
+                /* JIT fast path: try JS interpreter before IEM decode.
+                 * Skip the expensive EM_JS call when executing in ROM space
+                 * (>= 0xC0000) — the JIT can only handle RAM-resident code. */
                 iemJitEnsureInit(pVM);
                 if (s_pvJitRAM)
                 {
+                    uint64_t uLinearPC = (uint64_t)pVCpu->cpum.GstCtx.cs.u64Base + pVCpu->cpum.GstCtx.rip;
+                    if (uLinearPC < 0xC0000)
+                    {
                     /* Limit batch to remaining instructions, leave room for timer polls */
                     uint32_t cBatch = RT_MIN(cMaxInstructionsGccStupidity, 4096);
                     int cJitInsns = wasmJitExecBlock(&pVCpu->cpum.GstCtx, s_pvJitRAM, cBatch);
@@ -1079,6 +1083,7 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                         rcStrict = VINF_SUCCESS;
                         break;
                     }
+                    } /* uLinearPC < 0xC0000 */
                 }
 #endif
                 rcStrict = iemExecDecodeAndInterpretTargetInstruction(pVCpu);

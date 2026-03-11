@@ -335,20 +335,92 @@
     // ── VGA Display ──
     const vgaCanvas = document.getElementById('vga');
     const vgaCtx = vgaCanvas.getContext('2d');
+    // Standard VGA 16-color palette (RGBX)
+    const VGA_PALETTE = [
+      [0x00,0x00,0x00], [0x00,0x00,0xAA], [0x00,0xAA,0x00], [0x00,0xAA,0xAA],
+      [0xAA,0x00,0x00], [0xAA,0x00,0xAA], [0xAA,0x55,0x00], [0xAA,0xAA,0xAA],
+      [0x55,0x55,0x55], [0x55,0x55,0xFF], [0x55,0xFF,0x55], [0x55,0xFF,0xFF],
+      [0xFF,0x55,0x55], [0xFF,0x55,0xFF], [0xFF,0xFF,0x55], [0xFF,0xFF,0xFF],
+    ];
+
     const VGA = {
       width: 720, height: 400, imageData: null,
+      textMode: true, textCanvas: null, textCtx: null,
+      lastTextHash: 0,
       init() {
         this.imageData = vgaCtx.createImageData(this.width, this.height);
         const d = this.imageData.data;
         for (let i = 3; i < d.length; i += 4) d[i] = 255;
         vgaCtx.putImageData(this.imageData, 0, 0);
+        // Create offscreen canvas for text rendering
+        this.textCanvas = document.createElement('canvas');
+        this.textCanvas.width = 720;
+        this.textCanvas.height = 400;
+        this.textCtx = this.textCanvas.getContext('2d');
       },
       updateAll(rgbaData) {
         this.imageData.data.set(rgbaData);
         vgaCtx.putImageData(this.imageData, 0, 0);
       },
+      /** Read VGA text buffer from guest RAM and render to canvas. */
+      renderTextMode() {
+        if (!Module._wasmJitGetGuestRAM) return false;
+        const ramPtr = Number(Module._wasmJitGetGuestRAM());
+        if (!ramPtr) return false;
+
+        const mem = new Uint8Array(wasmMemory.buffer);
+        const textBufAddr = ramPtr + 0xB8000;
+
+        // Quick check: is there any non-zero content?
+        let hash = 0;
+        for (let i = 0; i < 4000; i++) hash = (hash + mem[textBufAddr + i]) | 0;
+        if (hash === 0) return false; // all zeros = text buffer not yet written
+        if (hash === this.lastTextHash) return true; // no change
+        this.lastTextHash = hash;
+
+        const ctx = this.textCtx;
+        const COLS = 80, ROWS = 25;
+        const charW = 9, charH = 16; // VGA 720x400 = 80x25 at 9x16
+
+        ctx.fillStyle = '#000';
+        ctx.fillRect(0, 0, 720, 400);
+        ctx.font = '14px monospace';
+        ctx.textBaseline = 'top';
+
+        for (let row = 0; row < ROWS; row++) {
+          for (let col = 0; col < COLS; col++) {
+            const off = textBufAddr + (row * COLS + col) * 2;
+            const ch = mem[off];
+            const attr = mem[off + 1];
+            if (ch === 0 || ch === 0x20) continue; // skip spaces
+
+            const fg = VGA_PALETTE[attr & 0x0F];
+            const bg = VGA_PALETTE[(attr >> 4) & 0x0F];
+
+            const x = col * charW;
+            const y = row * charH;
+
+            // Draw background if not black
+            if ((attr >> 4) & 0x0F) {
+              ctx.fillStyle = `rgb(${bg[0]},${bg[1]},${bg[2]})`;
+              ctx.fillRect(x, y, charW, charH);
+            }
+
+            // Draw character
+            ctx.fillStyle = `rgb(${fg[0]},${fg[1]},${fg[2]})`;
+            ctx.fillText(String.fromCharCode(ch), x + 1, y + 1);
+          }
+        }
+
+        // Copy to main canvas
+        vgaCtx.drawImage(this.textCanvas, 0, 0);
+        return true;
+      },
       /** Read framebuffer from Wasm and paint to canvas. */
       renderFromWasm() {
+        // Try text mode renderer first (reads from guest RAM directly)
+        if (this.textMode && this.renderTextMode()) return;
+
         if (!Module._wasmDisplayGetFB) return;
 
         // memory64 returns BigInt — convert to Number for typed array offsets
@@ -358,8 +430,14 @@
 
         if (!fbPtr || w === 0 || h === 0) return;
 
-        // Access wasm linear memory via wasmMemory (always available)
+        // If VGA framebuffer has real content, switch off text mode fallback
         const mem = wasmMemory.buffer;
+        const testSrc = new Uint8Array(mem, fbPtr, Math.min(4000, w * h * 4));
+        let nonZero = 0;
+        for (let i = 0; i < testSrc.length; i += 4) {
+          if (testSrc[i] || testSrc[i+1] || testSrc[i+2]) { nonZero++; break; }
+        }
+        if (nonZero) this.textMode = false;
 
         // Resize canvas if display resolution changed
         if (w !== this.width || h !== this.height) {

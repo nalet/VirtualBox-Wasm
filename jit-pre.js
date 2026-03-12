@@ -16,9 +16,10 @@ const SEG_BASE=8, SEG_LIMIT=16, SEG_ATTR=20, SEG_SEL=0;
 const R_CR0=0x160;
 
 // ── Lazy flags ──
-const OP_NONE=0,OP_ADD=1,OP_SUB=2,OP_AND=3,OP_OR=4,OP_XOR=5,OP_INC=6,OP_DEC=7,OP_SHL=8,OP_SHR=9,OP_SAR=10,OP_ROL=11,OP_ROR=12;
-let lazyOp=OP_NONE, lazyRes=0, lazyOp1=0, lazyOp2=0, lazySize=16, lazyCF=0;
-// When lazyOp=OP_NONE, all flags are explicit in this word (avoids ZF/SF conflict in lazyRes).
+const OP_NONE=0,OP_ADD=1,OP_SUB=2,OP_AND=3,OP_OR=4,OP_XOR=5,OP_INC=6,OP_DEC=7,OP_SHL=8,OP_SHR=9,OP_SAR=10,OP_ROL=11,OP_ROR=12,OP_EXPLICIT=13;
+let lazyOp=OP_EXPLICIT, lazyRes=0, lazyOp1=0, lazyOp2=0, lazySize=16, lazyCF=0;
+// OP_EXPLICIT: all flags stored in lazyExplicitFlags (from loadFlags/SAHF/POPF).
+// OP_NONE:     ZF/SF from lazyRes/lazySize, CF from lazyCF, OF/PF/AF also from lazyRes.
 let lazyExplicitFlags=0x02; // bit 1 always set
 
 // Parity lookup (even parity = 1)
@@ -33,27 +34,27 @@ const SIZE_MASK = [0, 0xFF, 0xFFFF, 0, 0xFFFFFFFF];
 const SIZE_SIGN = [0, 0x80, 0x8000, 0, 0x80000000];
 
 function getCF() {
-  if (lazyOp === OP_NONE) return (lazyExplicitFlags >> 0) & 1;
+  if (lazyOp === OP_EXPLICIT) return (lazyExplicitFlags >> 0) & 1;
   switch (lazyOp) {
     case OP_ADD: return (lazyRes & SIZE_MASK[lazySize]) < (lazyOp1 & SIZE_MASK[lazySize]) ? 1 : 0;
     case OP_SUB: return (lazyOp1 & SIZE_MASK[lazySize]) < (lazyOp2 & SIZE_MASK[lazySize]) ? 1 : 0;
     case OP_AND: case OP_OR: case OP_XOR: return 0;
-    default: return lazyCF;
+    default: return lazyCF; // OP_NONE and shift ops use lazyCF
   }
 }
 
 function getZF() {
-  if (lazyOp === OP_NONE) return (lazyExplicitFlags >> 6) & 1;
+  if (lazyOp === OP_EXPLICIT) return (lazyExplicitFlags >> 6) & 1;
   return ((lazyRes & SIZE_MASK[lazySize]) === 0) ? 1 : 0;
 }
 
 function getSF() {
-  if (lazyOp === OP_NONE) return (lazyExplicitFlags >> 7) & 1;
+  if (lazyOp === OP_EXPLICIT) return (lazyExplicitFlags >> 7) & 1;
   return ((lazyRes & SIZE_SIGN[lazySize]) !== 0) ? 1 : 0;
 }
 
 function getOF() {
-  if (lazyOp === OP_NONE) return (lazyExplicitFlags >> 11) & 1;
+  if (lazyOp === OP_EXPLICIT) return (lazyExplicitFlags >> 11) & 1;
   const m = SIZE_MASK[lazySize], s = SIZE_SIGN[lazySize];
   switch (lazyOp) {
     case OP_ADD: return ((~(lazyOp1 ^ lazyOp2) & (lazyOp1 ^ lazyRes)) & s) ? 1 : 0;
@@ -66,25 +67,25 @@ function getOF() {
 }
 
 function getPF() {
-  if (lazyOp === OP_NONE) return (lazyExplicitFlags >> 2) & 1;
+  if (lazyOp === OP_EXPLICIT) return (lazyExplicitFlags >> 2) & 1;
   return parityTable[lazyRes & 0xFF];
 }
 
 function getAF() {
-  if (lazyOp === OP_NONE) return (lazyExplicitFlags >> 4) & 1;
+  if (lazyOp === OP_EXPLICIT) return (lazyExplicitFlags >> 4) & 1;
   if (lazyOp === OP_ADD || lazyOp === OP_SUB || lazyOp === OP_INC || lazyOp === OP_DEC)
     return ((lazyOp1 ^ lazyOp2 ^ lazyRes) & 0x10) ? 1 : 0;
   return 0;
 }
 
 function flagsToWord() {
-  if (lazyOp === OP_NONE) return lazyExplicitFlags | 0x02;
+  if (lazyOp === OP_EXPLICIT) return lazyExplicitFlags | 0x02;
   return (getCF()) | (getPF() << 2) | (getAF() << 4) | (getZF() << 6) |
          (getSF() << 7) | (getOF() << 11) | 0x02;
 }
 
 function loadFlags(val) {
-  lazyOp = OP_NONE;
+  lazyOp = OP_EXPLICIT;
   lazyCF = val & 1; // keep lazyCF in sync for instructions that read it directly
   lazyExplicitFlags = val | 0x02; // store all bits explicitly
 }
@@ -1582,13 +1583,11 @@ function execBlock(cpuP, ramB, maxInsn) {
     }
 
     // ──── SAHF (0x9E), LAHF (0x9F) ────
-    case 0x9E: { // SAHF: load low 8 of flags from AH
+    case 0x9E: { // SAHF: load AH into FLAGS[7:0] (SF:ZF:0:AF:0:PF:1:CF)
       const ah = gr8(4); // AH
-      lazyCF = ah & 1;
-      // Reconstruct lazy state
-      lazyOp = OP_NONE;
-      lazyRes = (ah & 0x40) ? 0 : 1; // ZF
-      if (ah & 0x80) lazyRes |= SIZE_SIGN[lazySize]; // SF
+      lazyOp = OP_EXPLICIT;
+      lazyExplicitFlags = (ah | 0x02) & 0xFF; // preserve reserved bit 1
+      lazyCF = ah & 1; // keep lazyCF in sync
       ilen += 1;
       break;
     }

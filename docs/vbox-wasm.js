@@ -764,12 +764,8 @@ globalThis.VBoxJIT = (function() {
     loadFlags(flags);
     lazySize = 2;
     // default 16-bit
-    // Bail if executing in ROM space without a ROM buffer
+    // Linear PC for diagnostics and ROM checks
     const linearPC = csBase + ip;
-    if (linearPC >= 786432 && romBufSize === 0) {
-      if (statTotalCalls <= 20) console.log("[JIT-DBG] bail: ROM not ready, linearPC=0x" + linearPC.toString(16) + " romBufSize=" + romBufSize);
-      return 0;
-    }
     // Track code segment range for self-modifying code detection.
     // REP STOSB/MOVSB can overwrite the current code segment (e.g. BIOS memory
     // test). We detect this and bail to IEM rather than executing corrupted code.
@@ -792,9 +788,17 @@ globalThis.VBoxJIT = (function() {
     // available RAM
     // Pre-read a chunk of code for fast access
     let codePhys = csBase + ip;
-    // Check if address is in accessible range (RAM or ROM buffer)
-    const addrAccessible = addr => addr + 16 <= ramSize || (romBufSize > 0 && addr >= romGCPhysStart && addr < romGCPhysEnd);
-    if (!addrAccessible(codePhys)) {
+    // Check if address is in accessible range.
+    // When romBufSize > 0: use ROM buffer for ROM range (0xC0000-0xFFFFF).
+    // When romBufSize == 0: use flat RAM for ALL addresses (ROM pages are mapped
+    //   into the flat guest physical space by VirtualBox's PGM, so mem8[ramBase+addr]
+    //   is valid for ROM addresses too).
+    const addrAccessible = addr => {
+      if (romBufSize > 0 && addr >= romGCPhysStart && addr < romGCPhysEnd) return true;
+      return addr + 16 <= ramSize;
+    };
+    const inRomRange = addr => addr >= 786432 && addr < 1048576;
+    if (!addrAccessible(codePhys) && !inRomRange(codePhys)) {
       if (statTotalCalls < 5) console.log("[JIT] bail: codePhys=0x" + codePhys.toString(16) + " ramSize=0x" + ramSize.toString(16) + " ramBase=0x" + ramBase.toString(16) + " csBase=0x" + csBase.toString(16) + " ip=0x" + ip.toString(16));
       return 0;
     }
@@ -4051,14 +4055,12 @@ globalThis.VBoxJIT = (function() {
           const intNum = mem8[ci + 1];
           // Bail to IEM for video BIOS (INT 10h) — needs MMIO for VGA memory writes
           if (intNum === 16) {
+            if (!execBlock._int10Log) execBlock._int10Log = {
+              count: 0
+            };
+            const cnt = ++execBlock._int10Log.count;
             const ah = (gr16(0) >> 8) & 255;
-            if (!wasmJit._int10Log) wasmJit._int10Log = [];
-            wasmJit._int10Log.push({
-              ah,
-              cs: csBase >>> 4,
-              ip
-            });
-            if (wasmJit._int10Log.length <= 100) console.log("[INT10] AH=0x" + ah.toString(16).padStart(2, "0") + " AL=0x" + (gr16(0) & 255).toString(16).padStart(2, "0") + " BX=0x" + gr16(3).toString(16).padStart(4, "0") + " @" + (csBase >>> 4).toString(16) + ":" + ip.toString(16) + " #" + wasmJit._int10Log.length);
+            if (cnt <= 100) console.log("[INT10] AH=0x" + ah.toString(16).padStart(2, "0") + " AL=0x" + (gr16(0) & 255).toString(16).padStart(2, "0") + " BX=0x" + gr16(3).toString(16).padStart(4, "0") + " @" + (csBase >>> 4).toString(16) + ":" + ip.toString(16) + " #" + cnt);
             lastBailOp = b;
             iter = maxInsn;
             break;
@@ -4218,8 +4220,8 @@ globalThis.VBoxJIT = (function() {
   // opcode -> count
   function execBlockWrapped(cpuP, ramB, maxInsn) {
     statTotalCalls++;
-    // Per-call diagnostics for first 20 calls
-    if (statTotalCalls <= 20) {
+    // Per-call diagnostics for first 20 calls, then every 10000
+    if (statTotalCalls <= 20 || (statTotalCalls % 1e4) === 0) {
       const cpuN = Number(cpuP), ramN = Number(ramB);
       console.log("[JIT-DBG] call#" + statTotalCalls + " cpuPtr=0x" + cpuN.toString(16) + " ramBase=0x" + ramN.toString(16) + " romBufSize=" + romBufSize + " maxInsn=" + maxInsn);
     }

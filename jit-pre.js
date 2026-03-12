@@ -407,7 +407,7 @@ function execBlock(cpuP, ramB, maxInsn) {
   // Load frequently-used state
   let ip = rr16(R_IP);  // only low 16 bits for real mode
   let flags = rr32(R_FLAGS);
-  const csBase = segBase(S_CS);
+  let csBase = segBase(S_CS);
   let dsBase = segBase(S_DS);
   let ssBase = segBase(S_SS);
   let esBase = segBase(S_ES);

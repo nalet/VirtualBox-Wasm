@@ -2745,10 +2745,9 @@ function execBlock(cpuP, ramB, maxInsn) {
 
     // ──── HLT (0xF4) — halt processor ────
     case 0xF4:
-      // Advance IP past HLT then bail — let IEM handle the halt state
-      ip = (ip + pos + 1) & 0xFFFF;
-      wr16(R_IP, ip);
-      executed++;
+      // Bail WITHOUT advancing IP so IEM decodes and executes HLT properly.
+      // IEM enters halt state and waits for hardware interrupt delivery.
+      // (If we advance IP here, IEM never sees HLT and can't halt the VCPU.)
       lastBailOp = b; iter = maxInsn;
       break;
 

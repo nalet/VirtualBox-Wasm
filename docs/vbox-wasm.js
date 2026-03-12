@@ -1967,9 +1967,26 @@ globalThis.VBoxJIT = (function() {
         break;
 
        case 251:
-        flags |= 512;
-        ilen += 1;
-        break;
+        {
+          const wasIF0 = !(flags & 512);
+          flags |= 512;
+          ilen += 1;
+          if (wasIF0 && executed > 0) {
+            // Transitioning IF from 0→1: bail to IEM so pending interrupts
+            // (PIT timer, keyboard IRQ) can be delivered.  On real x86, one
+            // instruction after STI executes before interrupts are serviced,
+            // but IEM handles this correctly via its "inhibit interrupts
+            // after STI" logic.  Without this bail the JIT can spin through
+            // thousands of CLI/STI polling loops (e.g. BIOS INT 16h keyboard
+            // wait) without ever letting the EM deliver pending IRQs.
+            ip = (ip + ilen) & 65535;
+            executed++;
+            wr16(R_IP, ip);
+            ilen = 0;
+            iter = maxInsn;
+          }
+          break;
+        }
 
        // ──── CLD (0xFC), STD (0xFD) ────
         case 252:
@@ -4159,16 +4176,16 @@ globalThis.VBoxJIT = (function() {
 
        // ──── HLT (0xF4) — halt processor ────
         case 244:
-        if ((flags >> 9) & 1) {
-          // IF=1: bail to IEM WITHOUT advancing IP so IEM properly enters halt state.
-          // An interrupt will wake the CPU (PIT IRQ0, keyboard, etc.).
-          lastBailOp = b;
-          iter = maxInsn;
-        } else {
-          // IF=0: interrupts disabled, HLT here is early-POST initialization pattern.
-          // Skip it (advance IP) so BIOS POST continues rather than halting forever.
-          ilen = 1;
-        }
+        // Always bail to IEM for HLT, regardless of IF state.
+        // IF=1: IEM enters halt state, wakes on next interrupt (PIT, keyboard).
+        // IF=0: IEM enters halt state; only NMI/RESET can wake the CPU.
+        //       This is the correct behavior for "CLI; HLT" (system halt).
+        //       Previously we skipped HLT when IF=0 as a BIOS POST workaround,
+        //       but the VBox BIOS never executes CLI+HLT during normal POST.
+        //       Skipping it caused bootloaders (e.g. ISOLINUX) that do CLI+HLT
+        //       on fatal errors to continue executing garbage code and hang.
+        lastBailOp = b;
+        iter = maxInsn;
         break;
 
        // ──── Unsupported — fallback to IEM ────

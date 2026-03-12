@@ -418,7 +418,11 @@ function execBlock(cpuP, ramB, maxInsn) {
 
   // Bail if executing in ROM space without a ROM buffer
   const linearPC = csBase + ip;
-  if (linearPC >= 0xC0000 && romBufSize === 0) return 0;
+  if (linearPC >= 0xC0000 && romBufSize === 0) {
+    if (statTotalCalls <= 20)
+      console.log('[JIT-DBG] bail: ROM not ready, linearPC=0x' + linearPC.toString(16) + ' romBufSize=' + romBufSize);
+    return 0;
+  }
 
   // Track code segment range for self-modifying code detection.
   // REP STOSB/MOVSB can overwrite the current code segment (e.g. BIOS memory
@@ -2732,7 +2736,11 @@ function execBlock(cpuP, ramB, maxInsn) {
     }
     } // end switch
 
-    if (ilen > 0) {
+    // Only advance IP if this instruction completed normally (no bail).
+    // If lastBailOp >= 0 the instruction was handed off to IEM; IP must
+    // remain pointing at the START of that instruction (including prefixes)
+    // so IEM decodes the full encoding correctly.
+    if (ilen > 0 && lastBailOp < 0) {
       ip = (ip + ilen) & 0xFFFF;
       executed++;
     }
@@ -2772,6 +2780,15 @@ const fallbackOpcodes = new Map(); // opcode -> count
 
 function execBlockWrapped(cpuP, ramB, maxInsn) {
   statTotalCalls++;
+  // Per-call diagnostics for first 20 calls
+  if (statTotalCalls <= 20) {
+    const cpuN = Number(cpuP), ramN = Number(ramB);
+    console.log('[JIT-DBG] call#' + statTotalCalls +
+      ' cpuPtr=0x' + cpuN.toString(16) +
+      ' ramBase=0x' + ramN.toString(16) +
+      ' romBufSize=' + romBufSize +
+      ' maxInsn=' + maxInsn);
+  }
   const n = execBlock(cpuP, ramB, maxInsn);
   if (n > 0) {
     statTotalInsns += n;

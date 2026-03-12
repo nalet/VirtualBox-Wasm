@@ -2448,6 +2448,21 @@ function execBlock(cpuP, ramB, maxInsn) {
       }
     }
 
+    // ──── RETF imm16 (0xCA) — far return, pop N extra bytes ────
+    case 0xCA: {
+      if (!realMode) { lastBailOp = b; iter = maxInsn; break; }
+      const retfImm = mem8[ci+1] | (mem8[ci+2] << 8);
+      const retfIP = pop16(ssBase);
+      const retfCS = pop16(ssBase);
+      csBase = retfCS << 4;
+      wr16(S_CS + SEG_SEL, retfCS); wr64(S_CS + SEG_BASE, csBase);
+      // Pop retfImm extra bytes from stack
+      const sp = gr16(4);
+      sr16(4, (sp + retfImm) & 0xFFFF);
+      ip = retfIP;
+      ilen = 0; executed++; wr16(R_IP, ip); continue;
+    }
+
     // ──── RETF (0xCB) ────
     case 0xCB: {
       // In protected mode, RETF requires GDT lookup for CS — bail to IEM.

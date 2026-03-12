@@ -10249,8 +10249,6 @@ FS.staticInit();
 // Begin runtime exports
 Module["callMain"] = callMain;
 
-Module["wasmMemory"] = wasmMemory;
-
 Module["addRunDependency"] = addRunDependency;
 
 Module["removeRunDependency"] = removeRunDependency;

@@ -301,7 +301,7 @@ pcbiosIOPortDebugWrite(PPDMDEVINS pDevIns, void *pvUser, RTIOPORT offPort, uint3
             AssertStmt(iMsg < sizeof(pThis->szMsg), iMsg = sizeof(pThis->szMsg) - 1);
             pThis->szMsg[iMsg] = '\0';
             if (iMsg)
-                RTPrintf("[BIOS] %s\n", pThis->szMsg);
+                LogRel(("[BIOS] %s\n", pThis->szMsg));
             iMsg = 0;
         }
         else
@@ -309,7 +309,7 @@ pcbiosIOPortDebugWrite(PPDMDEVINS pDevIns, void *pvUser, RTIOPORT offPort, uint3
             if (iMsg >= sizeof(pThis->szMsg) - 1)
             {
                 pThis->szMsg[iMsg] = '\0';
-                RTPrintf("[BIOS] %s\n", pThis->szMsg);
+                LogRel(("[BIOS] %s\n", pThis->szMsg));
                 iMsg = 0;
             }
             pThis->szMsg[iMsg] = (char)u32;

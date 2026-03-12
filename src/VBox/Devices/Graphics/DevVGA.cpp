@@ -6605,6 +6605,9 @@ static DECLCALLBACK(int)   vgaR3Construct(PPDMDEVINS pDevIns, int iInstance, PCF
     AssertLogRelMsgReturn(RT_IS_POWER_OF_TWO(pThis->svga.cbFIFO), ("cbFIFO=%#x\n", pThis->svga.cbFIFO), VERR_NOT_POWER_OF_TWO);
     pThis->svga.cbFIFOConfig = pThis->svga.cbFIFO;
     Log(("VMSVGA: VMSVGAFifoSize  = %#x (%'u)\n", pThis->svga.cbFIFO, pThis->svga.cbFIFO));
+# else  /* !VBOX_WITH_VMSVGA */
+    /* Without VMSVGA, the device is always a legacy VGA adapter. */
+    pThis->fLegacyVgaEnabled = true;
 # endif
 # ifdef VBOX_WITH_VMSVGA3D
     rc = pHlp->pfnCFGMQueryBoolDef(pCfg, "VMSVGA3dEnabled", &pThis->svga.f3DEnabled, false);
@@ -6966,8 +6969,11 @@ static DECLCALLBACK(int)   vgaR3Construct(PPDMDEVINS pDevIns, int iInstance, PCF
         AssertReleaseMsg(cbVgaBiosBinary <= _64K && cbVgaBiosBinary >= 32*_1K, ("cbVgaBiosBinary=%#x\n", cbVgaBiosBinary));
         AssertReleaseMsg(RT_ALIGN_Z(cbVgaBiosBinary, GUEST_PAGE_SIZE) == cbVgaBiosBinary, ("cbVgaBiosBinary=%#x\n", cbVgaBiosBinary));
         /* Note! Because of old saved states we'll always register at least 36KB of ROM. */
+        LogRel(("VGA BIOS: fLegacyVgaEnabled=%RTbool cbVgaBiosBinary=%#RX64 first2bytes=%02x,%02x\n",
+                pThis->fLegacyVgaEnabled, cbVgaBiosBinary, pbVgaBiosBinary[0], pbVgaBiosBinary[1]));
         rc = PDMDevHlpROMRegister(pDevIns, 0x000c0000, RT_MAX(cbVgaBiosBinary, 36*_1K), pbVgaBiosBinary, cbVgaBiosBinary,
                                   fFlags, "VGA BIOS");
+        LogRel(("VGA BIOS: PDMDevHlpROMRegister rc=%Rrc\n", rc));
         AssertRCReturn(rc, rc);
     }
 

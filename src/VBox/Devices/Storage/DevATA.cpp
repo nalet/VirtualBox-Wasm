@@ -1098,9 +1098,39 @@ static void ataR3StartTransfer(PPDMDEVINS pDevIns, PATACONTROLLER pCtl, PATADEVS
      * twice (e.g. the Linux kernel that comes with Acronis True Image 8). */
     if (!fChainedTransfer && !ataR3AsyncIOIsIdle(pDevIns, pCtl, true /*fStrict*/))
     {
+#ifdef __EMSCRIPTEN__
+        /* Wasm: Emscripten's sched_yield() is a no-op, so RTThreadYield() in the
+           BSY status polling loop cannot effectively schedule the async I/O thread.
+           The BIOS may reach this point before the async I/O thread has finished
+           processing a RESET sequence.  Wait briefly for the controller to become
+           idle instead of silently dropping the command, which would cause the BIOS
+           ATA/ATAPI detection to fail. */
+        for (unsigned iWait = 0; iWait < 200; iWait++)
+        {
+            LogRel(("PIIX3 IDE: Ctl#%d: waiting for async I/O idle before cmd %#04x (attempt %u, state %d)\n",
+                    pCtl->iCtl, s->uATARegCommand, iWait, pCtl->uAsyncIOState));
+            PDMDevHlpCritSectLeave(pDevIns, &pCtl->lock);
+            RTThreadSleep(5 /*ms*/);
+            int const rcLock = PDMDevHlpCritSectEnter(pDevIns, &pCtl->lock, VINF_SUCCESS);
+            PDM_CRITSECT_RELEASE_ASSERT_RC_DEV(pDevIns, &pCtl->lock, rcLock);
+            if (ataR3AsyncIOIsIdle(pDevIns, pCtl, true /*fStrict*/))
+            {
+                LogRel(("PIIX3 IDE: Ctl#%d: async I/O now idle after %u ms\n", pCtl->iCtl, (iWait + 1) * 5));
+                break;
+            }
+        }
+        if (!ataR3AsyncIOIsIdle(pDevIns, pCtl, true /*fStrict*/))
+        {
+            Log(("%s: Ctl#%d: ignored command %#04x, controller state %d (Wasm: still busy after wait)\n",
+                 __FUNCTION__, pCtl->iCtl, s->uATARegCommand, pCtl->uAsyncIOState));
+            LogRel(("PIIX3 IDE: guest issued command %#04x while controller busy (Wasm: gave up after 1s)\n", s->uATARegCommand));
+            return;
+        }
+#else
         Log(("%s: Ctl#%d: ignored command %#04x, controller state %d\n", __FUNCTION__, pCtl->iCtl, s->uATARegCommand, pCtl->uAsyncIOState));
         LogRel(("PIIX3 IDE: guest issued command %#04x while controller busy\n", s->uATARegCommand));
         return;
+#endif
     }
 
     Req.ReqType = ATA_AIO_NEW;
@@ -4936,7 +4966,15 @@ static VBOXSTRICTRC ataIOPortReadU8(PPDMDEVINS pDevIns, PATACONTROLLER pCtl, uin
                 if (fYield)
                 {
                     STAM_REL_PROFILE_ADV_START(&s->StatStatusYields, a);
+#ifdef __EMSCRIPTEN__
+                    /* Wasm: sched_yield() is a no-op in Emscripten — it returns
+                       immediately without letting other Web Worker threads run.
+                       Use a 1ms sleep instead so the async I/O thread can make
+                       progress (especially important during SRST processing). */
+                    RTThreadSleep(1);
+#else
                     RTThreadYield();
+#endif
                     STAM_REL_PROFILE_ADV_STOP(&s->StatStatusYields, a);
                 }
                 ASMNopPause();

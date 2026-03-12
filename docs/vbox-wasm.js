@@ -271,6 +271,25 @@ const SEG_OFFS = [S_ES, S_CS, S_SS, S_DS, S_FS, S_GS, 0, 0]; // SREG encoding: 0
 let portInFn = null, portOutFn = null;
 // ── I/O diagnostic: track IN/OUT per IP for stall detection ──
 const ioDiagCounts = new Map();
+// ── BIOS debug port capture (ports 0x402/0x403/0x504) ──
+let biosDebugBuf = '';
+function biosDebugChar(c) {
+  if (c === '\n' || c === '\r') {
+    if (biosDebugBuf.length > 0) {
+      console.log('[BIOS] ' + biosDebugBuf);
+      biosDebugBuf = '';
+    }
+  } else {
+    biosDebugBuf += c;
+    if (biosDebugBuf.length >= 200) {
+      console.log('[BIOS] ' + biosDebugBuf);
+      biosDebugBuf = '';
+    }
+  }
+}
+// ── POST code port 0x80 tracking ──
+let lastPost80 = -1;
+let postCodes80 = [];  // log of POST codes
 
 function portIn(port, size) {
   if (portInFn) return portInFn(port, size);
@@ -1423,16 +1442,42 @@ function execBlock(cpuP, ramB, maxInsn) {
     // IN/OUT must go through VBox's I/O port infrastructure so devices
     // (keyboard controller, PIT, PIC, VGA, IDE) respond correctly.
     // Without this, portIn returns 0xFF causing infinite polling loops.
+    // EXCEPTION: debug-only ports (0x80, 0x402, 0x403, 0x504) are handled
+    // locally to capture BIOS POST codes and panic messages without IEM overhead.
     case 0xE4: case 0xE5: case 0xEC: case 0xED:  // IN
     case 0xE6: case 0xE7: case 0xEE: case 0xEF: { // OUT
+      const isImm = (b === 0xE4||b===0xE5||b===0xE6||b===0xE7);
+      const portNum = isImm ? mem8[ci+1] : gr16(2);
+      const isOut = (b===0xE6||b===0xE7||b===0xEE||b===0xEF);
+
+      // Handle debug-only ports locally (no VBox device response needed)
+      if (isOut && (portNum === 0x80 || portNum === 0x402 || portNum === 0x403 || portNum === 0x504)) {
+        const val = gr8(0); // AL for byte OUT
+        if (portNum === 0x80) {
+          // POST diagnostic code
+          if (val !== lastPost80) {
+            postCodes80.push(val);
+            lastPost80 = val;
+            if (postCodes80.length <= 200 || postCodes80.length % 100 === 0)
+              console.log('[POST80] code=0x' + val.toString(16).padStart(2,'0') +
+                ' @' + (csBase>>>4).toString(16) + ':' + ip.toString(16) +
+                ' seq=' + postCodes80.length);
+          }
+        } else {
+          // BIOS debug message (port 0x402/0x403/0x504)
+          biosDebugChar(String.fromCharCode(val));
+        }
+        ilen += isImm ? 2 : 1;
+        break; // handle locally, don't bail
+      }
+
       // Log the port being accessed (first 30 per IP to diagnose stalls)
       const portDiagKey = ip;
       if (!ioDiagCounts.has(portDiagKey)) ioDiagCounts.set(portDiagKey, 0);
       const cnt = ioDiagCounts.get(portDiagKey) + 1;
       ioDiagCounts.set(portDiagKey, cnt);
       if (cnt <= 30 || cnt % 10000 === 0) {
-        const portNum = (b === 0xE4||b===0xE5||b===0xE6||b===0xE7) ? mem8[ci+1] : gr16(2);
-        const dir = (b===0xE4||b===0xE5||b===0xEC||b===0xED) ? 'IN' : 'OUT';
+        const dir = isOut ? 'OUT' : 'IN';
         console.log('[JIT-IO] @' + (csBase>>>4).toString(16) + ':' + ip.toString(16) +
           ' ' + dir + ' port=0x' + portNum.toString(16) +
           ' DX=0x' + gr16(2).toString(16) + ' AX=0x' + gr16(0).toString(16) +
@@ -2931,7 +2976,7 @@ return {
 };
 
 })(); // end VBoxJIT IIFE
-// end include: /build/vbox/jit-pre.js
+
 var arguments_ = [];
 
 var thisProgram = "./this.program";

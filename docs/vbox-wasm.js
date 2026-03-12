@@ -2102,19 +2102,19 @@ globalThis.VBoxJIT = (function() {
                 let di = gr16(7);
                 const val = gr8(0);
                 const addr = esBase + di;
-                if (dir === 1 && addr + cx <= ramSize) {
-                  // Fast path: forward direction, all in RAM
-                  const writeEnd = addr + cx;
-                  // Self-modifying code check BEFORE writing: if this REP STOSB would
-                  // overwrite the current code segment in RAM, bail to IEM without writing.
-                  // (ROM code at csBase >= 0xC0000 can't be overwritten via Wasm RAM.)
-                  if (codeSegStart < 786432 && writeEnd > codeSegStart && addr < codeSegEnd) {
+                const byteCount = cx;
+                // Compute range for both forward and backward
+                const addrLo = dir === 1 ? addr : addr - byteCount + 1;
+                const addrHi = dir === 1 ? addr + byteCount : addr + 1;
+                if (addrLo >= 0 && addrHi <= ramSize && (addrHi <= 655360 || addrLo >= 786432)) {
+                  // Fast path: all in RAM (not MMIO 0xA0000-0xBFFFF)
+                  if (codeSegStart < 786432 && addrHi > codeSegStart && addrLo < codeSegEnd) {
                     ilen = 0;
                     iter = maxInsn;
                     break;
                   }
-                  mem8.fill(val, ramBase + addr, ramBase + writeEnd);
-                  di = (di + cx) & 65535;
+                  mem8.fill(val, ramBase + addrLo, ramBase + addrHi);
+                  di = (di + dir * byteCount) & 65535;
                   cx = 0;
                 } else {
                   while (cx > 0) {
@@ -2132,47 +2132,47 @@ globalThis.VBoxJIT = (function() {
               {
                 // STOSW/STOSD — optimized bulk fill
                 let di = gr16(7);
-                if (opSize === 2) {
-                  const v = gr16(0);
-                  const addr = esBase + di;
-                  if (dir === 1 && addr + cx * 2 <= ramSize) {
-                    const writeEnd2 = addr + cx * 2;
-                    if (codeSegStart < 786432 && writeEnd2 > codeSegStart && addr < codeSegEnd) {
-                      ilen = 0;
-                      iter = maxInsn;
-                      break;
+                const sz = opSize;
+                // 2 or 4
+                const v = sz === 2 ? gr16(0) : gr32(0);
+                const totalBytes = cx * sz;
+                const addr = esBase + di;
+                const addrLo = dir === 1 ? addr : addr - totalBytes + sz;
+                const addrHi = dir === 1 ? addr + totalBytes : addr + sz;
+                if (addrLo >= 0 && addrHi <= ramSize && (addrHi <= 655360 || addrLo >= 786432)) {
+                  // Fast path: all in RAM (not MMIO)
+                  if (codeSegStart < 786432 && addrHi > codeSegStart && addrLo < codeSegEnd) {
+                    ilen = 0;
+                    iter = maxInsn;
+                    break;
+                  }
+                  const physLo = ramBase + addrLo;
+                  if (v === 0) {
+                    // Most common case: zeroing memory — single native fill
+                    if (totalBytes >= 1024 && statFastFillLogs < 5) {
+                      statFastFillLogs++;
+                      console.log("[JIT] REP STOS fast-fill zero " + totalBytes + " bytes at 0x" + addrLo.toString(16));
                     }
-                    let off = ramBase + addr;
-                    for (let i = 0; i < cx; i++) {
-                      dv.setUint16(off, v, true);
-                      off += 2;
-                    }
-                    di = (di + cx * 2) & 65535;
-                    cx = 0;
+                    mem8.fill(0, physLo, physLo + totalBytes);
                   } else {
+                    // Non-zero fill: write one unit, then exponential copyWithin doubling
+                    if (sz === 2) dv.setUint16(physLo, v, true); else dv.setUint32(physLo, v >>> 0, true);
+                    let filled = sz;
+                    while (filled < totalBytes) {
+                      const chunk = Math.min(filled, totalBytes - filled);
+                      mem8.copyWithin(physLo + filled, physLo, physLo + chunk);
+                      filled += chunk;
+                    }
+                  }
+                  di = (di + dir * totalBytes) & 65535;
+                  cx = 0;
+                } else {
+                  if (sz === 2) {
                     while (cx > 0) {
                       ww(esBase + di, v);
                       di = (di + dir * 2) & 65535;
                       cx--;
                     }
-                  }
-                } else {
-                  const v = gr32(0);
-                  const addr = esBase + di;
-                  if (dir === 1 && addr + cx * 4 <= ramSize) {
-                    const writeEnd4 = addr + cx * 4;
-                    if (codeSegStart < 786432 && writeEnd4 > codeSegStart && addr < codeSegEnd) {
-                      ilen = 0;
-                      iter = maxInsn;
-                      break;
-                    }
-                    let off = ramBase + addr;
-                    for (let i = 0; i < cx; i++) {
-                      dv.setUint32(off, v, true);
-                      off += 4;
-                    }
-                    di = (di + cx * 4) & 65535;
-                    cx = 0;
                   } else {
                     while (cx > 0) {
                       wd(esBase + di, v);
@@ -2192,17 +2192,25 @@ globalThis.VBoxJIT = (function() {
                 let si = gr16(6), di = gr16(7);
                 const srcAddr = srcSeg + si;
                 const dstAddr = esBase + di;
-                if (dir === 1 && srcAddr + cx <= ramSize && dstAddr + cx <= ramSize) {
-                  // Fast path: forward direction, both in RAM
-                  const dstEnd = dstAddr + cx;
-                  if (codeSegStart < 786432 && dstEnd > codeSegStart && dstAddr < codeSegEnd) {
+                const byteCount = cx;
+                // Compute address ranges for both forward and backward
+                const srcLo = dir === 1 ? srcAddr : srcAddr - byteCount + 1;
+                const srcHi = dir === 1 ? srcAddr + byteCount : srcAddr + 1;
+                const dstLo = dir === 1 ? dstAddr : dstAddr - byteCount + 1;
+                const dstHi = dir === 1 ? dstAddr + byteCount : dstAddr + 1;
+                // Both src and dst must be in RAM (not MMIO 0xA0000-0xBFFFF, not ROM)
+                const srcInRam = srcLo >= 0 && srcHi <= ramSize && (srcHi <= 655360 || srcLo >= 786432);
+                const dstInRam = dstLo >= 0 && dstHi <= ramSize && (dstHi <= 655360 || dstLo >= 786432);
+                if (srcInRam && dstInRam) {
+                  if (codeSegStart < 786432 && dstHi > codeSegStart && dstLo < codeSegEnd) {
                     ilen = 0;
                     iter = maxInsn;
                     break;
                   }
-                  mem8.copyWithin(ramBase + dstAddr, ramBase + srcAddr, ramBase + srcAddr + cx);
-                  si = (si + cx) & 65535;
-                  di = (di + cx) & 65535;
+                  // copyWithin handles overlapping regions correctly
+                  mem8.copyWithin(ramBase + dstLo, ramBase + srcLo, ramBase + srcHi);
+                  si = (si + dir * byteCount) & 65535;
+                  di = (di + dir * byteCount) & 65535;
                   cx = 0;
                 } else {
                   while (cx > 0) {
@@ -2222,40 +2230,35 @@ globalThis.VBoxJIT = (function() {
               {
                 // MOVSW/MOVSD — optimized bulk copy
                 let si = gr16(6), di = gr16(7);
+                const sz5 = opSize;
+                // 2 or 4
+                const totalBytes5 = cx * sz5;
                 const srcAddr5 = srcSeg + si;
                 const dstAddr5 = esBase + di;
-                if (opSize === 2) {
-                  if (dir === 1 && srcAddr5 + cx * 2 <= ramSize && dstAddr5 + cx * 2 <= ramSize) {
-                    const dstEnd2 = dstAddr5 + cx * 2;
-                    if (codeSegStart < 786432 && dstEnd2 > codeSegStart && dstAddr5 < codeSegEnd) {
-                      ilen = 0;
-                      iter = maxInsn;
-                      break;
-                    }
-                    mem8.copyWithin(ramBase + dstAddr5, ramBase + srcAddr5, ramBase + srcAddr5 + cx * 2);
-                    si = (si + cx * 2) & 65535;
-                    di = (di + cx * 2) & 65535;
-                    cx = 0;
-                  } else {
+                const srcLo5 = dir === 1 ? srcAddr5 : srcAddr5 - totalBytes5 + sz5;
+                const srcHi5 = dir === 1 ? srcAddr5 + totalBytes5 : srcAddr5 + sz5;
+                const dstLo5 = dir === 1 ? dstAddr5 : dstAddr5 - totalBytes5 + sz5;
+                const dstHi5 = dir === 1 ? dstAddr5 + totalBytes5 : dstAddr5 + sz5;
+                const srcOk5 = srcLo5 >= 0 && srcHi5 <= ramSize && (srcHi5 <= 655360 || srcLo5 >= 786432);
+                const dstOk5 = dstLo5 >= 0 && dstHi5 <= ramSize && (dstHi5 <= 655360 || dstLo5 >= 786432);
+                if (srcOk5 && dstOk5) {
+                  if (codeSegStart < 786432 && dstHi5 > codeSegStart && dstLo5 < codeSegEnd) {
+                    ilen = 0;
+                    iter = maxInsn;
+                    break;
+                  }
+                  mem8.copyWithin(ramBase + dstLo5, ramBase + srcLo5, ramBase + srcHi5);
+                  si = (si + dir * totalBytes5) & 65535;
+                  di = (di + dir * totalBytes5) & 65535;
+                  cx = 0;
+                } else {
+                  if (sz5 === 2) {
                     while (cx > 0) {
                       ww(esBase + di, rw(srcSeg + si));
                       si = (si + dir * 2) & 65535;
                       di = (di + dir * 2) & 65535;
                       cx--;
                     }
-                  }
-                } else {
-                  if (dir === 1 && srcAddr5 + cx * 4 <= ramSize && dstAddr5 + cx * 4 <= ramSize) {
-                    const dstEnd4 = dstAddr5 + cx * 4;
-                    if (codeSegStart < 786432 && dstEnd4 > codeSegStart && dstAddr5 < codeSegEnd) {
-                      ilen = 0;
-                      iter = maxInsn;
-                      break;
-                    }
-                    mem8.copyWithin(ramBase + dstAddr5, ramBase + srcAddr5, ramBase + srcAddr5 + cx * 4);
-                    si = (si + cx * 4) & 65535;
-                    di = (di + cx * 4) & 65535;
-                    cx = 0;
                   } else {
                     while (cx > 0) {
                       wd(esBase + di, rd(srcSeg + si));
@@ -4210,6 +4213,8 @@ globalThis.VBoxJIT = (function() {
   }
   // ── Stats ──
   let statTotalInsns = 0, statTotalCalls = 0, statFallbacks = 0;
+  let statFastFillLogs = 0;
+  // throttle REP STOS fast-fill log messages
   let statLastCSIP = "";
   let statLastFlags = 0;
   let statLastCodeBytes = "";

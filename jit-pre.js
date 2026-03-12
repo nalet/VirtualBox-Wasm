@@ -1234,6 +1234,33 @@ function execBlock(cpuP, ramB, maxInsn) {
       break;
     }
 
+    // ──── JCXZ rel8 (0xE3) — jump if CX (or ECX) zero ────
+    case 0xE3: {
+      let rel = mem8[ci+1]; if (rel > 127) rel -= 256;
+      ilen += 2;
+      const cx = addrSize === 2 ? gr16(1) : gr32(1);
+      if (cx === 0) {
+        ip = (ip + ilen + rel) & 0xFFFF;
+        ilen = 0; executed++; wr16(R_IP, ip); continue;
+      }
+      break;
+    }
+
+    // ──── ENTER imm16, imm8 (0xC8) ────
+    case 0xC8: {
+      const frameSize = mem8[ci+1] | (mem8[ci+2] << 8);
+      const level = mem8[ci+3] & 0x1F;
+      ilen += 4;
+      // Push BP
+      push16(gr16(5), ssBase);
+      const framePtr = gr16(4); // SP after push = new BP
+      // Level > 0: copy outer frames (rare in BIOS, bail if level > 0)
+      if (level > 0) { lastBailOp = b; iter = maxInsn; break; }
+      sr16(5, framePtr);
+      sr16(4, (gr16(4) - frameSize) & 0xFFFF);
+      break;
+    }
+
     // ──── CALL rel16/32 (0xE8) ────
     case 0xE8: {
       let rel;

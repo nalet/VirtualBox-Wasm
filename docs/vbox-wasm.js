@@ -4225,6 +4225,15 @@ globalThis.VBoxJIT = (function() {
       const cpuN = Number(cpuP), ramN = Number(ramB);
       console.log("[JIT-DBG] call#" + statTotalCalls + " cpuPtr=0x" + cpuN.toString(16) + " ramBase=0x" + ramN.toString(16) + " romBufSize=" + romBufSize + " maxInsn=" + maxInsn);
     }
+    // One-time: verify ROM content is readable from flat RAM
+    if (statTotalCalls === 1) {
+      const rb = Number(ramB);
+      const m = new Uint8Array(wasmMemory.buffer);
+      const fe05b = Array.from(m.slice(rb + 1040475, rb + 1040475 + 8)).map(x => x.toString(16).padStart(2, "0")).join(" ");
+      const c0000 = Array.from(m.slice(rb + 786432, rb + 786432 + 8)).map(x => x.toString(16).padStart(2, "0")).join(" ");
+      const fffff0 = Array.from(m.slice(rb + 1048560, rb + 1048560 + 8)).map(x => x.toString(16).padStart(2, "0")).join(" ");
+      console.log("[JIT-ROM-CHECK] ramBase=0x" + rb.toString(16) + " FE05B:" + fe05b + " C0000:" + c0000 + " FFFF0:" + fffff0);
+    }
     const n = execBlock(cpuP, ramB, maxInsn);
     if (n > 0) {
       statTotalInsns += n;
@@ -10241,6 +10250,8 @@ FS.staticInit();
 
 // Begin runtime exports
 Module["callMain"] = callMain;
+
+Module["wasmMemory"] = wasmMemory;
 
 Module["addRunDependency"] = addRunDependency;
 

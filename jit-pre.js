@@ -2856,12 +2856,6 @@ function execBlock(cpuP, ramB, maxInsn) {
     // the PGM MMIO handler. IP must not advance so IEM decodes from scratch.
     if (mmioFault) {
       mmioFault = false;
-      if (!execBlock._mmioLog) execBlock._mmioLog = { count: 0 };
-      const mc = ++execBlock._mmioLog.count;
-      if (mc <= 50) {
-        console.log('[MMIO-BAIL] op=0x' + b.toString(16) + ' @' + (csBase>>>4).toString(16) + ':' + ip.toString(16) +
-          ' codePhys=0x' + codePhys.toString(16) + ' #' + mc);
-      }
       lastBailOp = b;
       iter = maxInsn;
       break;

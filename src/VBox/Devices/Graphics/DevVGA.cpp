@@ -1320,18 +1320,6 @@ static VBOXSTRICTRC vga_mem_writeb(PPDMDEVINS pDevIns, PVGASTATE pThis, PVGASTAT
 
     Log3(("vga: [0x%x] = 0x%02x\n", addr, val));
 
-    /* WASM DEBUG: trace first N MMIO writes to see if they arrive at all */
-    {
-        static int s_iMmioWriteLog = 0;
-        if (s_iMmioWriteLog < 50)
-        {
-            int const dbg_map_mode = (pThis->gr[6] >> 2) & 3;
-            s_iMmioWriteLog++;
-            LogRel(("WASM-VGA MMIO writeb #%d: addr=0x%llx val=0x%02x mapMode=%d sr4=0x%02x sr2=0x%02x\n",
-                    s_iMmioWriteLog, (unsigned long long)addr, val, dbg_map_mode, pThis->sr[4], pThis->sr[2]));
-        }
-    }
-
 #ifdef VMSVGA_WITH_VGA_FB_BACKUP_AND_IN_RZ
     /* VMSVGA keeps the VGA and SVGA framebuffers separate unlike this boch-based
        VGA implementation, so we fake it by going to ring-3 and using a heap buffer.  */
@@ -1412,19 +1400,8 @@ static VBOXSTRICTRC vga_mem_writeb(PPDMDEVINS pDevIns, PVGASTATE pThis, PVGASTAT
              * that is multiply by the number of planes,
              * and select the plane byte in the vram offset.
              */
-            RTGCPHYS const origAddr = addr; /* WASM debug */
             addr = ((addr & ~1) * 4) | plane;
             VERIFY_VRAM_WRITE_OFF_RETURN(pThis, addr);
-            /* WASM DEBUG: trace text-mode writes (first N only, plane 0 = char data) */
-            {
-                static int s_iWriteLog = 0;
-                if (s_iWriteLog < 200 && plane == 0 && val >= 0x20 && val < 0x7f)
-                {
-                    s_iWriteLog++;
-                    LogRel(("WASM-VGA write: origAddr=0x%x -> vram[%u]=0x%02x('%c') plane=%d\n",
-                            (unsigned)origAddr, (unsigned)addr, val, val, plane));
-                }
-            }
 #ifdef VMSVGA_WITH_VGA_FB_BACKUP_AND_IN_RING3
             if (!pThis->svga.fEnabled)
                 pThisCC->pbVRam[addr]      = val;
@@ -6992,11 +6969,8 @@ static DECLCALLBACK(int)   vgaR3Construct(PPDMDEVINS pDevIns, int iInstance, PCF
         AssertReleaseMsg(cbVgaBiosBinary <= _64K && cbVgaBiosBinary >= 32*_1K, ("cbVgaBiosBinary=%#x\n", cbVgaBiosBinary));
         AssertReleaseMsg(RT_ALIGN_Z(cbVgaBiosBinary, GUEST_PAGE_SIZE) == cbVgaBiosBinary, ("cbVgaBiosBinary=%#x\n", cbVgaBiosBinary));
         /* Note! Because of old saved states we'll always register at least 36KB of ROM. */
-        LogRel(("VGA BIOS: fLegacyVgaEnabled=%RTbool cbVgaBiosBinary=%#RX64 first2bytes=%02x,%02x\n",
-                pThis->fLegacyVgaEnabled, cbVgaBiosBinary, pbVgaBiosBinary[0], pbVgaBiosBinary[1]));
         rc = PDMDevHlpROMRegister(pDevIns, 0x000c0000, RT_MAX(cbVgaBiosBinary, 36*_1K), pbVgaBiosBinary, cbVgaBiosBinary,
                                   fFlags, "VGA BIOS");
-        LogRel(("VGA BIOS: PDMDevHlpROMRegister rc=%Rrc\n", rc));
         AssertRCReturn(rc, rc);
     }
 

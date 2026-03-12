@@ -4725,8 +4725,6 @@ static int pgmR3PhysRomRegisterLocked(PVM pVM, PPDMDEVINS pDevIns, RTGCPHYS GCPh
         if (!pOverlappingRange)
         {
             rc = SUPR3PageAlloc(cHostPages, 0, &pvRam);
-            LogRel(("PGM ROM NEM: SUPR3PageAlloc(%u pages) for '%s' rc=%Rrc pvRam=%p\n",
-                    cHostPages, pszDesc, rc, pvRam));
             if (RT_FAILURE(rc))
                 return rc;
         }
@@ -5134,14 +5132,11 @@ VMMR3DECL(int) PGMR3PhysRomRegister(PVM pVM, PPDMDEVINS pDevIns, RTGCPHYS GCPhys
 {
     Log(("PGMR3PhysRomRegister: pDevIns=%p GCPhys=%RGp(-%RGp) cb=%RGp pvBinary=%p cbBinary=%#x fFlags=%#x pszDesc=%s\n",
          pDevIns, GCPhys, GCPhys + cb, cb, pvBinary, cbBinary, fFlags, pszDesc));
-    LogRel(("PGM ROM: Registering '%s' at %RGp size=%RGp cbBinary=%#x NEM=%RTbool\n",
-            pszDesc, GCPhys, cb, cbBinary, PGM_IS_IN_NEM_MODE(pVM)));
     PGM_LOCK_VOID(pVM);
 
     int rc = pgmR3PhysRomRegisterLocked(pVM, pDevIns, GCPhys, cb, pvBinary, cbBinary, fFlags, pszDesc);
 
     PGM_UNLOCK(pVM);
-    LogRel(("PGM ROM: '%s' registration rc=%Rrc\n", pszDesc, rc));
     return rc;
 }
 

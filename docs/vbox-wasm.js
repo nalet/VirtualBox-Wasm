@@ -3270,11 +3270,11 @@ globalThis.VBoxJIT = (function() {
                 sr16(reg, result & 65535);
                 lazyCF = (result !== ((result << 16) >> 16)) ? 1 : 0;
               } else {
-                const result = Math.imul(gr32(reg), val);
+                const a32 = gr32(reg) | 0;
+                const result = Math.imul(a32, val);
                 sr32(reg, result >>> 0);
-                // Approximate OF/CF (exact requires 64-bit product)
-                const a = gr32(reg) | 0, b3 = val | 0;
-                const big = BigInt(a) * BigInt(b3);
+                // OF/CF set if result doesn't fit in 32 bits (requires 64-bit product)
+                const big = BigInt(a32) * BigInt(val | 0);
                 lazyCF = (big !== BigInt(result | 0)) ? 1 : 0;
               }
               lazyOp = OP_NONE;
@@ -3407,6 +3407,78 @@ globalThis.VBoxJIT = (function() {
                   if (opSize === 2) sr16(modrm & 7, val & 65535); else sr32(modrm & 7, val >>> 0);
                 }
               }
+              break;
+            }
+
+           // XADD r/m8, r8 (0x0F 0xC0)
+            case 192:
+            {
+              const modrm = mem8[ci + 2];
+              ilen += 1;
+              const reg = (modrm >> 3) & 7;
+              let dst, meaXA = -1;
+              if ((modrm >> 6) === 3) dst = gr8(modrm & 7); else {
+                const m = addrSize === 2 ? decodeModRM16(modrm, mem8, ci + 3, effDS, effSS) : decodeModRM32(modrm, mem8, ci + 3, effDS, effSS);
+                ilen += m.len;
+                meaXA = m.ea;
+                dst = rb(m.ea);
+              }
+              const src = gr8(reg);
+              const sum = (dst + src) & 255;
+              setFlagsArith(OP_ADD, sum, dst, src, 1);
+              sr8(reg, dst);
+              // old dst → reg
+              if ((modrm >> 6) === 3) sr8(modrm & 7, sum); else wb(meaXA, sum);
+              break;
+            }
+
+           // XADD r/m16/32, r16/32 (0x0F 0xC1)
+            case 193:
+            {
+              const modrm = mem8[ci + 2];
+              ilen += 1;
+              const reg = (modrm >> 3) & 7;
+              let dst, mea3 = -1;
+              if ((modrm >> 6) === 3) dst = opSize === 2 ? gr16(modrm & 7) : gr32(modrm & 7); else {
+                const m = addrSize === 2 ? decodeModRM16(modrm, mem8, ci + 3, effDS, effSS) : decodeModRM32(modrm, mem8, ci + 3, effDS, effSS);
+                ilen += m.len;
+                mea3 = m.ea;
+                dst = opSize === 2 ? rw(m.ea) : rd(m.ea);
+              }
+              const src = opSize === 2 ? gr16(reg) : gr32(reg);
+              const sum = opSize === 2 ? (dst + src) & 65535 : (dst + src) >>> 0;
+              setFlagsArith(OP_ADD, sum, dst, src, opSize);
+              if (opSize === 2) sr16(reg, dst); else sr32(reg, dst);
+              if ((modrm >> 6) === 3) {
+                if (opSize === 2) sr16(modrm & 7, sum); else sr32(modrm & 7, sum);
+              } else {
+                if (opSize === 2) ww(mea3, sum); else wd(mea3, sum);
+              }
+              break;
+            }
+
+           // PUSH FS (0x0F 0xA0) / POP FS (0x0F 0xA1) / PUSH GS (0x0F 0xA8) / POP GS (0x0F 0xA9)
+            case 160:
+            push16(rr16(S_FS + SEG_SEL), ssBase);
+            break;
+
+           case 161:
+            {
+              const s = pop16(ssBase);
+              wr16(S_FS + SEG_SEL, s);
+              if (realMode) wr64(S_FS + SEG_BASE, s << 4);
+              break;
+            }
+
+           case 168:
+            push16(rr16(S_GS + SEG_SEL), ssBase);
+            break;
+
+           case 169:
+            {
+              const s = pop16(ssBase);
+              wr16(S_GS + SEG_SEL, s);
+              if (realMode) wr64(S_GS + SEG_BASE, s << 4);
               break;
             }
 

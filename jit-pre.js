@@ -2213,9 +2213,8 @@ function execBlock(cpuP, ramB, maxInsn) {
         const newIP = mem8[ci+1] | (mem8[ci+2] << 8);
         const newCS = mem8[ci+3] | (mem8[ci+4] << 8);
         ilen += 5;
-        // Update CS
         wr16(S_CS + SEG_SEL, newCS);
-        if (realMode) wr64(S_CS + SEG_BASE, newCS << 4);
+        if (realMode) { csBase = newCS << 4; wr64(S_CS + SEG_BASE, csBase); }
         ip = newIP;
         ilen = 0; executed++; wr16(R_IP, ip); continue;
       } else {
@@ -2232,7 +2231,7 @@ function execBlock(cpuP, ramB, maxInsn) {
         push16(rr16(S_CS + SEG_SEL), ssBase); // push CS
         push16((ip + ilen) & 0xFFFF, ssBase); // push IP
         wr16(S_CS + SEG_SEL, newCS);
-        if (realMode) wr64(S_CS + SEG_BASE, newCS << 4);
+        if (realMode) { csBase = newCS << 4; wr64(S_CS + SEG_BASE, csBase); }
         ip = newIP;
         ilen = 0; executed++; wr16(R_IP, ip); continue;
       } else {
@@ -2247,7 +2246,8 @@ function execBlock(cpuP, ramB, maxInsn) {
       if (opSize === 2) {
         const newIP = pop16(ssBase);
         const newCS = pop16(ssBase);
-        wr16(S_CS + SEG_SEL, newCS); wr64(S_CS + SEG_BASE, newCS << 4);
+        csBase = newCS << 4;
+        wr16(S_CS + SEG_SEL, newCS); wr64(S_CS + SEG_BASE, csBase);
         ip = newIP;
         ilen = 0; executed++; wr16(R_IP, ip); continue;
       } else {
@@ -2439,8 +2439,9 @@ function execBlock(cpuP, ramB, maxInsn) {
       const ivtAddr = intNum * 4;
       const newIP = rw(ivtAddr);
       const newCS = rw(ivtAddr + 2);
+      csBase = newCS << 4;
       wr16(S_CS + SEG_SEL, newCS);
-      wr64(S_CS + SEG_BASE, newCS << 4);
+      wr64(S_CS + SEG_BASE, csBase);
       ip = newIP;
       ilen = 0; executed++;
       wr16(R_IP, ip);
@@ -2461,8 +2462,9 @@ function execBlock(cpuP, ramB, maxInsn) {
       loadFlags(flags);
       const newIP3 = rw(3 * 4);
       const newCS3 = rw(3 * 4 + 2);
+      csBase = newCS3 << 4;
       wr16(S_CS + SEG_SEL, newCS3);
-      wr64(S_CS + SEG_BASE, newCS3 << 4);
+      wr64(S_CS + SEG_BASE, csBase);
       ip = newIP3;
       ilen = 0; executed++;
       wr16(R_IP, ip);
@@ -2476,8 +2478,9 @@ function execBlock(cpuP, ramB, maxInsn) {
       const iretIP = pop16(ssBase);
       const iretCS = pop16(ssBase);
       const iretFlags = pop16(ssBase);
+      csBase = iretCS << 4;
       wr16(S_CS + SEG_SEL, iretCS);
-      wr64(S_CS + SEG_BASE, iretCS << 4);
+      wr64(S_CS + SEG_BASE, csBase);
       ip = iretIP;
       // Restore full flags
       flags = (iretFlags & 0xFFFF) | 2; // bit 1 always set

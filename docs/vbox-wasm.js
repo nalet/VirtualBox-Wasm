@@ -211,9 +211,21 @@ function segBase(segOff) { return Number(dv.getBigUint64(cpuPtr + segOff + SEG_B
 function rb(addr) { return guestRb(addr); }
 function rw(addr) { return guestRw(addr); }
 function rd(addr) { return guestRd(addr); }
-function wb(addr, v) { mem8[ramBase + addr] = v; }
-function ww(addr, v) { dv.setUint16(ramBase + addr, v & 0xFFFF, true); }
-function wd(addr, v) { dv.setUint32(ramBase + addr, v >>> 0, true); }
+function wb(addr, v) {
+  const off = ramBase + addr;
+  if (off < 0 || off >= mem8.length) { console.log('[JIT] OOB wb addr=0x'+addr.toString(16)+' off=0x'+off.toString(16)); return; }
+  mem8[off] = v;
+}
+function ww(addr, v) {
+  const off = ramBase + addr;
+  if (off < 0 || off + 2 > mem8.length) { console.log('[JIT] OOB ww addr=0x'+addr.toString(16)+' off=0x'+off.toString(16)); return; }
+  dv.setUint16(off, v & 0xFFFF, true);
+}
+function wd(addr, v) {
+  const off = ramBase + addr;
+  if (off < 0 || off + 4 > mem8.length) { console.log('[JIT] OOB wd addr=0x'+addr.toString(16)+' off=0x'+off.toString(16)); return; }
+  dv.setUint32(off, v >>> 0, true);
+}
 
 // ── GPR access by index ──
 const GPR_OFFS = [R_AX,R_CX,R_DX,R_BX,R_SP,R_BP,R_SI,R_DI];

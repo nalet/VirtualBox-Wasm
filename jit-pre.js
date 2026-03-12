@@ -1175,7 +1175,11 @@ function execBlock(cpuP, ramB, maxInsn) {
         const m = addrSize === 2 ? decodeModRM16(modrm, mem8, ci+2, effDS, effSS)
                                  : decodeModRM32(modrm, mem8, ci+2, effDS, effSS);
         ilen += m.len;
-        const t = gr8(reg); sr8(reg, rb(m.ea)); wb(m.ea, t);
+        // Read and write must both succeed atomically; write first, check mmioFault
+        const memVal = rb(m.ea);
+        const regVal = gr8(reg);
+        wb(m.ea, regVal);
+        if (!mmioFault) { sr8(reg, memVal); }
       }
       break;
     }
@@ -1191,8 +1195,13 @@ function execBlock(cpuP, ramB, maxInsn) {
         const m = addrSize === 2 ? decodeModRM16(modrm, mem8, ci+2, effDS, effSS)
                                  : decodeModRM32(modrm, mem8, ci+2, effDS, effSS);
         ilen += m.len;
-        if (opSize === 2) { const t = gr16(reg); sr16(reg, rw(m.ea)); ww(m.ea, t); }
-        else { const t = gr32(reg); sr32(reg, rd(m.ea)); wd(m.ea, t); }
+        if (opSize === 2) {
+          const memVal = rw(m.ea); const regVal = gr16(reg);
+          ww(m.ea, regVal); if (!mmioFault) sr16(reg, memVal);
+        } else {
+          const memVal = rd(m.ea); const regVal = gr32(reg);
+          wd(m.ea, regVal); if (!mmioFault) sr32(reg, memVal);
+        }
       }
       break;
     }
@@ -1480,11 +1489,9 @@ function execBlock(cpuP, ramB, maxInsn) {
               di = (di + dir * byteCount) & 0xFFFF;
               cx = 0;
             } else {
-              while (cx > 0) {
-                wb(esBase + di, val);
-                di = (di + dir) & 0xFFFF;
-                cx--;
-              }
+              // Slow path — bail to IEM for MMIO-touching REP STOS
+              // (letting the loop run corrupts DI/CX when wb sets mmioFault)
+              lastBailOp = b; iter = maxInsn; break;
             }
             sr16(7, di); sr16(1, 0);
             break;
@@ -1521,11 +1528,8 @@ function execBlock(cpuP, ramB, maxInsn) {
               di = (di + dir * totalBytes) & 0xFFFF;
               cx = 0;
             } else {
-              if (sz === 2) {
-                while (cx > 0) { ww(esBase + di, v); di = (di + dir * 2) & 0xFFFF; cx--; }
-              } else {
-                while (cx > 0) { wd(esBase + di, v); di = (di + dir * 4) & 0xFFFF; cx--; }
-              }
+              // Slow path — bail to IEM for MMIO-touching REP STOS
+              lastBailOp = b; iter = maxInsn; break;
             }
             sr16(7, di); sr16(1, 0);
             break;
@@ -1553,12 +1557,8 @@ function execBlock(cpuP, ramB, maxInsn) {
               di = (di + dir * byteCount) & 0xFFFF;
               cx = 0;
             } else {
-              while (cx > 0) {
-                wb(esBase + di, rb(srcSeg + si));
-                si = (si + dir) & 0xFFFF;
-                di = (di + dir) & 0xFFFF;
-                cx--;
-              }
+              // Slow path — bail to IEM for MMIO-touching REP MOVS
+              lastBailOp = b; iter = maxInsn; break;
             }
             sr16(6, si); sr16(7, di); sr16(1, 0);
             break;
@@ -1584,17 +1584,8 @@ function execBlock(cpuP, ramB, maxInsn) {
               di = (di + dir * totalBytes5) & 0xFFFF;
               cx = 0;
             } else {
-              if (sz5 === 2) {
-                while (cx > 0) {
-                  ww(esBase + di, rw(srcSeg + si));
-                  si = (si + dir * 2) & 0xFFFF; di = (di + dir * 2) & 0xFFFF; cx--;
-                }
-              } else {
-                while (cx > 0) {
-                  wd(esBase + di, rd(srcSeg + si));
-                  si = (si + dir * 4) & 0xFFFF; di = (di + dir * 4) & 0xFFFF; cx--;
-                }
-              }
+              // Slow path — bail to IEM for MMIO-touching REP MOVS
+              lastBailOp = b; iter = maxInsn; break;
             }
             sr16(6, si); sr16(7, di); sr16(1, 0);
             break;
@@ -1680,23 +1671,25 @@ function execBlock(cpuP, ramB, maxInsn) {
         sr16(6, si); sr16(7, di); sr16(1, cx);
       } else {
         // Single string op (no REP prefix)
+        // IMPORTANT: Do NOT modify DI/SI/CX if the memory write triggered an
+        // MMIO fault — IEM will re-execute the entire instruction from scratch.
         switch (b) {
-          case 0xAA: wb(esBase + gr16(7), gr8(0)); sr16(7, (gr16(7)+dir)&0xFFFF); break;
+          case 0xAA: wb(esBase + gr16(7), gr8(0)); if (!mmioFault) sr16(7, (gr16(7)+dir)&0xFFFF); break;
           case 0xAB:
-            if (opSize===2) { ww(esBase+gr16(7), gr16(0)); sr16(7,(gr16(7)+dir*2)&0xFFFF); }
-            else { wd(esBase+gr16(7), gr32(0)); sr16(7,(gr16(7)+dir*4)&0xFFFF); }
+            if (opSize===2) { ww(esBase+gr16(7), gr16(0)); if (!mmioFault) sr16(7,(gr16(7)+dir*2)&0xFFFF); }
+            else { wd(esBase+gr16(7), gr32(0)); if (!mmioFault) sr16(7,(gr16(7)+dir*4)&0xFFFF); }
             break;
           case 0xA4: {
             const srcSeg2 = segOverride >= 0 ? segBase(segOverride) : dsBase;
             wb(esBase+gr16(7), rb(srcSeg2+gr16(6)));
-            sr16(6,(gr16(6)+dir)&0xFFFF); sr16(7,(gr16(7)+dir)&0xFFFF);
+            if (!mmioFault) { sr16(6,(gr16(6)+dir)&0xFFFF); sr16(7,(gr16(7)+dir)&0xFFFF); }
             break;
           }
           case 0xA5: {
             const srcSeg2 = segOverride >= 0 ? segBase(segOverride) : dsBase;
             if (opSize===2) ww(esBase+gr16(7), rw(srcSeg2+gr16(6)));
             else wd(esBase+gr16(7), rd(srcSeg2+gr16(6)));
-            sr16(6,(gr16(6)+dir*opSize)&0xFFFF); sr16(7,(gr16(7)+dir*opSize)&0xFFFF);
+            if (!mmioFault) { sr16(6,(gr16(6)+dir*opSize)&0xFFFF); sr16(7,(gr16(7)+dir*opSize)&0xFFFF); }
             break;
           }
           case 0xAC: {
@@ -2863,6 +2856,12 @@ function execBlock(cpuP, ramB, maxInsn) {
     // the PGM MMIO handler. IP must not advance so IEM decodes from scratch.
     if (mmioFault) {
       mmioFault = false;
+      if (!execBlock._mmioLog) execBlock._mmioLog = { count: 0 };
+      const mc = ++execBlock._mmioLog.count;
+      if (mc <= 50) {
+        console.log('[MMIO-BAIL] op=0x' + b.toString(16) + ' @' + (csBase>>>4).toString(16) + ':' + ip.toString(16) +
+          ' codePhys=0x' + codePhys.toString(16) + ' #' + mc);
+      }
       lastBailOp = b;
       iter = maxInsn;
       break;

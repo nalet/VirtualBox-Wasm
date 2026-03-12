@@ -1320,6 +1320,18 @@ static VBOXSTRICTRC vga_mem_writeb(PPDMDEVINS pDevIns, PVGASTATE pThis, PVGASTAT
 
     Log3(("vga: [0x%x] = 0x%02x\n", addr, val));
 
+    /* WASM DEBUG: trace first N MMIO writes to see if they arrive at all */
+    {
+        static int s_iMmioWriteLog = 0;
+        if (s_iMmioWriteLog < 50)
+        {
+            int const dbg_map_mode = (pThis->gr[6] >> 2) & 3;
+            s_iMmioWriteLog++;
+            LogRel(("WASM-VGA MMIO writeb #%d: addr=0x%llx val=0x%02x mapMode=%d sr4=0x%02x sr2=0x%02x\n",
+                    s_iMmioWriteLog, (unsigned long long)addr, val, dbg_map_mode, pThis->sr[4], pThis->sr[2]));
+        }
+    }
+
 #ifdef VMSVGA_WITH_VGA_FB_BACKUP_AND_IN_RZ
     /* VMSVGA keeps the VGA and SVGA framebuffers separate unlike this boch-based
        VGA implementation, so we fake it by going to ring-3 and using a heap buffer.  */
@@ -1400,8 +1412,19 @@ static VBOXSTRICTRC vga_mem_writeb(PPDMDEVINS pDevIns, PVGASTATE pThis, PVGASTAT
              * that is multiply by the number of planes,
              * and select the plane byte in the vram offset.
              */
+            RTGCPHYS const origAddr = addr; /* WASM debug */
             addr = ((addr & ~1) * 4) | plane;
             VERIFY_VRAM_WRITE_OFF_RETURN(pThis, addr);
+            /* WASM DEBUG: trace text-mode writes (first N only, plane 0 = char data) */
+            {
+                static int s_iWriteLog = 0;
+                if (s_iWriteLog < 200 && plane == 0 && val >= 0x20 && val < 0x7f)
+                {
+                    s_iWriteLog++;
+                    LogRel(("WASM-VGA write: origAddr=0x%x -> vram[%u]=0x%02x('%c') plane=%d\n",
+                            (unsigned)origAddr, (unsigned)addr, val, val, plane));
+                }
+            }
 #ifdef VMSVGA_WITH_VGA_FB_BACKUP_AND_IN_RING3
             if (!pThis->svga.fEnabled)
                 pThisCC->pbVRam[addr]      = val;
@@ -1932,6 +1955,85 @@ static int vgaR3DrawText(PPDMDEVINS pDevIns, PVGASTATE pThis, PVGASTATER3 pThisC
         pThis->last_cur_blink = blink_on;
         chr_blink_flip = true;
         cur_blink_flip = true;
+    }
+
+    /* WASM DEBUG: Dump VRAM text buffer state (first few calls only) */
+    {
+        static int s_iDrawTextDump = 0;
+        /* One-time test: write "VBoxWasm" directly to VGA VRAM to verify rendering */
+        if (s_iDrawTextDump == 0 && pThis->fRenderVRAM)
+        {
+            static const char szTest[] = "VBoxWasm";
+            /* In text mode with s_incr=4, character N is at pbVRam[N*s_incr]:
+             * byte 0 = character, byte 1 = attribute */
+            for (int ti = 0; szTest[ti]; ti++)
+            {
+                int vramOff = ti * s_incr;
+                pThisCC->pbVRam[vramOff]     = szTest[ti]; /* character */
+                pThisCC->pbVRam[vramOff + 1] = 0x0F;       /* bright white on black */
+            }
+            LogRel(("WASM-VGA TEST: wrote '%s' directly to pbVRam (s_incr=%d)\n", szTest, s_incr));
+        }
+        if (s_iDrawTextDump < 10)
+        {
+            s_iDrawTextDump++;
+            LogRel(("WASM-VGA DrawText #%d: s_incr=%d start_addr=0x%x width=%d height=%d "
+                    "line_offset=%d addr_mask=0x%x cr17=0x%02x gr6=0x%02x sr4=0x%02x sr2=0x%02x sr3=0x%02x\n",
+                    s_iDrawTextDump, s_incr, pThis->start_addr, width, height,
+                    line_offset, addr_mask, pThis->cr[0x17], pThis->gr[6], pThis->sr[4], pThis->sr[2], pThis->sr[3]));
+            /* Dump first 80 bytes of raw pbVRam */
+            LogRel(("WASM-VGA pbVRam raw[0..79]: "));
+            for (int dd = 0; dd < 80 && dd < (int)pThis->vram_size; dd++)
+                LogRel(("%02x ", pThisCC->pbVRam[dd]));
+            LogRel(("\n"));
+            /* Dump first 20 characters as read by the rendering loop */
+            uint8_t *dbgSrc = s1;
+            LogRel(("WASM-VGA text chars (s_incr=%d): ", s_incr));
+            for (int dd = 0; dd < 20 && dd < width; dd++)
+            {
+                uint16_t chattr = *(uint16_t *)dbgSrc;
+                LogRel(("[%d]=0x%04x('%c') ", dd, chattr, (chattr & 0xff) >= 0x20 && (chattr & 0xff) < 0x7f ? (chattr & 0xff) : '.'));
+                dbgSrc += s_incr;
+            }
+            LogRel(("\n"));
+            /* Also check if there is any non-space content ANYWHERE in first 8000 bytes */
+            int nonSpaceCount = 0;
+            int firstNonSpaceOff = -1;
+            for (int dd = 0; dd < 8000 && dd < (int)pThis->vram_size; dd += 2)
+            {
+                if (pThisCC->pbVRam[dd] != 0x20 && pThisCC->pbVRam[dd] != 0x00)
+                {
+                    if (firstNonSpaceOff < 0) firstNonSpaceOff = dd;
+                    nonSpaceCount++;
+                }
+            }
+            LogRel(("WASM-VGA non-space chars in pbVRam[0..7999]: count=%d firstOff=%d\n", nonSpaceCount, firstNonSpaceOff));
+            /* Dump font data at font_base[0] — first 32 bytes to verify fonts are loaded */
+            LogRel(("WASM-VGA font_base[0] offset=0x%x first 32 bytes: ", (int)(font_base[0] - pThisCC->pbVRam)));
+            for (int dd = 0; dd < 32; dd++)
+                LogRel(("%02x ", font_base[0][dd]));
+            LogRel(("\n"));
+            /* Dump font glyph for 'A' (0x41) — 16 rows of glyph data, each 4 bytes apart */
+            {
+                const uint8_t *fontA = font_base[0] + 32 * 4 * 0x41;
+                LogRel(("WASM-VGA fontA glyph ('A'=0x41) at offset 0x%x: ",
+                        (int)(fontA - pThisCC->pbVRam)));
+                for (int dd = 0; dd < 16; dd++)
+                    LogRel(("%02x ", fontA[dd * 4])); /* every 4th byte = plane 2 data */
+                LogRel(("\n"));
+            }
+            /* Check dirty tracking — how many dirty pages in first 64K */
+            LogRel(("WASM-VGA fRenderVRAM=%d pDrv->pbData=%p pDrv->cx=%u pDrv->cy=%u pDrv->cBits=%u\n",
+                    pThis->fRenderVRAM, pDrv->pbData, pDrv->cx, pDrv->cy, pDrv->cBits));
+            /* Dump first 16 bytes of pDrv->pbData (framebuffer) to see if anything is rendered */
+            if (pDrv->pbData)
+            {
+                LogRel(("WASM-VGA pDrv->pbData[0..63]: "));
+                for (int dd = 0; dd < 64; dd++)
+                    LogRel(("%02x ", pDrv->pbData[dd]));
+                LogRel(("\n"));
+            }
+        }
     }
 
     for(cy = 0; cy < (height - dscan); cy = cy + (1 << dscan)) {

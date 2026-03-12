@@ -127,11 +127,18 @@ function setRomBuffer(bufPtr, bufSize, gcPhysStart) {
     '-0x' + romGCPhysEnd.toString(16));
 }
 
+// MMIO fault flag: set when a guest memory access goes to an MMIO address
+// (outside Wasm linear memory). The main loop checks this flag and bails
+// to IEM so the instruction is re-executed via the PGM MMIO handler.
+let mmioFault = false;
+
 // Read byte from guest physical address, ROM-aware
 function guestRb(addr) {
   if (romBufSize > 0 && addr >= romGCPhysStart && addr < romGCPhysEnd)
     return mem8[romBufBase + (addr - romGCPhysStart)];
-  return mem8[ramBase + addr];
+  const off = ramBase + addr;
+  if (off >= mem8.length) { mmioFault = true; return 0xFF; }
+  return mem8[off];
 }
 
 // Read word from guest physical address, ROM-aware
@@ -140,7 +147,9 @@ function guestRw(addr) {
     const off = romBufBase + (addr - romGCPhysStart);
     return dv.getUint16(off, true);
   }
-  return dv.getUint16(ramBase + addr, true);
+  const off = ramBase + addr;
+  if (off + 2 > mem8.length) { mmioFault = true; return 0xFFFF; }
+  return dv.getUint16(off, true);
 }
 
 // Read dword from guest physical address, ROM-aware
@@ -149,7 +158,9 @@ function guestRd(addr) {
     const off = romBufBase + (addr - romGCPhysStart);
     return dv.getUint32(off, true);
   }
-  return dv.getUint32(ramBase + addr, true);
+  const off = ramBase + addr;
+  if (off + 4 > mem8.length) { mmioFault = true; return 0xFFFFFFFF; }
+  return dv.getUint32(off, true);
 }
 
 // Read CPU register (64-bit, return as Number — safe for 32-bit values)
@@ -171,17 +182,17 @@ function rw(addr) { return guestRw(addr); }
 function rd(addr) { return guestRd(addr); }
 function wb(addr, v) {
   const off = ramBase + addr;
-  if (off < 0 || off >= mem8.length) { console.log('[JIT] OOB wb addr=0x'+addr.toString(16)+' off=0x'+off.toString(16)); return; }
+  if (off >= mem8.length) { mmioFault = true; return; }
   mem8[off] = v;
 }
 function ww(addr, v) {
   const off = ramBase + addr;
-  if (off < 0 || off + 2 > mem8.length) { console.log('[JIT] OOB ww addr=0x'+addr.toString(16)+' off=0x'+off.toString(16)); return; }
+  if (off + 2 > mem8.length) { mmioFault = true; return; }
   dv.setUint16(off, v & 0xFFFF, true);
 }
 function wd(addr, v) {
   const off = ramBase + addr;
-  if (off < 0 || off + 4 > mem8.length) { console.log('[JIT] OOB wd addr=0x'+addr.toString(16)+' off=0x'+off.toString(16)); return; }
+  if (off + 4 > mem8.length) { mmioFault = true; return; }
   dv.setUint32(off, v >>> 0, true);
 }
 
@@ -470,6 +481,7 @@ function execBlock(cpuP, ramB, maxInsn) {
   const interruptCheckInterval = 8192;
 
   for (let iter = 0; iter < maxInsn; iter++) {
+    mmioFault = false; // reset MMIO fault flag for each instruction attempt
     // Periodic bail for interrupt delivery
     if (executed > 0 && (executed & (interruptCheckInterval - 1)) === 0) break;
 
@@ -2747,6 +2759,16 @@ function execBlock(cpuP, ramB, maxInsn) {
       break;
     }
     } // end switch
+
+    // MMIO bail: if any memory access went to MMIO (outside Wasm linear
+    // memory), bail this instruction to IEM which will re-execute it via
+    // the PGM MMIO handler. IP must not advance so IEM decodes from scratch.
+    if (mmioFault) {
+      mmioFault = false;
+      lastBailOp = b;
+      iter = maxInsn;
+      break;
+    }
 
     // Only advance IP if this instruction completed normally (no bail).
     // If lastBailOp >= 0 the instruction was handed off to IEM; IP must

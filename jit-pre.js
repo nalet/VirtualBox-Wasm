@@ -1049,7 +1049,8 @@ function execBlock(cpuP, ramB, maxInsn) {
         const big = BigInt(val | 0) * BigInt(imm | 0);
         lazyCF = (big !== BigInt(result | 0)) ? 1 : 0;
       }
-      lazyOp = OP_NONE; lazyRes = opSize===2 ? gr16(reg) : gr32(reg); lazySize = opSize;
+      lazyOp = OP_EXPLICIT;
+      lazyExplicitFlags = lazyCF ? (0x801 | 0x02) : 0x02;
       break;
     }
 
@@ -1073,7 +1074,8 @@ function execBlock(cpuP, ramB, maxInsn) {
         const big = BigInt(val | 0) * BigInt(imm);
         lazyCF = (big !== BigInt(result | 0)) ? 1 : 0;
       }
-      lazyOp = OP_NONE; lazyRes = opSize===2 ? gr16(reg) : gr32(reg); lazySize = opSize;
+      lazyOp = OP_EXPLICIT;
+      lazyExplicitFlags = lazyCF ? (0x801 | 0x02) : 0x02;
       break;
     }
 
@@ -1666,8 +1668,8 @@ function execBlock(cpuP, ramB, maxInsn) {
         else { const m = addrSize === 2 ? decodeModRM16(modrm, mem8, ci+2, effDS, effSS) : decodeModRM32(modrm, mem8, ci+2, effDS, effSS); ilen += m.len; val = rb(m.ea); }
         const result = (gr8(0) & 0xFF) * (val & 0xFF);
         sr16(0, result & 0xFFFF); // AX
-        lazyCF = (result & 0xFF00) ? 1 : 0; lazyOp = OP_NONE;
-        lazyRes = result & 0xFF; lazySize = 1;
+        lazyCF = (result & 0xFF00) ? 1 : 0;
+        lazyOp = OP_EXPLICIT; lazyExplicitFlags = lazyCF ? (0x801 | 0x02) : 0x02;
       } else if (op === 5) { // IMUL r/m8 — AX = AL * r/m8 (signed)
         let val;
         if ((modrm >> 6) === 3) { val = gr8(modrm & 7); }
@@ -1676,8 +1678,8 @@ function execBlock(cpuP, ramB, maxInsn) {
         const b2 = (val << 24) >> 24;
         const result = a * b2;
         sr16(0, result & 0xFFFF);
-        lazyCF = ((result & 0xFFFF) !== ((result << 24) >> 24) & 0xFFFF) ? 1 : 0; lazyOp = OP_NONE;
-        lazyRes = result & 0xFF; lazySize = 1;
+        lazyCF = ((result & 0xFFFF) !== ((result << 24) >> 24) & 0xFFFF) ? 1 : 0;
+        lazyOp = OP_EXPLICIT; lazyExplicitFlags = lazyCF ? (0x801 | 0x02) : 0x02;
       } else if (op === 6) { // DIV r/m8 — AL = AX / r/m8, AH = AX % r/m8
         let val;
         if ((modrm >> 6) === 3) { val = gr8(modrm & 7); }
@@ -1769,7 +1771,7 @@ function execBlock(cpuP, ramB, maxInsn) {
           sr32(2, Number((result >> 32n) & 0xFFFFFFFFn)); // EDX
           lazyCF = (result >> 32n) ? 1 : 0;
         }
-        lazyOp = OP_NONE; lazyRes = gr16(0); lazySize = opSize;
+        lazyOp = OP_EXPLICIT; lazyExplicitFlags = lazyCF ? (0x801 | 0x02) : 0x02;
       } else if (op === 5) { // IMUL r/m16/32
         let val;
         if ((modrm >> 6) === 3) { val = opSize===2 ? gr16(modrm&7) : gr32(modrm&7); }
@@ -1787,7 +1789,7 @@ function execBlock(cpuP, ramB, maxInsn) {
           sr32(2, Number((result >> 32n) & 0xFFFFFFFFn));
           lazyCF = (result !== BigInt(Number(result & 0xFFFFFFFFn) | 0)) ? 1 : 0;
         }
-        lazyOp = OP_NONE; lazyRes = gr16(0); lazySize = opSize;
+        lazyOp = OP_EXPLICIT; lazyExplicitFlags = lazyCF ? (0x801 | 0x02) : 0x02;
       } else if (op === 6) { // DIV r/m16/32
         let val;
         if ((modrm >> 6) === 3) { val = opSize===2 ? gr16(modrm&7) : gr32(modrm&7); }
@@ -2274,7 +2276,9 @@ function execBlock(cpuP, ramB, maxInsn) {
             const big = BigInt(a32) * BigInt(val | 0);
             lazyCF = (big !== BigInt(result | 0)) ? 1 : 0;
           }
-          lazyOp = OP_NONE; lazyRes = opSize===2 ? gr16(reg) : gr32(reg); lazySize = opSize;
+          // OF=CF=overflow; ZF/SF/PF/AF undefined. Use OP_EXPLICIT for correct OF.
+          lazyOp = OP_EXPLICIT;
+          lazyExplicitFlags = lazyCF ? (0x801 | 0x02) : 0x02; // CF(0) and OF(11) = overflow
           break;
         }
 

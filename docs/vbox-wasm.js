@@ -1502,9 +1502,8 @@ globalThis.VBoxJIT = (function() {
             const big = BigInt(val | 0) * BigInt(imm | 0);
             lazyCF = (big !== BigInt(result | 0)) ? 1 : 0;
           }
-          lazyOp = OP_NONE;
-          lazyRes = opSize === 2 ? gr16(reg) : gr32(reg);
-          lazySize = opSize;
+          lazyOp = OP_EXPLICIT;
+          lazyExplicitFlags = lazyCF ? (2049 | 2) : 2;
           break;
         }
 
@@ -1537,9 +1536,8 @@ globalThis.VBoxJIT = (function() {
             const big = BigInt(val | 0) * BigInt(imm);
             lazyCF = (big !== BigInt(result | 0)) ? 1 : 0;
           }
-          lazyOp = OP_NONE;
-          lazyRes = opSize === 2 ? gr16(reg) : gr32(reg);
-          lazySize = opSize;
+          lazyOp = OP_EXPLICIT;
+          lazyExplicitFlags = lazyCF ? (2049 | 2) : 2;
           break;
         }
 
@@ -2399,9 +2397,8 @@ globalThis.VBoxJIT = (function() {
             sr16(0, result & 65535);
             // AX
             lazyCF = (result & 65280) ? 1 : 0;
-            lazyOp = OP_NONE;
-            lazyRes = result & 255;
-            lazySize = 1;
+            lazyOp = OP_EXPLICIT;
+            lazyExplicitFlags = lazyCF ? (2049 | 2) : 2;
           } else if (op === 5) {
             // IMUL r/m8 — AX = AL * r/m8 (signed)
             let val;
@@ -2418,9 +2415,8 @@ globalThis.VBoxJIT = (function() {
             const result = a * b2;
             sr16(0, result & 65535);
             lazyCF = ((result & 65535) !== ((result << 24) >> 24) & 65535) ? 1 : 0;
-            lazyOp = OP_NONE;
-            lazyRes = result & 255;
-            lazySize = 1;
+            lazyOp = OP_EXPLICIT;
+            lazyExplicitFlags = lazyCF ? (2049 | 2) : 2;
           } else if (op === 6) {
             // DIV r/m8 — AL = AX / r/m8, AH = AX % r/m8
             let val;
@@ -2575,9 +2571,8 @@ globalThis.VBoxJIT = (function() {
               // EDX
               lazyCF = (result >> 32n) ? 1 : 0;
             }
-            lazyOp = OP_NONE;
-            lazyRes = gr16(0);
-            lazySize = opSize;
+            lazyOp = OP_EXPLICIT;
+            lazyExplicitFlags = lazyCF ? (2049 | 2) : 2;
           } else if (op === 5) {
             // IMUL r/m16/32
             let val;
@@ -2601,9 +2596,8 @@ globalThis.VBoxJIT = (function() {
               sr32(2, Number((result >> 32n) & 4294967295n));
               lazyCF = (result !== BigInt(Number(result & 4294967295n) | 0)) ? 1 : 0;
             }
-            lazyOp = OP_NONE;
-            lazyRes = gr16(0);
-            lazySize = opSize;
+            lazyOp = OP_EXPLICIT;
+            lazyExplicitFlags = lazyCF ? (2049 | 2) : 2;
           } else if (op === 6) {
             // DIV r/m16/32
             let val;
@@ -3277,9 +3271,10 @@ globalThis.VBoxJIT = (function() {
                 const big = BigInt(a32) * BigInt(val | 0);
                 lazyCF = (big !== BigInt(result | 0)) ? 1 : 0;
               }
-              lazyOp = OP_NONE;
-              lazyRes = opSize === 2 ? gr16(reg) : gr32(reg);
-              lazySize = opSize;
+              // OF=CF=overflow; ZF/SF/PF/AF undefined. Use OP_EXPLICIT for correct OF.
+              lazyOp = OP_EXPLICIT;
+              lazyExplicitFlags = lazyCF ? (2049 | 2) : 2;
+              // CF(0) and OF(11) = overflow
               break;
             }
 

@@ -10197,6 +10197,15 @@ function wasmJitExecBlock(pCpumCtx, pvRAM, maxInsn) {
   return globalThis.VBoxJIT.execBlock(Number(pCpumCtx), Number(pvRAM), maxInsn);
 }
 
+function wasmJitLog(pszMsg) {
+  console.log("[JIT-C] " + UTF8ToString(Number(pszMsg)));
+}
+
+function wasmJitSetRomBuffer(pvROM, cbROM, uGCPhysStart) {
+  console.log("[JIT] setRomBuffer: ptr=0x" + Number(pvROM).toString(16) + " size=" + cbROM + " start=0x" + uGCPhysStart.toString(16));
+  if (typeof globalThis.VBoxJIT !== "undefined" && globalThis.VBoxJIT.setRomBuffer) globalThis.VBoxJIT.setRomBuffer(Number(pvROM), cbROM, uGCPhysStart);
+}
+
 // Imports from the Wasm binary.
 var _main, _wasmJitSetGuestRAM, _wasmJitGetGuestRAM, _pthread_self, _wasmDisplayGetFB, _wasmDisplayGetWidth, _wasmDisplayGetHeight, _wasmDisplayCheckDirty, _wasmDisplayGetFBSize, _wasmDisplayRefresh, _wasmDisplayGetRefreshCount, _wasmDisplayGetUpdateRectCount, _malloc, __emscripten_tls_init, __emscripten_proxy_main, __emscripten_thread_init, __emscripten_thread_crashed, _htonl, _htons, _ntohs, __emscripten_run_js_on_main_thread_done, __emscripten_run_js_on_main_thread, __emscripten_thread_free_data, __emscripten_thread_exit, __emscripten_check_mailbox, _setThrew, _emscripten_stack_set_limits, __emscripten_stack_restore, __emscripten_stack_alloc, _emscripten_stack_get_current, __indirect_function_table, wasmTable;
 
@@ -10373,7 +10382,9 @@ function assignWasmImports() {
     /** @export */ memory: wasmMemory,
     /** @export */ proc_exit: _proc_exit,
     /** @export */ wasmCallFuncPtrTrampoline,
-    /** @export */ wasmJitExecBlock
+    /** @export */ wasmJitExecBlock,
+    /** @export */ wasmJitLog,
+    /** @export */ wasmJitSetRomBuffer
   };
 }
 

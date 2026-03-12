@@ -1720,8 +1720,14 @@ globalThis.VBoxJIT = (function() {
           let rel = mem8[ci + 1];
           if (rel > 127) rel -= 256;
           ilen += 2;
-          const cx = (gr16(1) - 1) & 65535;
-          sr16(1, cx);
+          let cx;
+          if (addrSize === 4) {
+            cx = (gr32(1) - 1) >>> 0;
+            sr32(1, cx);
+          } else {
+            cx = (gr16(1) - 1) & 65535;
+            sr16(1, cx);
+          }
           if (cx !== 0) {
             ip = (ip + ilen + rel) & 65535;
             ilen = 0;
@@ -1738,8 +1744,14 @@ globalThis.VBoxJIT = (function() {
           let rel = mem8[ci + 1];
           if (rel > 127) rel -= 256;
           ilen += 2;
-          const cx = (gr16(1) - 1) & 65535;
-          sr16(1, cx);
+          let cx;
+          if (addrSize === 4) {
+            cx = (gr32(1) - 1) >>> 0;
+            sr32(1, cx);
+          } else {
+            cx = (gr16(1) - 1) & 65535;
+            sr16(1, cx);
+          }
           if (cx !== 0 && getZF()) {
             ip = (ip + ilen + rel) & 65535;
             ilen = 0;
@@ -1756,8 +1768,14 @@ globalThis.VBoxJIT = (function() {
           let rel = mem8[ci + 1];
           if (rel > 127) rel -= 256;
           ilen += 2;
-          const cx = (gr16(1) - 1) & 65535;
-          sr16(1, cx);
+          let cx;
+          if (addrSize === 4) {
+            cx = (gr32(1) - 1) >>> 0;
+            sr32(1, cx);
+          } else {
+            cx = (gr16(1) - 1) & 65535;
+            sr16(1, cx);
+          }
           if (cx !== 0 && !getZF()) {
             ip = (ip + ilen + rel) & 65535;
             ilen = 0;
@@ -1959,7 +1977,7 @@ globalThis.VBoxJIT = (function() {
           // DF flag
           ilen += 1;
           if (repPrefix && (b === 164 || b === 165 || b === 170 || b === 171 || b === 172 || b === 173 || b === 108 || b === 109 || b === 110 || b === 111)) {
-            // REP prefix — repeat CX times
+            // REP prefix — repeat CX times (ECX with 0x67 in 32-bit mode, not implemented)
             let cx = gr16(1);
             if (cx === 0) break;
             const srcSeg = segOverride >= 0 ? segBase(segOverride) : dsBase;

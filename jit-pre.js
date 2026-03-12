@@ -1205,8 +1205,8 @@ function execBlock(cpuP, ramB, maxInsn) {
     case 0xE2: { // LOOP rel8
       let rel = mem8[ci+1]; if (rel > 127) rel -= 256;
       ilen += 2;
-      const cx = (gr16(1) - 1) & 0xFFFF;
-      sr16(1, cx);
+      let cx;
+      if (addrSize === 4) { cx = (gr32(1) - 1) >>> 0; sr32(1, cx); } else { cx = (gr16(1) - 1) & 0xFFFF; sr16(1, cx); }
       if (cx !== 0) {
         ip = (ip + ilen + rel) & 0xFFFF;
         ilen = 0; executed++; wr16(R_IP, ip); continue;
@@ -1216,8 +1216,8 @@ function execBlock(cpuP, ramB, maxInsn) {
     case 0xE1: { // LOOPE rel8
       let rel = mem8[ci+1]; if (rel > 127) rel -= 256;
       ilen += 2;
-      const cx = (gr16(1) - 1) & 0xFFFF;
-      sr16(1, cx);
+      let cx;
+      if (addrSize === 4) { cx = (gr32(1) - 1) >>> 0; sr32(1, cx); } else { cx = (gr16(1) - 1) & 0xFFFF; sr16(1, cx); }
       if (cx !== 0 && getZF()) {
         ip = (ip + ilen + rel) & 0xFFFF;
         ilen = 0; executed++; wr16(R_IP, ip); continue;
@@ -1227,8 +1227,8 @@ function execBlock(cpuP, ramB, maxInsn) {
     case 0xE0: { // LOOPNE rel8
       let rel = mem8[ci+1]; if (rel > 127) rel -= 256;
       ilen += 2;
-      const cx = (gr16(1) - 1) & 0xFFFF;
-      sr16(1, cx);
+      let cx;
+      if (addrSize === 4) { cx = (gr32(1) - 1) >>> 0; sr32(1, cx); } else { cx = (gr16(1) - 1) & 0xFFFF; sr16(1, cx); }
       if (cx !== 0 && !getZF()) {
         ip = (ip + ilen + rel) & 0xFFFF;
         ilen = 0; executed++; wr16(R_IP, ip); continue;
@@ -1358,7 +1358,7 @@ function execBlock(cpuP, ramB, maxInsn) {
       if (repPrefix && (b === 0xA4 || b === 0xA5 || b === 0xAA || b === 0xAB ||
                          b === 0xAC || b === 0xAD || b === 0x6C || b === 0x6D ||
                          b === 0x6E || b === 0x6F)) {
-        // REP prefix — repeat CX times
+        // REP prefix — repeat CX times (ECX with 0x67 in 32-bit mode, not implemented)
         let cx = gr16(1);
         if (cx === 0) break;
 

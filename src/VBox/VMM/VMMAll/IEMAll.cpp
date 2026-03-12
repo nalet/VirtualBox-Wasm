@@ -192,44 +192,80 @@ EM_JS(void, wasmJitSetRomBuffer, (void *pvROM, int cbROM, int uGCPhysStart), {
         globalThis.VBoxJIT.setRomBuffer(Number(pvROM), cbROM, uGCPhysStart);
 });
 
-static void    *s_pvJitRAM = NULL;
-static bool     s_fJitInitDone = false;
+static void    *s_pvJitRAM    = NULL;  /* NULL until PGMPhysGCPhys2CCPtr succeeds */
+static bool     s_fJitRomDone = false; /* true once ROM copy succeeded */
+static uint32_t s_cJitRetries = 0;     /* throttle counter for RAM init retries */
+static uint32_t s_cRomRetries = 0;     /* throttle counter for ROM copy retries */
 
 /* Defined in wasm-main.cpp — stores RAM base in shared Wasm memory for JS display */
 extern "C" void wasmJitSetGuestRAM(void *pv);
 
 static void iemJitEnsureInit(PVMCC pVM)
 {
-    if (RT_LIKELY(s_fJitInitDone))
+    /* Fast path: fully initialised */
+    if (RT_LIKELY(s_pvJitRAM && s_fJitRomDone))
         return;
-    s_fJitInitDone = true;
 
-    /* Get flat RAM pointer */
-    PGMPAGEMAPLOCK Lock;
-    void *pv = NULL;
-    int rc = PGMPhysGCPhys2CCPtr(pVM, 0 /*GCPhys*/, &pv, &Lock);
-    if (RT_SUCCESS(rc) && pv)
+    /* ── Phase 1: get flat RAM pointer ── */
+    if (!s_pvJitRAM)
     {
-        s_pvJitRAM = pv;
-        wasmJitSetGuestRAM(pv);
-        LogRel(("[JIT] RAM base: %p\n", pv));
-    }
-    else
-    {
-        LogRel(("[JIT] PGMPhysGCPhys2CCPtr FAILED: rc=%d\n", rc));
-        return;
+        /* Throttle retries: try on call #1, then every 4096th call thereafter */
+        ++s_cJitRetries;
+        if (s_cJitRetries != 1 && (s_cJitRetries & 0xFFF) != 0)
+            return;
+
+        /* Try several physical addresses in case page 0 is not yet faulted in.
+         * The offset between the returned host pointer and GCPhys is constant
+         * for the flat guest RAM mapping. */
+        static const RTGCPHYS s_aGCPhysTry[] = { 0x1000, 0x400, 0, 0x7000 };
+        for (unsigned iTry = 0; iTry < RT_ELEMENTS(s_aGCPhysTry); iTry++)
+        {
+            PGMPAGEMAPLOCK Lock;
+            void *pv = NULL;
+            int rc = PGMPhysGCPhys2CCPtr(pVM, s_aGCPhysTry[iTry], &pv, &Lock);
+            if (RT_SUCCESS(rc) && pv)
+            {
+                /* Compute base: host ptr at GCPhys X  →  base = pv - X */
+                s_pvJitRAM = (uint8_t *)pv - (size_t)s_aGCPhysTry[iTry];
+                wasmJitSetGuestRAM(s_pvJitRAM);
+                char szMsg[96];
+                RTStrPrintf(szMsg, sizeof(szMsg),
+                            "RAM init OK: gcPhys=0x%x pv=%p base=%p attempt=%u",
+                            (unsigned)s_aGCPhysTry[iTry], pv, s_pvJitRAM, s_cJitRetries);
+                wasmJitLog(szMsg);
+                /* Don't release the lock — we want the mapping to stay live */
+                break;
+            }
+            else
+            {
+                char szMsg[80];
+                RTStrPrintf(szMsg, sizeof(szMsg),
+                            "RAM init fail: gcPhys=0x%x rc=%d attempt=%u",
+                            (unsigned)s_aGCPhysTry[iTry], rc, s_cJitRetries);
+                wasmJitLog(szMsg);
+            }
+        }
+        if (!s_pvJitRAM)
+            return; /* Will retry on next throttle tick */
     }
 
-    /* Copy ROM (0xC0000-0xFFFFF = 256KB) using PGMPhysRead with IEM origin.
-     * PGMPhysRead goes through the ROM access handler which correctly returns
-     * the Virgin (original ROM) page content. */
-    wasmJitLog("Copying ROM 0xC0000-0xFFFFF via PGMPhysRead...");
-    const uint32_t cbROM     = 0x40000;  /* 256 KB */
-    const uint32_t uROMStart = 0xC0000;
-    void *pvROM = RTMemAllocZ(cbROM);
-    if (!pvROM) { wasmJitLog("RTMemAllocZ failed for ROM buffer"); return; }
+    /* ── Phase 2: copy ROM (0xC0000–0xFFFFF = 256 KB) ── */
+    if (!s_fJitRomDone)
     {
-        /* Read page by page to track failures */
+        /* Throttle ROM retries: try every 4096th call to avoid spending too
+         * much time on page reads if ROM isn't ready yet */
+        ++s_cRomRetries;
+        if (s_cRomRetries != 1 && (s_cRomRetries & 0xFFF) != 0)
+            return;
+
+        s_fJitRomDone = true; /* set before attempt; reset below if rejected */
+
+        wasmJitLog("Copying ROM 0xC0000-0xFFFFF via PGMPhysRead...");
+        const uint32_t cbROM     = 0x40000;  /* 256 KB */
+        const uint32_t uROMStart = 0xC0000;
+        void *pvROM = RTMemAllocZ(cbROM);
+        if (!pvROM) { wasmJitLog("RTMemAllocZ failed for ROM buffer"); return; }
+
         uint32_t cPagesOK = 0, cPagesFail = 0;
         int lastFailRc = 0;
         for (uint32_t off = 0; off < cbROM; off += GUEST_PAGE_SIZE)
@@ -237,34 +273,21 @@ static void iemJitEnsureInit(PVMCC pVM)
             VBOXSTRICTRC rcPage = PGMPhysRead(pVM, (RTGCPHYS)(uROMStart + off),
                                               (uint8_t *)pvROM + off, GUEST_PAGE_SIZE,
                                               PGMACCESSORIGIN_IEM);
-            if (RT_SUCCESS((int)rcPage))
-                cPagesOK++;
-            else
-            {
-                cPagesFail++;
-                lastFailRc = (int)rcPage;
-            }
+            if (RT_SUCCESS((int)rcPage)) cPagesOK++;
+            else { cPagesFail++; lastFailRc = (int)rcPage; }
         }
 
-        /* Verify: check if we got real ROM content */
         uint8_t *pb = (uint8_t *)pvROM;
         uint32_t cNonTrivial = 0;
         for (uint32_t i = 0; i < cbROM; i++)
-            if (pb[i] != 0xFF && pb[i] != 0x00)
-                cNonTrivial++;
-
-        /* Check specific ROM signatures */
-        /* VGA BIOS at 0xC0000 starts with 0x55 0xAA */
-        /* System BIOS at 0xF0000 starts with actual code */
-        uint8_t vgaSig0 = pb[0], vgaSig1 = pb[1];
-        uint8_t biosSig = pb[0x30000]; /* 0xF0000 - 0xC0000 = offset 0x30000 */
+            if (pb[i] != 0xFF && pb[i] != 0x00) cNonTrivial++;
 
         char szMsg[256];
         RTStrPrintf(szMsg, sizeof(szMsg),
-                    "ROM: %u pages OK, %u fail (lastRc=%d), non-trivial=%u, "
-                    "vga[0:1]=0x%02x,0x%02x bios[F0000]=0x%02x",
+                    "ROM: %u pages OK, %u fail (lastRc=%d) non-trivial=%u"
+                    " vga[0:1]=0x%02x,0x%02x bios[F0000]=0x%02x",
                     cPagesOK, cPagesFail, lastFailRc, cNonTrivial,
-                    vgaSig0, vgaSig1, biosSig);
+                    pb[0], pb[1], pb[0x30000]);
         wasmJitLog(szMsg);
 
         if (cPagesOK > 0 && cNonTrivial > 100)
@@ -273,6 +296,8 @@ static void iemJitEnsureInit(PVMCC pVM)
         {
             wasmJitLog("ROM buffer REJECTED: content looks empty");
             RTMemFree(pvROM);
+            /* Allow re-attempt: reset the done flag so we try again later */
+            s_fJitRomDone = false;
         }
     }
 }
@@ -1116,9 +1141,16 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                  * Do the decoding and emulation.
                  */
 #ifdef __EMSCRIPTEN__
-                /* JIT fast path: try JS interpreter before IEM decode. */
+                /* JIT fast path: try JS interpreter before IEM decode.
+                 *
+                 * s_cIemAfterJitBail: after the JIT bails on an I/O instruction (returns 0),
+                 * we let IEM execute a few instructions (the rest of the BSY polling loop:
+                 * typically TEST + JNZ + maybe a few more) before re-entering the JIT.
+                 * This avoids calling the JIT just for 2-3 instructions between consecutive
+                 * IN instructions, saving significant overhead during ATA BSY polling. */
+                static uint32_t s_cIemAfterJitBail = 0;
                 iemJitEnsureInit(pVM);
-                if (s_pvJitRAM)
+                if (s_pvJitRAM && s_cIemAfterJitBail == 0)
                 {
                     uint32_t cBatch = RT_MIN(cMaxInstructionsGccStupidity, 4096);
                     int cJitInsns = wasmJitExecBlock(&pVCpu->cpum.GstCtx, s_pvJitRAM, cBatch);
@@ -1149,7 +1181,14 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                         rcStrict = VINF_SUCCESS;
                         break;
                     }
+                    /* JIT returned 0 — it bailed on the very first instruction (I/O, paging,
+                       protected mode, etc.).  Let IEM handle the next few instructions to cover
+                       the remainder of typical polling loops (IN; TEST; JNZ) without the
+                       overhead of a wasted JIT call for just 2-3 instructions. */
+                    s_cIemAfterJitBail = 4;
                 }
+                else if (s_cIemAfterJitBail > 0)
+                    s_cIemAfterJitBail--;
 #endif
                 rcStrict = iemExecDecodeAndInterpretTargetInstruction(pVCpu);
 #if defined(VBOX_STRICT) && defined(VBOX_VMM_TARGET_X86)

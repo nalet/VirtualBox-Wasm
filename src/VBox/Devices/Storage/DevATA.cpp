@@ -1105,10 +1105,10 @@ static void ataR3StartTransfer(PPDMDEVINS pDevIns, PATACONTROLLER pCtl, PATADEVS
            processing a RESET sequence.  Wait briefly for the controller to become
            idle instead of silently dropping the command, which would cause the BIOS
            ATA/ATAPI detection to fail. */
+        LogRel(("PIIX3 IDE: Ctl#%d: async I/O not idle for cmd %#04x (state %d), waiting...\n",
+                pCtl->iCtl, s->uATARegCommand, pCtl->uAsyncIOState));
         for (unsigned iWait = 0; iWait < 200; iWait++)
         {
-            LogRel(("PIIX3 IDE: Ctl#%d: waiting for async I/O idle before cmd %#04x (attempt %u, state %d)\n",
-                    pCtl->iCtl, s->uATARegCommand, iWait, pCtl->uAsyncIOState));
             PDMDevHlpCritSectLeave(pDevIns, &pCtl->lock);
             RTThreadSleep(5 /*ms*/);
             int const rcLock = PDMDevHlpCritSectEnter(pDevIns, &pCtl->lock, VINF_SUCCESS);
@@ -4930,8 +4930,19 @@ static VBOXSTRICTRC ataIOPortReadU8(PPDMDEVINS pDevIns, PATACONTROLLER pCtl, uin
             {
 #ifdef IN_RING3
                 /* @bugref{1960}: Don't yield all the time, unless it's a reset (can be tricky). */
+#ifdef __EMSCRIPTEN__
+                /* Wasm: sched_yield() is a no-op in Emscripten, and ASMNopPause()
+                   is a no-op on Wasm.  Non-yielding poll iterations are pure waste —
+                   the EMT just releases and re-acquires the lock without giving the
+                   async I/O thread any opportunity to run.  Force yield on EVERY
+                   BSY poll so the 1 ms sleep always fires.  This turns ~50 % wasted
+                   polls into useful yield windows and cuts ATAPI I/O latency in half. */
+                bool fYield = true;
+                s->cBusyStatusHackR3++;
+#else
                 bool fYield = (s->cBusyStatusHackR3++ & s->cBusyStatusHackR3Rate) == 0
                             || pCtl->fReset;
+#endif
 
                 ataR3LockLeave(pDevIns, pCtl);
 

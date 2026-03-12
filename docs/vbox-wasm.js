@@ -326,6 +326,13 @@ globalThis.VBoxJIT = (function() {
   let portInFn = null, portOutFn = null;
   // ── I/O diagnostic: track IN/OUT per IP for stall detection ──
   const ioDiagCounts = new Map;
+  // ── ATA I/O aggregate counter for BSY polling diagnostics ──
+  let ataStatusPolls = 0;
+  // total IN to 0x1F7/0x177
+  let ataStatusPollStart = 0;
+  // timestamp of first poll in current burst
+  let ataStatusLastReport = 0;
+  // timestamp of last aggregate log
   // ── BIOS debug port capture (ports 0x402/0x403/0x504) ──
   let biosDebugBuf = "";
   function biosDebugChar(c) {
@@ -2058,6 +2065,18 @@ globalThis.VBoxJIT = (function() {
             ilen += isImm ? 2 : 1;
             break;
           }
+          // ATA status register polling aggregate tracking
+          const isAtaStatus = !isOut && (portNum === 503 || portNum === 375);
+          if (isAtaStatus) {
+            ataStatusPolls++;
+            if (!ataStatusPollStart) ataStatusPollStart = Date.now();
+            const now = Date.now();
+            if (now - ataStatusLastReport > 3e3 && ataStatusPolls > 0) {
+              const elapsed = now - ataStatusPollStart;
+              console.log("[ATA-POLL] " + ataStatusPolls + " status polls in " + elapsed + "ms @" + (csBase >>> 4).toString(16) + ":" + ip.toString(16) + " port=0x" + portNum.toString(16));
+              ataStatusLastReport = now;
+            }
+          }
           // Log VGA attribute controller port 0x3C0-0x3DF with higher limit
           const isVgaPort = (portNum >= 960 && portNum <= 991);
           // Log the port being accessed (first 30 per IP to diagnose stalls; 200 for VGA ports)
@@ -2065,10 +2084,10 @@ globalThis.VBoxJIT = (function() {
           if (!ioDiagCounts.has(portDiagKey)) ioDiagCounts.set(portDiagKey, 0);
           const cnt = ioDiagCounts.get(portDiagKey) + 1;
           ioDiagCounts.set(portDiagKey, cnt);
-          const logLimit = isVgaPort ? 200 : 30;
+          const logLimit = isVgaPort ? 200 : (isAtaStatus ? 5 : 30);
           if (cnt <= logLimit || cnt % 1e4 === 0) {
             const dir = isOut ? "OUT" : "IN";
-            const logTag = isVgaPort ? "[VGA-IO]" : "[JIT-IO]";
+            const logTag = isVgaPort ? "[VGA-IO]" : (isAtaStatus ? "[ATA-IO]" : "[JIT-IO]");
             console.log(logTag + " @" + (csBase >>> 4).toString(16) + ":" + ip.toString(16) + " " + dir + " port=0x" + portNum.toString(16) + " DX=0x" + gr16(2).toString(16) + " AX=0x" + gr16(0).toString(16) + " #" + cnt);
           }
           lastBailOp = b;
@@ -4167,13 +4186,6 @@ globalThis.VBoxJIT = (function() {
       // the PGM MMIO handler. IP must not advance so IEM decodes from scratch.
       if (mmioFault) {
         mmioFault = false;
-        if (!execBlock._mmioLog) execBlock._mmioLog = {
-          count: 0
-        };
-        const mc = ++execBlock._mmioLog.count;
-        if (mc <= 50) {
-          console.log("[MMIO-BAIL] op=0x" + b.toString(16) + " @" + (csBase >>> 4).toString(16) + ":" + ip.toString(16) + " codePhys=0x" + codePhys.toString(16) + " #" + mc);
-        }
         lastBailOp = b;
         iter = maxInsn;
         break;

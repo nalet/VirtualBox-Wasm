@@ -223,6 +223,10 @@ const SEG_OFFS = [S_ES, S_CS, S_SS, S_DS, S_FS, S_GS, 0, 0]; // SREG encoding: 0
 let portInFn = null, portOutFn = null;
 // ── I/O diagnostic: track IN/OUT per IP for stall detection ──
 const ioDiagCounts = new Map();
+// ── ATA I/O aggregate counter for BSY polling diagnostics ──
+let ataStatusPolls = 0;      // total IN to 0x1F7/0x177
+let ataStatusPollStart = 0;  // timestamp of first poll in current burst
+let ataStatusLastReport = 0; // timestamp of last aggregate log
 // ── BIOS debug port capture (ports 0x402/0x403/0x504) ──
 let biosDebugBuf = '';
 function biosDebugChar(c) {
@@ -1433,6 +1437,21 @@ function execBlock(cpuP, ramB, maxInsn) {
         break; // handle locally, don't bail
       }
 
+      // ATA status register polling aggregate tracking
+      const isAtaStatus = !isOut && (portNum === 0x1F7 || portNum === 0x177);
+      if (isAtaStatus) {
+        ataStatusPolls++;
+        if (!ataStatusPollStart) ataStatusPollStart = Date.now();
+        const now = Date.now();
+        if (now - ataStatusLastReport > 3000 && ataStatusPolls > 0) {
+          const elapsed = now - ataStatusPollStart;
+          console.log('[ATA-POLL] ' + ataStatusPolls + ' status polls in ' +
+            elapsed + 'ms @' + (csBase>>>4).toString(16) + ':' + ip.toString(16) +
+            ' port=0x' + portNum.toString(16));
+          ataStatusLastReport = now;
+        }
+      }
+
       // Log VGA attribute controller port 0x3C0-0x3DF with higher limit
       const isVgaPort = (portNum >= 0x3C0 && portNum <= 0x3DF);
       // Log the port being accessed (first 30 per IP to diagnose stalls; 200 for VGA ports)
@@ -1440,10 +1459,10 @@ function execBlock(cpuP, ramB, maxInsn) {
       if (!ioDiagCounts.has(portDiagKey)) ioDiagCounts.set(portDiagKey, 0);
       const cnt = ioDiagCounts.get(portDiagKey) + 1;
       ioDiagCounts.set(portDiagKey, cnt);
-      const logLimit = isVgaPort ? 200 : 30;
+      const logLimit = isVgaPort ? 200 : (isAtaStatus ? 5 : 30);
       if (cnt <= logLimit || cnt % 10000 === 0) {
         const dir = isOut ? 'OUT' : 'IN';
-        const logTag = isVgaPort ? '[VGA-IO]' : '[JIT-IO]';
+        const logTag = isVgaPort ? '[VGA-IO]' : (isAtaStatus ? '[ATA-IO]' : '[JIT-IO]');
         console.log(logTag + ' @' + (csBase>>>4).toString(16) + ':' + ip.toString(16) +
           ' ' + dir + ' port=0x' + portNum.toString(16) +
           ' DX=0x' + gr16(2).toString(16) + ' AX=0x' + gr16(0).toString(16) +

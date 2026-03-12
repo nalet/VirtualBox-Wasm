@@ -3192,9 +3192,11 @@ globalThis.VBoxJIT = (function() {
             const newIP = mem8[ci + 1] | (mem8[ci + 2] << 8);
             const newCS = mem8[ci + 3] | (mem8[ci + 4] << 8);
             ilen += 5;
-            // Update CS
             wr16(S_CS + SEG_SEL, newCS);
-            if (realMode) wr64(S_CS + SEG_BASE, newCS << 4);
+            if (realMode) {
+              csBase = newCS << 4;
+              wr64(S_CS + SEG_BASE, csBase);
+            }
             ip = newIP;
             ilen = 0;
             executed++;
@@ -3219,7 +3221,10 @@ globalThis.VBoxJIT = (function() {
             push16((ip + ilen) & 65535, ssBase);
             // push IP
             wr16(S_CS + SEG_SEL, newCS);
-            if (realMode) wr64(S_CS + SEG_BASE, newCS << 4);
+            if (realMode) {
+              csBase = newCS << 4;
+              wr64(S_CS + SEG_BASE, csBase);
+            }
             ip = newIP;
             ilen = 0;
             executed++;
@@ -3244,8 +3249,9 @@ globalThis.VBoxJIT = (function() {
           if (opSize === 2) {
             const newIP = pop16(ssBase);
             const newCS = pop16(ssBase);
+            csBase = newCS << 4;
             wr16(S_CS + SEG_SEL, newCS);
-            wr64(S_CS + SEG_BASE, newCS << 4);
+            wr64(S_CS + SEG_BASE, csBase);
             ip = newIP;
             ilen = 0;
             executed++;
@@ -3610,8 +3616,9 @@ globalThis.VBoxJIT = (function() {
           const ivtAddr = intNum * 4;
           const newIP = rw(ivtAddr);
           const newCS = rw(ivtAddr + 2);
+          csBase = newCS << 4;
           wr16(S_CS + SEG_SEL, newCS);
-          wr64(S_CS + SEG_BASE, newCS << 4);
+          wr64(S_CS + SEG_BASE, csBase);
           ip = newIP;
           ilen = 0;
           executed++;
@@ -3638,8 +3645,9 @@ globalThis.VBoxJIT = (function() {
           loadFlags(flags);
           const newIP3 = rw(3 * 4);
           const newCS3 = rw(3 * 4 + 2);
+          csBase = newCS3 << 4;
           wr16(S_CS + SEG_SEL, newCS3);
-          wr64(S_CS + SEG_BASE, newCS3 << 4);
+          wr64(S_CS + SEG_BASE, csBase);
           ip = newIP3;
           ilen = 0;
           executed++;
@@ -3659,8 +3667,9 @@ globalThis.VBoxJIT = (function() {
           const iretIP = pop16(ssBase);
           const iretCS = pop16(ssBase);
           const iretFlags = pop16(ssBase);
+          csBase = iretCS << 4;
           wr16(S_CS + SEG_SEL, iretCS);
-          wr64(S_CS + SEG_BASE, iretCS << 4);
+          wr64(S_CS + SEG_BASE, csBase);
           ip = iretIP;
           // Restore full flags
           flags = (iretFlags & 65535) | 2;

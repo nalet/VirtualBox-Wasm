@@ -1423,14 +1423,18 @@ function execBlock(cpuP, ramB, maxInsn) {
         break; // handle locally, don't bail
       }
 
-      // Log the port being accessed (first 30 per IP to diagnose stalls)
-      const portDiagKey = ip;
+      // Log VGA attribute controller port 0x3C0-0x3DF with higher limit
+      const isVgaPort = (portNum >= 0x3C0 && portNum <= 0x3DF);
+      // Log the port being accessed (first 30 per IP to diagnose stalls; 200 for VGA ports)
+      const portDiagKey = (isVgaPort ? 0x10000 : 0) | portNum;
       if (!ioDiagCounts.has(portDiagKey)) ioDiagCounts.set(portDiagKey, 0);
       const cnt = ioDiagCounts.get(portDiagKey) + 1;
       ioDiagCounts.set(portDiagKey, cnt);
-      if (cnt <= 30 || cnt % 10000 === 0) {
+      const logLimit = isVgaPort ? 200 : 30;
+      if (cnt <= logLimit || cnt % 10000 === 0) {
         const dir = isOut ? 'OUT' : 'IN';
-        console.log('[JIT-IO] @' + (csBase>>>4).toString(16) + ':' + ip.toString(16) +
+        const logTag = isVgaPort ? '[VGA-IO]' : '[JIT-IO]';
+        console.log(logTag + ' @' + (csBase>>>4).toString(16) + ':' + ip.toString(16) +
           ' ' + dir + ' port=0x' + portNum.toString(16) +
           ' DX=0x' + gr16(2).toString(16) + ' AX=0x' + gr16(0).toString(16) +
           ' #' + cnt);
@@ -2740,7 +2744,18 @@ function execBlock(cpuP, ramB, maxInsn) {
       if (!realMode) { lastBailOp = b; iter = maxInsn; break; } // protected mode INT needs IDT
       const intNum = mem8[ci+1];
       // Bail to IEM for video BIOS (INT 10h) — needs MMIO for VGA memory writes
-      if (intNum === 0x10) { lastBailOp = b; iter = maxInsn; break; }
+      if (intNum === 0x10) {
+        const ah = (gr16(0) >> 8) & 0xFF;
+        if (!wasmJit._int10Log) wasmJit._int10Log = [];
+        wasmJit._int10Log.push({ ah, cs: csBase>>>4, ip });
+        if (wasmJit._int10Log.length <= 100)
+          console.log('[INT10] AH=0x' + ah.toString(16).padStart(2,'0') +
+            ' AL=0x' + (gr16(0)&0xFF).toString(16).padStart(2,'0') +
+            ' BX=0x' + gr16(3).toString(16).padStart(4,'0') +
+            ' @' + (csBase>>>4).toString(16) + ':' + ip.toString(16) +
+            ' #' + wasmJit._int10Log.length);
+        lastBailOp = b; iter = maxInsn; break;
+      }
       // Materialize FLAGS: arithmetic bits from lazy, IF/DF/IOPL from stored flags
       const arithFlags = flagsToWord();
       const pushFlags = (flags & ~0x8D5) | (arithFlags & 0x8D5);

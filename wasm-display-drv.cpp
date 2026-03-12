@@ -124,6 +124,18 @@ static DECLCALLBACK(int) wasmDispResize(PPDMIDISPLAYCONNECTOR pInterface,
     pThis->IConnector.cx         = cx;
     pThis->IConnector.cy         = cy;
 
+    /*
+     * Tell the VGA device to render into our framebuffer.
+     * Without this, fRenderVRAM stays false and VGA never draws glyphs
+     * (text mode) or scanlines (graphics mode) into pbData.
+     *
+     * For text modes, VGA calls pfnResize with bpp=0 and cbLine=0 because
+     * "direct use of guest VRAM is not implemented" for text.  VGA renders
+     * glyphs into pDrv->pbData only when fRenderVRAM is true.
+     */
+    if (pThis->pPort)
+        pThis->pPort->pfnSetRenderVRAM(pThis->pPort, true);
+
     pThis->fDirty = 1;
     return VINF_SUCCESS;
 }
@@ -256,6 +268,13 @@ static DECLCALLBACK(int) wasmDispConstruct(PPDMDRVINS pDrvIns, PCFGMNODE pCfg, u
 
     /* Set the global pointer for JS access. */
     g_pWasmDisplay = pThis;
+
+    /*
+     * Tell the VGA device to render into our framebuffer buffer
+     * (not directly into guest VRAM).  This sets fRenderVRAM = true
+     * inside the VGA device, which gates all glyph/scanline drawing.
+     */
+    pThis->pPort->pfnSetRenderVRAM(pThis->pPort, true);
 
     /*
      * Arm the VGA refresh timer (50ms = 20fps).

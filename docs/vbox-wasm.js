@@ -46,6 +46,12 @@ var ENVIRONMENT_IS_PTHREAD = ENVIRONMENT_IS_WORKER && globalThis.name == "em-pth
 // V8/SpiderMonkey JIT-compiles this interpreter into fast native code.
 'use strict';
 
+// jit-pre.js — x86 fast interpreter for VirtualBox/Wasm
+// Embedded via --pre-js. Runs in all threads (main + workers).
+// Called from EM_JS hook in IEM execution loop.
+// V8/SpiderMonkey JIT-compiles this interpreter into fast native code.
+'use strict';
+
 globalThis.VBoxJIT = (function() {
 
 // ── CPUMCTX register offsets (from cpumctx-x86-amd64.h) ──
@@ -223,16 +229,20 @@ function rb(addr) { return guestRb(addr); }
 function rw(addr) { return guestRw(addr); }
 function rd(addr) { return guestRd(addr); }
 function wb(addr, v) {
+  // VGA memory range: bail to IEM so VGA device sees writes via PGM MMIO handler
+  if (addr >= 0xA0000 && addr < 0xC0000) { mmioFault = true; return; }
   const off = ramBase + addr;
   if (off >= mem8.length) { mmioFault = true; return; }
   mem8[off] = v;
 }
 function ww(addr, v) {
+  if (addr >= 0xA0000 && addr < 0xC0000) { mmioFault = true; return; }
   const off = ramBase + addr;
   if (off + 2 > mem8.length) { mmioFault = true; return; }
   dv.setUint16(off, v & 0xFFFF, true);
 }
 function wd(addr, v) {
+  if (addr >= 0xA0000 && addr < 0xC0000) { mmioFault = true; return; }
   const off = ramBase + addr;
   if (off + 4 > mem8.length) { mmioFault = true; return; }
   dv.setUint32(off, v >>> 0, true);
@@ -2787,10 +2797,15 @@ function execBlock(cpuP, ramB, maxInsn) {
 
     // ──── HLT (0xF4) — halt processor ────
     case 0xF4:
-      // Bail WITHOUT advancing IP so IEM decodes and executes HLT properly.
-      // IEM enters halt state and waits for hardware interrupt delivery.
-      // (If we advance IP here, IEM never sees HLT and can't halt the VCPU.)
-      lastBailOp = b; iter = maxInsn;
+      if ((flags >> 9) & 1) {
+        // IF=1: bail to IEM WITHOUT advancing IP so IEM properly enters halt state.
+        // An interrupt will wake the CPU (PIT IRQ0, keyboard, etc.).
+        lastBailOp = b; iter = maxInsn;
+      } else {
+        // IF=0: interrupts disabled, HLT here is early-POST initialization pattern.
+        // Skip it (advance IP) so BIOS POST continues rather than halting forever.
+        ilen = 1;
+      }
       break;
 
     // ──── Unsupported — fallback to IEM ────

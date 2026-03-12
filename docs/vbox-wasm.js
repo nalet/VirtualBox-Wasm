@@ -2746,6 +2746,48 @@ globalThis.VBoxJIT = (function() {
               break;
             }
 
+           case 2:
+            {
+              // RCL — rotate left through CF
+              const bc = sz * 8;
+              const cf = getCF();
+              const cnt = count % (bc + 1);
+              // effective count mod (bits+1)
+              if (cnt === 0) break;
+              // Concatenate CF:val as (bc+1)-bit value, rotate left by cnt
+              // New CF = bit (bc - cnt) of original val (or original CF if cnt == bc)
+              const newCF = cnt < bc ? ((val >> (bc - cnt)) & 1) : cf;
+              // Result: top (cnt-1) bits come from low bits of val, bottom (bc-cnt) bits
+              // come from original val shifted left, + original CF shifted in at bit (bc-cnt)
+              if (cnt === 1) {
+                res = ((val << 1) | cf) & mask;
+              } else {
+                // General case: bits [bc-1 : bc-cnt+1] = val[cnt-2:0], bit[bc-cnt] = cf, bits[bc-cnt-1:0] = val[bc-1:cnt]
+                res = (((val << cnt) | (cf << (cnt - 1)) | (val >>> (bc - cnt + 1))) & mask) >>> 0;
+              }
+              lazyCF = newCF;
+              lazyOp = OP_NONE;
+              break;
+            }
+
+           case 3:
+            {
+              // RCR — rotate right through CF
+              const bc = sz * 8;
+              const cf = getCF();
+              const cnt = count % (bc + 1);
+              if (cnt === 0) break;
+              const newCF = cnt === 1 ? (val & 1) : ((val >> (cnt - 1)) & 1);
+              if (cnt === 1) {
+                res = ((cf << (bc - 1)) | (val >>> 1)) & mask;
+              } else {
+                res = (((val >>> cnt) | (cf << (bc - cnt)) | (val << (bc - cnt + 1))) & mask) >>> 0;
+              }
+              lazyCF = newCF;
+              lazyOp = OP_NONE;
+              break;
+            }
+
            default:
             lastBailOp = b;
             iter = maxInsn;
@@ -2916,6 +2958,47 @@ globalThis.VBoxJIT = (function() {
           const b2 = mem8[ci + 1];
           ilen += 2;
           switch (b2) {
+           // CMOVcc r16/32, r/m16/32 (0x0F 0x40-0x4F)
+            case 64:
+           case 65:
+           case 66:
+           case 67:
+           case 68:
+           case 69:
+           case 70:
+           case 71:
+           case 72:
+           case 73:
+           case 74:
+           case 75:
+           case 76:
+           case 77:
+           case 78:
+           case 79:
+            {
+              const modrm = mem8[ci + 2];
+              ilen += 1;
+              const reg = (modrm >> 3) & 7;
+              if (testCC(b2 - 64)) {
+                let val;
+                if ((modrm >> 6) === 3) {
+                  val = opSize === 2 ? gr16(modrm & 7) : gr32(modrm & 7);
+                } else {
+                  const m = addrSize === 2 ? decodeModRM16(modrm, mem8, ci + 3, effDS, effSS) : decodeModRM32(modrm, mem8, ci + 3, effDS, effSS);
+                  ilen += m.len;
+                  val = opSize === 2 ? rw(m.ea) : rd(m.ea);
+                }
+                if (opSize === 2) sr16(reg, val); else sr32(reg, val);
+              } else {
+                // Condition false: skip operand decode but still advance ilen
+                if ((modrm >> 6) !== 3) {
+                  const m = addrSize === 2 ? decodeModRM16(modrm, mem8, ci + 3, effDS, effSS) : decodeModRM32(modrm, mem8, ci + 3, effDS, effSS);
+                  ilen += m.len;
+                }
+              }
+              break;
+            }
+
            // Jcc rel16/32 (0x0F 0x80-0x8F)
             case 128:
            case 129:
@@ -2949,6 +3032,56 @@ globalThis.VBoxJIT = (function() {
                 executed++;
                 wr16(R_IP, ip);
                 continue;
+              }
+              break;
+            }
+
+           // CMPXCHG r/m8, r8 (0x0F 0xB0)
+            case 176:
+            {
+              const modrm = mem8[ci + 2];
+              ilen += 1;
+              const reg = (modrm >> 3) & 7;
+              let dst, mea8 = -1;
+              if ((modrm >> 6) === 3) dst = gr8(modrm & 7); else {
+                const m = addrSize === 2 ? decodeModRM16(modrm, mem8, ci + 3, effDS, effSS) : decodeModRM32(modrm, mem8, ci + 3, effDS, effSS);
+                ilen += m.len;
+                mea8 = m.ea;
+                dst = rb(m.ea);
+              }
+              const al = gr8(0);
+              setFlagsArith(OP_SUB, (al - dst) & 255, al, dst, 1);
+              if (al === dst) {
+                if ((modrm >> 6) === 3) sr8(modrm & 7, gr8(reg)); else wb(mea8, gr8(reg));
+              } else sr8(0, dst);
+              break;
+            }
+
+           // CMPXCHG r/m16/32, r16/32 (0x0F 0xB1)
+            case 177:
+            {
+              const modrm = mem8[ci + 2];
+              ilen += 1;
+              const reg = (modrm >> 3) & 7;
+              let dst;
+              let mea2 = -1;
+              if ((modrm >> 6) === 3) dst = opSize === 2 ? gr16(modrm & 7) : gr32(modrm & 7); else {
+                const m = addrSize === 2 ? decodeModRM16(modrm, mem8, ci + 3, effDS, effSS) : decodeModRM32(modrm, mem8, ci + 3, effDS, effSS);
+                ilen += m.len;
+                mea2 = m.ea;
+                dst = opSize === 2 ? rw(m.ea) : rd(m.ea);
+              }
+              const ax = opSize === 2 ? gr16(0) : gr32(0);
+              if (opSize === 2) setFlagsArith(OP_SUB, (ax - dst) & 65535, ax, dst, 2); else setFlagsArith(OP_SUB, (ax - dst) >>> 0, ax, dst, 4);
+              if (ax === dst) {
+                const src = opSize === 2 ? gr16(reg) : gr32(reg);
+                if ((modrm >> 6) === 3) {
+                  if (opSize === 2) sr16(modrm & 7, src); else sr32(modrm & 7, src);
+                } else {
+                  if (opSize === 2) ww(mea2, src); else wd(mea2, src);
+                }
+              } else {
+                if (opSize === 2) sr16(0, dst); else sr32(0, dst);
               }
               break;
             }
@@ -3137,6 +3270,39 @@ globalThis.VBoxJIT = (function() {
                 lazyRes = 1;
                 lazySize = opSize;
               }
+              break;
+            }
+
+           // BT/BTS/BTR/BTC r/m16/32, r16/32 (0x0F 0xA3/0xAB/0xB3/0xBB)
+            case 163:
+           case 171:
+           case 179:
+           case 187:
+            {
+              const modrm = mem8[ci + 2];
+              ilen += 1;
+              const reg = (modrm >> 3) & 7;
+              const bitIdx = (opSize === 2 ? gr16(reg) : gr32(reg)) & (opSize === 2 ? 15 : 31);
+              let val;
+              if ((modrm >> 6) === 3) {
+                val = opSize === 2 ? gr16(modrm & 7) : gr32(modrm & 7);
+                lazyCF = (val >> bitIdx) & 1;
+                if (b2 === 171) val |= (1 << bitIdx); else if (b2 === 179) val &= ~(1 << bitIdx); else if (b2 === 187) val ^= (1 << bitIdx);
+                // BTC
+                if (b2 !== 163) {
+                  if (opSize === 2) sr16(modrm & 7, val & 65535); else sr32(modrm & 7, val >>> 0);
+                }
+              } else {
+                const m = addrSize === 2 ? decodeModRM16(modrm, mem8, ci + 3, effDS, effSS) : decodeModRM32(modrm, mem8, ci + 3, effDS, effSS);
+                ilen += m.len;
+                val = opSize === 2 ? rw(m.ea) : rd(m.ea);
+                lazyCF = (val >> bitIdx) & 1;
+                if (b2 === 171) val |= (1 << bitIdx); else if (b2 === 179) val &= ~(1 << bitIdx); else if (b2 === 187) val ^= (1 << bitIdx);
+                if (b2 !== 163) {
+                  if (opSize === 2) ww(m.ea, val & 65535); else wd(m.ea, val >>> 0);
+                }
+              }
+              lazyOp = OP_NONE;
               break;
             }
 

@@ -1792,17 +1792,17 @@ globalThis.VBoxJIT = (function() {
         {
           const frameSize = mem8[ci + 1] | (mem8[ci + 2] << 8);
           const level = mem8[ci + 3] & 31;
-          ilen += 4;
-          // Push BP
-          push16(gr16(5), ssBase);
-          const framePtr = gr16(4);
-          // SP after push = new BP
-          // Level > 0: copy outer frames (rare in BIOS, bail if level > 0)
+          // Level > 0: copy outer frames (rare in BIOS, bail before touching state)
           if (level > 0) {
             lastBailOp = b;
             iter = maxInsn;
             break;
           }
+          ilen += 4;
+          push16(gr16(5), ssBase);
+          // push BP
+          const framePtr = gr16(4);
+          // SP after push = new BP
           sr16(5, framePtr);
           sr16(4, (gr16(4) - frameSize) & 65535);
           break;
@@ -2980,9 +2980,39 @@ globalThis.VBoxJIT = (function() {
               val = opSize === 2 ? rw(m.ea) : rd(m.ea);
             }
             if (opSize === 2) push16(val, ssBase); else push32(val, ssBase);
+          } else if (op === 3 || op === 5) {
+            // CALL FAR / JMP FAR m16:16 (indirect)
+            if (!realMode) {
+              lastBailOp = 65280 | op;
+              iter = maxInsn;
+              break;
+            }
+            // Only memory form (modrm /3 and /5 can't be register for far ops)
+            if ((modrm >> 6) === 3) {
+              lastBailOp = 65280 | op;
+              iter = maxInsn;
+              break;
+            }
+            const m = addrSize === 2 ? decodeModRM16(modrm, mem8, ci + 2, effDS, effSS) : decodeModRM32(modrm, mem8, ci + 2, effDS, effSS);
+            ilen += m.len;
+            // Read target [offset16, cs16] from memory
+            const newIP2 = rw(m.ea);
+            const newCS2 = rw(m.ea + 2);
+            if (op === 3) {
+              // CALL FAR
+              push16(csBase >>> 4, ssBase);
+              push16((ip + ilen) & 65535, ssBase);
+            }
+            ip = newIP2 & 65535;
+            csBase = newCS2 << 4;
+            wr16(S_CS + SEG_SEL, newCS2);
+            wr64(S_CS + SEG_BASE, csBase);
+            ilen = 0;
+            executed++;
+            wr16(R_IP, ip);
+            continue;
           } else {
-            // CALL/JMP far or undefined /7 — fallback
-            if (statTotalCalls < 100) console.log("[JIT] FF/" + op + " modrm=0x" + modrm.toString(16) + " at " + csBase.toString(16) + ":" + ip.toString(16) + " ci+1=" + mem8[ci].toString(16) + "," + mem8[ci + 1].toString(16) + "," + mem8[ci + 2].toString(16));
+            // Undefined /7 — fallback
             lastBailOp = 65280 | op;
             iter = maxInsn;
             break;

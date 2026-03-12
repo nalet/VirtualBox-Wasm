@@ -1165,7 +1165,7 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                                                        | VMCPU_FF_PGM_SYNC_CR3_NON_GLOBAL
                                                        | VMCPU_FF_TLB_FLUSH
                                                        | VMCPU_FF_UNHALT );
-                        if (RT_LIKELY(   !fCpu
+                        if (RT_LIKELY(   iemExecLoopTargetCheckMaskedCpuFFs(pVCpu, fCpu)
                                       && !VM_FF_IS_ANY_SET(pVM, VM_FF_ALL_MASK)
                                       && cMaxInstructionsGccStupidity > 0))
                         {

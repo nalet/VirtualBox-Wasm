@@ -789,17 +789,15 @@ globalThis.VBoxJIT = (function() {
     // Pre-read a chunk of code for fast access
     let codePhys = csBase + ip;
     // Check if address is in accessible range.
-    // When romBufSize > 0: use ROM buffer for ROM range (0xC0000-0xFFFFF).
-    // When romBufSize == 0: use flat RAM for ALL addresses (ROM pages are mapped
-    //   into the flat guest physical space by VirtualBox's PGM, so mem8[ramBase+addr]
-    //   is valid for ROM addresses too).
+    // VirtualBox's PGM stores ROM (0xC0000-0xFFFFF) and MMIO (0xA0000-0xBFFFF)
+    // via page handlers — these addresses are NOT in the flat RAM buffer (they read as 0).
+    // Only execute from flat RAM (< 0xA0000) or the ROM buffer (when initialized).
     const addrAccessible = addr => {
       if (romBufSize > 0 && addr >= romGCPhysStart && addr < romGCPhysEnd) return true;
-      return addr + 16 <= ramSize;
+      return addr < 655360 && addr + 16 <= ramSize;
     };
-    const inRomRange = addr => addr >= 786432 && addr < 1048576;
-    if (!addrAccessible(codePhys) && !inRomRange(codePhys)) {
-      if (statTotalCalls < 5) console.log("[JIT] bail: codePhys=0x" + codePhys.toString(16) + " ramSize=0x" + ramSize.toString(16) + " ramBase=0x" + ramBase.toString(16) + " csBase=0x" + csBase.toString(16) + " ip=0x" + ip.toString(16));
+    const inRomRange = addr => romBufSize > 0 && addr >= romGCPhysStart && addr < romGCPhysEnd;
+    if (!addrAccessible(codePhys)) {
       return 0;
     }
     // Bail periodically to let IEM deliver hardware interrupts (PIT timer, etc.)

@@ -86,7 +86,7 @@ static DECLCALLBACK(int) vboxWasmCfgmConstructor(PUVM pUVM, PVM pVM, PCVMMR3VTAB
      * VM properties.
      */
     INSERT_STRING(pRoot, "Name", "VBoxWasm");
-    INSERT_INTEGER(pRoot, "RamSize",      (uint64_t)4 * _1M);     /* 4 MB RAM — minimal for fastest BIOS POST under IEM */
+    INSERT_INTEGER(pRoot, "RamSize",      (uint64_t)1 * _1M);     /* 1 MB RAM — absolute minimum for fastest BIOS POST under IEM */
     INSERT_INTEGER(pRoot, "RamHoleSize",  (uint64_t)512 * _1M);
     INSERT_INTEGER(pRoot, "TimerMillies", 10);
     INSERT_INTEGER(pRoot, "NumCPUs",      1);

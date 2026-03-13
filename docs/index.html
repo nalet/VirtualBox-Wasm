@@ -437,22 +437,7 @@
 
         if (!fbPtr || w === 0 || h === 0) return;
 
-        // Check if VGA framebuffer has real content — switch off text mode fallback
         const mem = wasmMemory.buffer;
-        if (this.textMode) {
-          const testSrc = new Uint8Array(mem, fbPtr, Math.min(4000, w * h * 4));
-          let hasContent = false;
-          for (let i = 0; i < testSrc.length; i += 4) {
-            if (testSrc[i] || testSrc[i+1] || testSrc[i+2]) { hasContent = true; break; }
-          }
-          if (hasContent) {
-            this.textMode = false;
-          } else {
-            // FB still blank — try text mode fallback
-            if (this.renderTextMode()) return;
-            return; // nothing to render yet
-          }
-        }
 
         // Resize canvas if display resolution changed
         if (w !== this.width || h !== this.height) {

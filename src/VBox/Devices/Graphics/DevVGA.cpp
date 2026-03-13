@@ -2758,6 +2758,20 @@ static int vgaR3UpdateDisplay(PPDMDEVINS pDevIns, PVGASTATE pThis, PVGASTATER3 p
         if (full_update) {
             *pcur_graphic_mode = graphic_mode;
         }
+#ifdef __EMSCRIPTEN__
+        /* Debug: track VGA mode statistics for Wasm display debugging */
+        {
+            static uint32_t s_cCalls = 0, s_cText = 0, s_cBlank = 0, s_cGraph = 0;
+            s_cCalls++;
+            if (graphic_mode == GMODE_TEXT) s_cText++;
+            else if (graphic_mode == GMODE_BLANK) s_cBlank++;
+            else s_cGraph++;
+            if (s_cCalls % 500 == 0)
+                RTPrintf("[VGA] mode stats: calls=%u text=%u blank=%u graph=%u ar_idx=0x%02x sr1=0x%02x fRender=%d cBits=%u cx=%u cy=%u\n",
+                         s_cCalls, s_cText, s_cBlank, s_cGraph,
+                         pThis->ar_index, pThis->sr[0x01], pThis->fRenderVRAM, pDrv->cBits, pDrv->cx, pDrv->cy);
+        }
+#endif
         switch(graphic_mode) {
         case GMODE_TEXT:
             rc = vgaR3DrawText(pDevIns, pThis, pThisCC, full_update, fFailOnResize, reset_dirty, pDrv);

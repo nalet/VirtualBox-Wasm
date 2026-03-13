@@ -136,6 +136,12 @@ function setRomBuffer(bufPtr, bufSize, gcPhysStart) {
 // to IEM so the instruction is re-executed via the PGM MMIO handler.
 let mmioFault = false;
 
+// A20 gate mask: when A20 is disabled, bit 20 of physical addresses is masked
+// to zero (addresses wrap at 1 MB). When A20 is enabled, all bits pass through.
+// This must match PGM's A20 masking to avoid the JIT seeing different memory
+// contents than IEM.  Set by execBlock from C++ PGMPhysIsA20Enabled().
+let a20Mask = 0xFFFFFFFF; // default: A20 enabled (all bits pass)
+
 // Read byte from guest physical address, ROM-aware
 function guestRb(addr) {
   if (romBufSize > 0 && addr >= romGCPhysStart && addr < romGCPhysEnd)
@@ -181,11 +187,14 @@ function wr8(off, v) { dv.setUint8(cpuPtr + off, v & 0xFF); }
 function segBase(segOff) { return Number(dv.getBigUint64(cpuPtr + segOff + SEG_BASE, true)); }
 
 // Guest physical memory read/write (ROM-aware for reads, paging-aware)
+// A20 masking is applied after address translation (linear -> physical).
+// In non-paging mode the linear address IS the physical address.
 function rb(addr) {
   if (_pagingOn) {
     addr = translateLinear(addr >>> 0);
     if (addr < 0) { mmioFault = true; return 0xFF; }
   }
+  addr = (addr & a20Mask) >>> 0;
   return guestRb(addr);
 }
 function rw(addr) {
@@ -193,6 +202,7 @@ function rw(addr) {
     addr = translateLinear(addr >>> 0);
     if (addr < 0) { mmioFault = true; return 0xFFFF; }
   }
+  addr = (addr & a20Mask) >>> 0;
   return guestRw(addr);
 }
 function rd(addr) {
@@ -200,6 +210,7 @@ function rd(addr) {
     addr = translateLinear(addr >>> 0);
     if (addr < 0) { mmioFault = true; return 0xFFFFFFFF; }
   }
+  addr = (addr & a20Mask) >>> 0;
   return guestRd(addr);
 }
 function wb(addr, v) {
@@ -207,6 +218,7 @@ function wb(addr, v) {
     addr = translateLinear(addr >>> 0);
     if (addr < 0) { mmioFault = true; return; }
   }
+  addr = (addr & a20Mask) >>> 0;
   // VGA memory range: bail to IEM so VGA device sees writes via PGM MMIO handler
   if (addr >= 0xA0000 && addr < 0xC0000) { mmioFault = true; return; }
   const off = ramBase + addr;
@@ -218,6 +230,7 @@ function ww(addr, v) {
     addr = translateLinear(addr >>> 0);
     if (addr < 0) { mmioFault = true; return; }
   }
+  addr = (addr & a20Mask) >>> 0;
   if (addr >= 0xA0000 && addr < 0xC0000) { mmioFault = true; return; }
   const off = ramBase + addr;
   if (off + 2 > mem8.length) { mmioFault = true; return; }
@@ -228,6 +241,7 @@ function wd(addr, v) {
     addr = translateLinear(addr >>> 0);
     if (addr < 0) { mmioFault = true; return; }
   }
+  addr = (addr & a20Mask) >>> 0;
   if (addr >= 0xA0000 && addr < 0xC0000) { mmioFault = true; return; }
   const off = ramBase + addr;
   if (off + 4 > mem8.length) { mmioFault = true; return; }
@@ -616,10 +630,13 @@ function translateLinear(linearAddr) {
 // cpuP:    pointer to CPUMCTX in Wasm linear memory
 // ramB:    pointer to guest RAM base in Wasm linear memory
 // maxInsn: max instructions to execute before returning
+// fA20:    1 if A20 gate enabled, 0 if disabled (from PGMPhysIsA20Enabled)
 //
-function execBlock(cpuP, ramB, maxInsn) {
+function execBlock(cpuP, ramB, maxInsn, fA20) {
   cpuPtr = cpuP;
   ramBase = ramB;
+  // Set A20 mask: when disabled, bit 20 is forced to 0 (address wrap at 1 MB)
+  a20Mask = fA20 ? 0xFFFFFFFF : ~(1 << 20);
   refreshViews();
 
   // Load frequently-used state
@@ -698,6 +715,7 @@ function execBlock(cpuP, ramB, maxInsn) {
   } else {
     codePhys = codeLinear;
   }
+  codePhys = (codePhys & a20Mask) >>> 0;
   if (!addrAccessible(codePhys)) {
     return 0;
   }
@@ -719,6 +737,7 @@ function execBlock(cpuP, ramB, maxInsn) {
     } else {
       codePhys = codeLinear;
     }
+    codePhys = (codePhys & a20Mask) >>> 0;
     if (codePhys < 0 || (!addrAccessible(codePhys))) break; // safety
 
     // Near page boundary: instruction might span two pages — bail to IEM
@@ -1746,10 +1765,14 @@ function execBlock(cpuP, ramB, maxInsn) {
             const origCx = cx;
             if (cx > maxChunk) cx = maxChunk;
             const byteCount = cx;
-            const addr = esBase + di;
-            // Compute range for both forward and backward
-            const addrLo = dir === 1 ? addr : addr - byteCount + 1;
-            const addrHi = dir === 1 ? addr + byteCount : addr + 1;
+            let addr = esBase + di;
+            // Apply A20 mask — compute range for both forward and backward
+            let addrLo = dir === 1 ? addr : addr - byteCount + 1;
+            let addrHi = dir === 1 ? addr + byteCount : addr + 1;
+            // When A20 is disabled and range crosses 1MB, it wraps (non-contiguous) — bail
+            if (a20Mask !== 0xFFFFFFFF && addrHi > 0x100000) {
+              lastBailOp = b; iter = maxInsn; break;
+            }
             if (addrLo >= 0 && addrHi <= ramSize && (addrHi <= 0xA0000 || addrLo >= 0xC0000)) {
               // Fast path: all in RAM (not MMIO 0xA0000-0xBFFFF)
               if (codeSegStart < 0xC0000 && addrHi > codeSegStart && addrLo < codeSegEnd) {
@@ -1776,9 +1799,13 @@ function execBlock(cpuP, ramB, maxInsn) {
             const origCxAB = cx;
             if (cx > maxChunkAB) cx = maxChunkAB;
             const totalBytes = cx * sz;
-            const addr = esBase + di;
-            const addrLo = dir === 1 ? addr : addr - totalBytes + sz;
-            const addrHi = dir === 1 ? addr + totalBytes : addr + sz;
+            let addr = esBase + di;
+            let addrLo = dir === 1 ? addr : addr - totalBytes + sz;
+            let addrHi = dir === 1 ? addr + totalBytes : addr + sz;
+            // When A20 is disabled and range crosses 1MB, it wraps (non-contiguous) — bail
+            if (a20Mask !== 0xFFFFFFFF && addrHi > 0x100000) {
+              lastBailOp = b; iter = maxInsn; break;
+            }
             if (addrLo >= 0 && addrHi <= ramSize && (addrHi <= 0xA0000 || addrLo >= 0xC0000)) {
               // Fast path: all in RAM (not MMIO)
               if (codeSegStart < 0xC0000 && addrHi > codeSegStart && addrLo < codeSegEnd) {
@@ -1824,6 +1851,10 @@ function execBlock(cpuP, ramB, maxInsn) {
             const srcHi = dir === 1 ? srcAddr + byteCount : srcAddr + 1;
             const dstLo = dir === 1 ? dstAddr : dstAddr - byteCount + 1;
             const dstHi = dir === 1 ? dstAddr + byteCount : dstAddr + 1;
+            // When A20 is disabled and either range crosses 1MB, bail
+            if (a20Mask !== 0xFFFFFFFF && (srcHi > 0x100000 || dstHi > 0x100000)) {
+              lastBailOp = b; iter = maxInsn; break;
+            }
             // Both src and dst must be in RAM (not MMIO 0xA0000-0xBFFFF, not ROM)
             const srcInRam = srcLo >= 0 && srcHi <= ramSize && (srcHi <= 0xA0000 || srcLo >= 0xC0000);
             const dstInRam = dstLo >= 0 && dstHi <= ramSize && (dstHi <= 0xA0000 || dstLo >= 0xC0000);
@@ -1858,6 +1889,10 @@ function execBlock(cpuP, ramB, maxInsn) {
             const srcHi5 = dir === 1 ? srcAddr5 + totalBytes5 : srcAddr5 + sz5;
             const dstLo5 = dir === 1 ? dstAddr5 : dstAddr5 - totalBytes5 + sz5;
             const dstHi5 = dir === 1 ? dstAddr5 + totalBytes5 : dstAddr5 + sz5;
+            // When A20 is disabled and either range crosses 1MB, bail
+            if (a20Mask !== 0xFFFFFFFF && (srcHi5 > 0x100000 || dstHi5 > 0x100000)) {
+              lastBailOp = b; iter = maxInsn; break;
+            }
             const srcOk5 = srcLo5 >= 0 && srcHi5 <= ramSize && (srcHi5 <= 0xA0000 || srcLo5 >= 0xC0000);
             const dstOk5 = dstLo5 >= 0 && dstHi5 <= ramSize && (dstHi5 <= 0xA0000 || dstLo5 >= 0xC0000);
             if (srcOk5 && dstOk5) {
@@ -3221,7 +3256,7 @@ let protModeDiagDone = false;
 const R_GDTR = 0x01C6;
 const R_IDTR = 0x01D6;
 
-function execBlockWrapped(cpuP, ramB, maxInsn) {
+function execBlockWrapped(cpuP, ramB, maxInsn, fA20) {
   statTotalCalls++;
   // Per-call diagnostics for first 20 calls, then every 100000
   if (statTotalCalls <= 20 || (statTotalCalls % 100000) === 0) {
@@ -3230,7 +3265,8 @@ function execBlockWrapped(cpuP, ramB, maxInsn) {
       ' cpuPtr=0x' + cpuN.toString(16) +
       ' ramBase=0x' + ramN.toString(16) +
       ' romBufSize=' + romBufSize +
-      ' maxInsn=' + maxInsn);
+      ' maxInsn=' + maxInsn +
+      ' A20=' + (fA20 ? 'on' : 'OFF'));
   }
   // One-time: verify ROM content is readable from flat RAM
   if (statTotalCalls === 1) {
@@ -3368,7 +3404,7 @@ function execBlockWrapped(cpuP, ramB, maxInsn) {
     }
   }
 
-  const n = execBlock(cpuP, ramB, maxInsn);
+  const n = execBlock(cpuP, ramB, maxInsn, fA20);
   if (n > 0) {
     statTotalInsns += n;
   } else {

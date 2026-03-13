@@ -190,6 +190,12 @@ globalThis.VBoxJIT = (function() {
   // (outside Wasm linear memory). The main loop checks this flag and bails
   // to IEM so the instruction is re-executed via the PGM MMIO handler.
   let mmioFault = false;
+  // A20 gate mask: when A20 is disabled, bit 20 of physical addresses is masked
+  // to zero (addresses wrap at 1 MB). When A20 is enabled, all bits pass through.
+  // This must match PGM's A20 masking to avoid the JIT seeing different memory
+  // contents than IEM.  Set by execBlock from C++ PGMPhysIsA20Enabled().
+  let a20Mask = 4294967295;
+  // default: A20 enabled (all bits pass)
   // Read byte from guest physical address, ROM-aware
   function guestRb(addr) {
     if (romBufSize > 0 && addr >= romGCPhysStart && addr < romGCPhysEnd) return mem8[romBufBase + (addr - romGCPhysStart)];
@@ -256,6 +262,8 @@ globalThis.VBoxJIT = (function() {
     return Number(dv.getBigUint64(cpuPtr + segOff + SEG_BASE, true));
   }
   // Guest physical memory read/write (ROM-aware for reads, paging-aware)
+  // A20 masking is applied after address translation (linear -> physical).
+  // In non-paging mode the linear address IS the physical address.
   function rb(addr) {
     if (_pagingOn) {
       addr = translateLinear(addr >>> 0);
@@ -264,6 +272,7 @@ globalThis.VBoxJIT = (function() {
         return 255;
       }
     }
+    addr = (addr & a20Mask) >>> 0;
     return guestRb(addr);
   }
   function rw(addr) {
@@ -274,6 +283,7 @@ globalThis.VBoxJIT = (function() {
         return 65535;
       }
     }
+    addr = (addr & a20Mask) >>> 0;
     return guestRw(addr);
   }
   function rd(addr) {
@@ -284,6 +294,7 @@ globalThis.VBoxJIT = (function() {
         return 4294967295;
       }
     }
+    addr = (addr & a20Mask) >>> 0;
     return guestRd(addr);
   }
   function wb(addr, v) {
@@ -294,6 +305,7 @@ globalThis.VBoxJIT = (function() {
         return;
       }
     }
+    addr = (addr & a20Mask) >>> 0;
     // VGA memory range: bail to IEM so VGA device sees writes via PGM MMIO handler
     if (addr >= 655360 && addr < 786432) {
       mmioFault = true;
@@ -314,6 +326,7 @@ globalThis.VBoxJIT = (function() {
         return;
       }
     }
+    addr = (addr & a20Mask) >>> 0;
     if (addr >= 655360 && addr < 786432) {
       mmioFault = true;
       return;
@@ -333,6 +346,7 @@ globalThis.VBoxJIT = (function() {
         return;
       }
     }
+    addr = (addr & a20Mask) >>> 0;
     if (addr >= 655360 && addr < 786432) {
       mmioFault = true;
       return;
@@ -922,9 +936,12 @@ globalThis.VBoxJIT = (function() {
   // cpuP:    pointer to CPUMCTX in Wasm linear memory
   // ramB:    pointer to guest RAM base in Wasm linear memory
   // maxInsn: max instructions to execute before returning
-  function execBlock(cpuP, ramB, maxInsn) {
+  // fA20:    1 if A20 gate enabled, 0 if disabled (from PGMPhysIsA20Enabled)
+  function execBlock(cpuP, ramB, maxInsn, fA20) {
     cpuPtr = cpuP;
     ramBase = ramB;
+    // Set A20 mask: when disabled, bit 20 is forced to 0 (address wrap at 1 MB)
+    a20Mask = fA20 ? 4294967295 : ~(1 << 20);
     refreshViews();
     // Load frequently-used state
     let flags = rr32(R_FLAGS);
@@ -998,6 +1015,7 @@ globalThis.VBoxJIT = (function() {
     } else {
       codePhys = codeLinear;
     }
+    codePhys = (codePhys & a20Mask) >>> 0;
     if (!addrAccessible(codePhys)) {
       return 0;
     }
@@ -1020,6 +1038,7 @@ globalThis.VBoxJIT = (function() {
       } else {
         codePhys = codeLinear;
       }
+      codePhys = (codePhys & a20Mask) >>> 0;
       if (codePhys < 0 || (!addrAccessible(codePhys))) break;
       // safety
       // Near page boundary: instruction might span two pages — bail to IEM
@@ -2378,10 +2397,16 @@ globalThis.VBoxJIT = (function() {
                 const origCx = cx;
                 if (cx > maxChunk) cx = maxChunk;
                 const byteCount = cx;
-                const addr = esBase + di;
-                // Compute range for both forward and backward
-                const addrLo = dir === 1 ? addr : addr - byteCount + 1;
-                const addrHi = dir === 1 ? addr + byteCount : addr + 1;
+                let addr = esBase + di;
+                // Apply A20 mask — compute range for both forward and backward
+                let addrLo = dir === 1 ? addr : addr - byteCount + 1;
+                let addrHi = dir === 1 ? addr + byteCount : addr + 1;
+                // When A20 is disabled and range crosses 1MB, it wraps (non-contiguous) — bail
+                if (a20Mask !== 4294967295 && addrHi > 1048576) {
+                  lastBailOp = b;
+                  iter = maxInsn;
+                  break;
+                }
                 if (addrLo >= 0 && addrHi <= ramSize && (addrHi <= 655360 || addrLo >= 786432)) {
                   // Fast path: all in RAM (not MMIO 0xA0000-0xBFFFF)
                   if (codeSegStart < 786432 && addrHi > codeSegStart && addrLo < codeSegEnd) {
@@ -2421,9 +2446,15 @@ globalThis.VBoxJIT = (function() {
                 const origCxAB = cx;
                 if (cx > maxChunkAB) cx = maxChunkAB;
                 const totalBytes = cx * sz;
-                const addr = esBase + di;
-                const addrLo = dir === 1 ? addr : addr - totalBytes + sz;
-                const addrHi = dir === 1 ? addr + totalBytes : addr + sz;
+                let addr = esBase + di;
+                let addrLo = dir === 1 ? addr : addr - totalBytes + sz;
+                let addrHi = dir === 1 ? addr + totalBytes : addr + sz;
+                // When A20 is disabled and range crosses 1MB, it wraps (non-contiguous) — bail
+                if (a20Mask !== 4294967295 && addrHi > 1048576) {
+                  lastBailOp = b;
+                  iter = maxInsn;
+                  break;
+                }
                 if (addrLo >= 0 && addrHi <= ramSize && (addrHi <= 655360 || addrLo >= 786432)) {
                   // Fast path: all in RAM (not MMIO)
                   if (codeSegStart < 786432 && addrHi > codeSegStart && addrLo < codeSegEnd) {
@@ -2483,6 +2514,12 @@ globalThis.VBoxJIT = (function() {
                 const srcHi = dir === 1 ? srcAddr + byteCount : srcAddr + 1;
                 const dstLo = dir === 1 ? dstAddr : dstAddr - byteCount + 1;
                 const dstHi = dir === 1 ? dstAddr + byteCount : dstAddr + 1;
+                // When A20 is disabled and either range crosses 1MB, bail
+                if (a20Mask !== 4294967295 && (srcHi > 1048576 || dstHi > 1048576)) {
+                  lastBailOp = b;
+                  iter = maxInsn;
+                  break;
+                }
                 // Both src and dst must be in RAM (not MMIO 0xA0000-0xBFFFF, not ROM)
                 const srcInRam = srcLo >= 0 && srcHi <= ramSize && (srcHi <= 655360 || srcLo >= 786432);
                 const dstInRam = dstLo >= 0 && dstHi <= ramSize && (dstHi <= 655360 || dstLo >= 786432);
@@ -2531,6 +2568,12 @@ globalThis.VBoxJIT = (function() {
                 const srcHi5 = dir === 1 ? srcAddr5 + totalBytes5 : srcAddr5 + sz5;
                 const dstLo5 = dir === 1 ? dstAddr5 : dstAddr5 - totalBytes5 + sz5;
                 const dstHi5 = dir === 1 ? dstAddr5 + totalBytes5 : dstAddr5 + sz5;
+                // When A20 is disabled and either range crosses 1MB, bail
+                if (a20Mask !== 4294967295 && (srcHi5 > 1048576 || dstHi5 > 1048576)) {
+                  lastBailOp = b;
+                  iter = maxInsn;
+                  break;
+                }
                 const srcOk5 = srcLo5 >= 0 && srcHi5 <= ramSize && (srcHi5 <= 655360 || srcLo5 >= 786432);
                 const dstOk5 = dstLo5 >= 0 && dstHi5 <= ramSize && (dstHi5 <= 655360 || dstLo5 >= 786432);
                 if (srcOk5 && dstOk5) {
@@ -4560,12 +4603,12 @@ globalThis.VBoxJIT = (function() {
   // idtr at 0x01D6: cbIdt(u16) at +0, pIdt(u64) at +2
   const R_GDTR = 454;
   const R_IDTR = 470;
-  function execBlockWrapped(cpuP, ramB, maxInsn) {
+  function execBlockWrapped(cpuP, ramB, maxInsn, fA20) {
     statTotalCalls++;
     // Per-call diagnostics for first 20 calls, then every 100000
     if (statTotalCalls <= 20 || (statTotalCalls % 1e5) === 0) {
       const cpuN = Number(cpuP), ramN = Number(ramB);
-      console.log("[JIT-DBG] call#" + statTotalCalls + " cpuPtr=0x" + cpuN.toString(16) + " ramBase=0x" + ramN.toString(16) + " romBufSize=" + romBufSize + " maxInsn=" + maxInsn);
+      console.log("[JIT-DBG] call#" + statTotalCalls + " cpuPtr=0x" + cpuN.toString(16) + " ramBase=0x" + ramN.toString(16) + " romBufSize=" + romBufSize + " maxInsn=" + maxInsn + " A20=" + (fA20 ? "on" : "OFF"));
     }
     // One-time: verify ROM content is readable from flat RAM
     if (statTotalCalls === 1) {
@@ -4681,7 +4724,7 @@ globalThis.VBoxJIT = (function() {
         console.log("[JIT-PROT] === END PROTECTED MODE DIAGNOSTIC ===");
       }
     }
-    const n = execBlock(cpuP, ramB, maxInsn);
+    const n = execBlock(cpuP, ramB, maxInsn, fA20);
     if (n > 0) {
       statTotalInsns += n;
     } else {
@@ -10825,13 +10868,13 @@ function wasmCallFuncPtrTrampoline(pfn, cArgs, pArgs) {
   return -1;
 }
 
-function wasmJitExecBlock(pCpumCtx, pvRAM, maxInsn) {
+function wasmJitExecBlock(pCpumCtx, pvRAM, maxInsn, fA20Enabled) {
   if (typeof globalThis.VBoxJIT === "undefined") return 0;
   if (!globalThis.VBoxJIT._initialized) {
     globalThis.VBoxJIT.init(wasmMemory);
     globalThis.VBoxJIT._initialized = true;
   }
-  return globalThis.VBoxJIT.execBlock(Number(pCpumCtx), Number(pvRAM), maxInsn);
+  return globalThis.VBoxJIT.execBlock(Number(pCpumCtx), Number(pvRAM), maxInsn, fA20Enabled);
 }
 
 function wasmJitLog(pszMsg) {

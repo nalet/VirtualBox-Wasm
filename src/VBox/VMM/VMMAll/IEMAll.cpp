@@ -1150,7 +1150,11 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                  * IN instructions, saving significant overhead during ATA BSY polling. */
                 static uint32_t s_cIemAfterJitBail = 0;
                 iemJitEnsureInit(pVM);
-                if (s_pvJitRAM && s_cIemAfterJitBail == 0)
+                /* Skip JIT entirely in protected mode — the JIT is a real-mode-only
+                   interpreter and returns 0 immediately when CR0.PE is set.  Checking
+                   here avoids the JS→Wasm call overhead on every instruction. */
+                bool const fRealMode = !(pVCpu->cpum.GstCtx.cr0 & X86_CR0_PE);
+                if (s_pvJitRAM && s_cIemAfterJitBail == 0 && fRealMode)
                 {
                     uint32_t cBatch = RT_MIN(cMaxInstructionsGccStupidity, 4096);
                     int cJitInsns = wasmJitExecBlock(&pVCpu->cpum.GstCtx, s_pvJitRAM, cBatch);
@@ -1181,10 +1185,10 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                         rcStrict = VINF_SUCCESS;
                         break;
                     }
-                    /* JIT returned 0 — it bailed on the very first instruction (I/O, paging,
-                       protected mode, etc.).  Let IEM handle the next few instructions to cover
-                       the remainder of typical polling loops (IN; TEST; JNZ) without the
-                       overhead of a wasted JIT call for just 2-3 instructions. */
+                    /* JIT returned 0 — it bailed on the very first instruction (I/O, etc.).
+                       Let IEM handle the next few instructions to cover the remainder of
+                       typical polling loops (IN; TEST; JNZ) without the overhead of a
+                       wasted JIT call for just 2-3 instructions. */
                     s_cIemAfterJitBail = 4;
                 }
                 else if (s_cIemAfterJitBail > 0)

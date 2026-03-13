@@ -477,14 +477,16 @@ function execBlock(cpuP, ramB, maxInsn) {
   const codeSegStart = csBase;
   const codeSegEnd = csBase + 0x10000; // 64KB segment
 
-  // Check if we're in real mode or protected mode
+  // Check if we're in real mode — bail entirely for protected mode.
+  // This JIT is a real-mode interpreter: it assumes 16-bit default operand/address
+  // size, segment base = selector << 4, 16-bit IP masking, real-mode interrupt
+  // vectors, etc. None of that is correct once CR0.PE is set.
   const cr0 = rr32(R_CR0);
-  const realMode = !(cr0 & 1); // PE bit
-  // For now, only handle real mode and simple protected mode (no paging)
-  if (cr0 & 0x80000000) {
-    if (statTotalCalls < 5) console.log('[JIT] bail: paging enabled cr0=0x' + cr0.toString(16));
-    return 0; // PG bit set = paging enabled, bail
+  if (cr0 & 1) {
+    // PE bit set = protected mode, bail to IEM
+    return 0;
   }
+  const realMode = true; // We only reach here in real mode
 
   let executed = 0;
   let lastBailOp = -1; // track the opcode that caused early exit

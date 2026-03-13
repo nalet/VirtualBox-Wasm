@@ -1016,24 +1016,33 @@ globalThis.VBoxJIT = (function() {
     // Check if address is in accessible range.
     // VirtualBox's PGM stores ROM (0xC0000-0xFFFFF) and MMIO (0xA0000-0xBFFFF)
     // via page handlers — these addresses are NOT in the flat RAM buffer (they read as 0).
-    // Only execute from flat RAM (< 0xA0000) or the ROM buffer (when initialized).
+    // Accessible: flat RAM below MMIO hole (<0xA0000), ROM buffer (0xC0000-0xFFFFF),
+    // or extended RAM above 1MB (>=0x100000, for unreal mode / paging).
     const addrAccessible = addr => {
       if (romBufSize > 0 && addr >= romGCPhysStart && addr < romGCPhysEnd) return true;
-      // With paging, physical addresses can be anywhere in RAM (not just < 0xA0000).
-      // Without paging, linear=physical and only flat RAM below MMIO hole is usable.
-      if (pagingOn) return addr >= 0 && addr + 16 <= ramSize && !(addr >= 655360 && addr < 786432);
-      return addr >= 0 && addr < 655360 && addr + 16 <= ramSize;
+      // MMIO hole: 0xA0000-0xBFFFF (VGA memory) — never accessible via flat RAM
+      if (addr >= 655360 && addr < 786432) return false;
+      // ROM range (0xC0000-0xFFFFF) is handled by ROM buffer above — if not in ROM, reject
+      if (addr >= 786432 && addr < 1048576) return false;
+      // Must be within the flat RAM buffer range
+      return addr >= 0 && addr + 16 <= ramSize;
     };
     const inRomRange = addr => romBufSize > 0 && addr >= romGCPhysStart && addr < romGCPhysEnd;
     if (pagingOn) {
       codePhys = translateLinear(codeLinear >>> 0);
-      if (codePhys < 0) return 0;
+      if (codePhys < 0) {
+        if (execBlock._bailDiagCount === undefined) execBlock._bailDiagCount = 0;
+        if (execBlock._bailDiagCount++ < 10) console.log("[JIT-BAIL] translateLinear failed: codeLinear=0x" + (codeLinear >>> 0).toString(16) + " CR3=0x" + rr32(R_CR3).toString(16) + " CR0=0x" + rr32(R_CR0).toString(16) + " CR4=0x" + rr32(R_CR4).toString(16));
+        return 0;
+      }
     } else {
       codePhys = codeLinear;
     }
     // ROM is above the A20 gate on the chipset bus — skip A20 masking for ROM range
     if (!inRomRange(codePhys)) codePhys = (codePhys & a20Mask) >>> 0;
     if (!addrAccessible(codePhys)) {
+      if (execBlock._addrDiagCount === undefined) execBlock._addrDiagCount = 0;
+      if (execBlock._addrDiagCount++ < 10) console.log("[JIT-BAIL] addrAccessible failed: codePhys=0x" + codePhys.toString(16) + " codeLinear=0x" + (codeLinear >>> 0).toString(16) + " pagingOn=" + pagingOn + " romBufSize=" + romBufSize + " ramSize=" + ramSize + " a20=" + (fA20 ? "on" : "off"));
       return 0;
     }
     // Bail periodically to let IEM deliver hardware interrupts (PIT timer, etc.)
@@ -4743,7 +4752,14 @@ globalThis.VBoxJIT = (function() {
         console.log("[JIT-PROT] === END PROTECTED MODE DIAGNOSTIC ===");
       }
     }
-    const n = execBlock(cpuP, ramB, maxInsn);
+    let n = 0;
+    try {
+      n = execBlock(cpuP, ramB, maxInsn);
+    } catch (e) {
+      if (!execBlockWrapped._errorCount) execBlockWrapped._errorCount = 0;
+      if (execBlockWrapped._errorCount++ < 20) console.error("[JIT-ERROR] execBlock threw: " + e.message + "\n" + e.stack);
+      return 0;
+    }
     if (n > 0) {
       statTotalInsns += n;
     } else {

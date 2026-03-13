@@ -35,11 +35,35 @@
 #include "../init.h"
 
 #include <string.h>
+#include <stdlib.h>
 #include <time.h>
 #include <errno.h>
 #include <pthread.h>
 #include <sched.h>
 #include <iprt/asm.h>
+
+/**
+ * Allocate zeroed, over-aligned memory suitable for pthread types.
+ *
+ * Emscripten's pthreads implementation uses Wasm atomic instructions
+ * (i32.atomic.load, i64.atomic.store, Atomics.wait/notify) on fields
+ * inside pthread_mutex_t / pthread_cond_t / pthread_rwlock_t.  These
+ * Wasm atomics require naturally aligned addresses.  malloc/calloc
+ * guarantee 8-byte alignment on wasm64 which is normally enough, but
+ * struct packing can place atomic fields at odd offsets.
+ *
+ * Using 16-byte alignment gives the compiler room to satisfy the
+ * alignment requirements for any internal atomic fields.
+ */
+static void *rtMemAllocZAligned(size_t cb)
+{
+    /* Round up to a multiple of 16 (required by aligned_alloc). */
+    size_t cbAligned = (cb + 15) & ~(size_t)15;
+    void *pv = aligned_alloc(16, cbAligned);
+    if (pv)
+        memset(pv, 0, cbAligned);
+    return pv;
+}
 
 
 /*
@@ -216,14 +240,14 @@ RTDECL(int) RTSemEventCreateEx(PRTSEMEVENT phEventSem, uint32_t fFlags, RTLOCKVA
 {
     RT_NOREF(hClass, pszNameFmt);
 
-    struct RTSEMEVENTINTERNAL *pThis = (struct RTSEMEVENTINTERNAL *)RTMemAllocZ(sizeof(*pThis));
+    struct RTSEMEVENTINTERNAL *pThis = (struct RTSEMEVENTINTERNAL *)rtMemAllocZAligned(sizeof(*pThis));
     if (!pThis)
         return VERR_NO_MEMORY;
 
     int rc = pthread_mutex_init(&pThis->Mutex, NULL);
     if (rc)
     {
-        RTMemFree(pThis);
+        free(pThis);
         return RTErrConvertFromErrno(rc);
     }
 
@@ -231,7 +255,7 @@ RTDECL(int) RTSemEventCreateEx(PRTSEMEVENT phEventSem, uint32_t fFlags, RTLOCKVA
     if (rc)
     {
         pthread_mutex_destroy(&pThis->Mutex);
-        RTMemFree(pThis);
+        free(pThis);
         return RTErrConvertFromErrno(rc);
     }
 
@@ -270,7 +294,7 @@ RTDECL(int) RTSemEventDestroy(RTSEMEVENT hEventSem)
         usleep(1000);
     }
 
-    RTMemFree(pThis);
+    free(pThis);
     return VINF_SUCCESS;
 }
 
@@ -530,14 +554,14 @@ RTDECL(int) RTSemEventMultiCreateEx(PRTSEMEVENTMULTI phEventMultiSem, uint32_t f
 {
     RT_NOREF(fFlags, hClass, pszNameFmt);
 
-    struct RTSEMEVENTMULTIINTERNAL *pThis = (struct RTSEMEVENTMULTIINTERNAL *)RTMemAllocZ(sizeof(*pThis));
+    struct RTSEMEVENTMULTIINTERNAL *pThis = (struct RTSEMEVENTMULTIINTERNAL *)rtMemAllocZAligned(sizeof(*pThis));
     if (!pThis)
         return VERR_NO_MEMORY;
 
     int rc = pthread_mutex_init(&pThis->Mutex, NULL);
     if (rc)
     {
-        RTMemFree(pThis);
+        free(pThis);
         return RTErrConvertFromErrno(rc);
     }
 
@@ -545,7 +569,7 @@ RTDECL(int) RTSemEventMultiCreateEx(PRTSEMEVENTMULTI phEventMultiSem, uint32_t f
     if (rc)
     {
         pthread_mutex_destroy(&pThis->Mutex);
-        RTMemFree(pThis);
+        free(pThis);
         return RTErrConvertFromErrno(rc);
     }
 
@@ -582,7 +606,7 @@ RTDECL(int) RTSemEventMultiDestroy(RTSEMEVENTMULTI hEventMultiSem)
         usleep(1000);
     }
 
-    RTMemFree(pThis);
+    free(pThis);
     return VINF_SUCCESS;
 }
 
@@ -820,7 +844,7 @@ RTDECL(int) RTSemMutexCreateEx(PRTSEMMUTEX phMutexSem, uint32_t fFlags, RTLOCKVA
 {
     RT_NOREF(fFlags, hClass, uSubClass, pszNameFmt);
 
-    struct RTSEMMUTEXINTERNAL *pThis = (struct RTSEMMUTEXINTERNAL *)RTMemAllocZ(sizeof(*pThis));
+    struct RTSEMMUTEXINTERNAL *pThis = (struct RTSEMMUTEXINTERNAL *)rtMemAllocZAligned(sizeof(*pThis));
     if (!pThis)
         return VERR_NO_MEMORY;
 
@@ -828,7 +852,7 @@ RTDECL(int) RTSemMutexCreateEx(PRTSEMMUTEX phMutexSem, uint32_t fFlags, RTLOCKVA
     int rc = pthread_mutexattr_init(&Attr);
     if (rc)
     {
-        RTMemFree(pThis);
+        free(pThis);
         return RTErrConvertFromErrno(rc);
     }
 
@@ -836,7 +860,7 @@ RTDECL(int) RTSemMutexCreateEx(PRTSEMMUTEX phMutexSem, uint32_t fFlags, RTLOCKVA
     if (rc)
     {
         pthread_mutexattr_destroy(&Attr);
-        RTMemFree(pThis);
+        free(pThis);
         return RTErrConvertFromErrno(rc);
     }
 
@@ -844,7 +868,7 @@ RTDECL(int) RTSemMutexCreateEx(PRTSEMMUTEX phMutexSem, uint32_t fFlags, RTLOCKVA
     pthread_mutexattr_destroy(&Attr);
     if (rc)
     {
-        RTMemFree(pThis);
+        free(pThis);
         return RTErrConvertFromErrno(rc);
     }
 
@@ -863,7 +887,7 @@ RTDECL(int) RTSemMutexDestroy(RTSEMMUTEX hMutexSem)
     AssertPtrReturn(pThis, VERR_INVALID_HANDLE);
 
     int rc = pthread_mutex_destroy(&pThis->Mutex);
-    RTMemFree(pThis);
+    free(pThis);
     return rc ? RTErrConvertFromErrno(rc) : VINF_SUCCESS;
 }
 
@@ -917,14 +941,14 @@ RTDECL(int) RTSemRWCreateEx(PRTSEMRW phRWSem, uint32_t fFlags, RTLOCKVALCLASS hC
 {
     RT_NOREF(fFlags, hClass, uSubClass, pszNameFmt);
 
-    struct RTSEMRWINTERNAL *pThis = (struct RTSEMRWINTERNAL *)RTMemAllocZ(sizeof(*pThis));
+    struct RTSEMRWINTERNAL *pThis = (struct RTSEMRWINTERNAL *)rtMemAllocZAligned(sizeof(*pThis));
     if (!pThis)
         return VERR_NO_MEMORY;
 
     int rc = pthread_rwlock_init(&pThis->RWLock, NULL);
     if (rc)
     {
-        RTMemFree(pThis);
+        free(pThis);
         return RTErrConvertFromErrno(rc);
     }
 
@@ -940,7 +964,7 @@ RTDECL(int) RTSemRWDestroy(RTSEMRW hRWSem)
     AssertPtrReturn(pThis, VERR_INVALID_HANDLE);
 
     int rc = pthread_rwlock_destroy(&pThis->RWLock);
-    RTMemFree(pThis);
+    free(pThis);
     return rc ? RTErrConvertFromErrno(rc) : VINF_SUCCESS;
 }
 

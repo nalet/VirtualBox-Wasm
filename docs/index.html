@@ -428,9 +428,6 @@
       },
       /** Read framebuffer from Wasm and paint to canvas. */
       renderFromWasm() {
-        // Try text mode renderer first (reads from guest RAM directly)
-        if (this.textMode && this.renderTextMode()) return;
-
         if (!Module._wasmDisplayGetFB) return;
 
         // memory64 returns BigInt — convert to Number for typed array offsets
@@ -440,14 +437,22 @@
 
         if (!fbPtr || w === 0 || h === 0) return;
 
-        // If VGA framebuffer has real content, switch off text mode fallback
+        // Check if VGA framebuffer has real content — switch off text mode fallback
         const mem = wasmMemory.buffer;
-        const testSrc = new Uint8Array(mem, fbPtr, Math.min(4000, w * h * 4));
-        let nonZero = 0;
-        for (let i = 0; i < testSrc.length; i += 4) {
-          if (testSrc[i] || testSrc[i+1] || testSrc[i+2]) { nonZero++; break; }
+        if (this.textMode) {
+          const testSrc = new Uint8Array(mem, fbPtr, Math.min(4000, w * h * 4));
+          let hasContent = false;
+          for (let i = 0; i < testSrc.length; i += 4) {
+            if (testSrc[i] || testSrc[i+1] || testSrc[i+2]) { hasContent = true; break; }
+          }
+          if (hasContent) {
+            this.textMode = false;
+          } else {
+            // FB still blank — try text mode fallback
+            if (this.renderTextMode()) return;
+            return; // nothing to render yet
+          }
         }
-        if (nonZero) this.textMode = false;
 
         // Resize canvas if display resolution changed
         if (w !== this.width || h !== this.height) {

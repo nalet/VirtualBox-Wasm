@@ -3254,6 +3254,31 @@ function execBlock(cpuP, ramB, maxInsn) {
           ' IF=' + (hltIF?1:0) +
           ' AX=0x' + gr16(0).toString(16).padStart(4,'0') +
           ' flags=0x' + flagsToWord().toString(16).padStart(4,'0'));
+        // Dump VGA text buffer to see error message on screen
+        if (hltCS <= 0x10 && !hltIF) {
+          try {
+            // VGA text buffer at 0xB8000, 80x25, 2 bytes per char (char+attr)
+            let vgaText = '';
+            for (let row = 0; row < 25; row++) {
+              let line = '';
+              for (let col = 0; col < 80; col++) {
+                const addr = 0xB8000 + (row * 80 + col) * 2;
+                const ch = mem8[addr] || 0x20;
+                line += String.fromCharCode(ch < 0x20 ? 0x20 : ch);
+              }
+              const trimmed = line.trimEnd();
+              if (trimmed.length > 0) vgaText += row + ': ' + trimmed + '\n';
+            }
+            console.log('[VGA-TEXT]\n' + vgaText);
+          } catch(e) { console.log('[VGA-TEXT] err: ' + e.message); }
+          // Dump 32 bytes of code around the crash point
+          const codeBase = (hltCS << 4) + ip;
+          let codeDump = '';
+          for (let i = -16; i < 16; i++) {
+            codeDump += mem8[codeBase + i].toString(16).padStart(2, '0') + ' ';
+          }
+          console.log('[CODE-DUMP] around ' + codeBase.toString(16) + ': ' + codeDump);
+        }
       }
       lastBailOp = b; iter = maxInsn;
       break;

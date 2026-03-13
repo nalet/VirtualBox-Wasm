@@ -943,7 +943,7 @@ static void ataHCAsyncIOPutRequest(PPDMDEVINS pDevIns, PATACONTROLLER pCtl, cons
     }
     else
     {
-        LogRel(("PIIX3 ATA: Ctl#%d: ScheduleExitEvent OK, signal deferred to critsect leave\n", pCtl->iCtl));
+        Log(("PIIX3 ATA: Ctl#%d: ScheduleExitEvent OK, signal deferred to critsect leave\n", pCtl->iCtl));
     }
 }
 
@@ -1110,7 +1110,7 @@ static void ataR3StartTransfer(PPDMDEVINS pDevIns, PATACONTROLLER pCtl, PATADEVS
            processing a RESET sequence.  Wait briefly for the controller to become
            idle instead of silently dropping the command, which would cause the BIOS
            ATA/ATAPI detection to fail. */
-        LogRel(("PIIX3 IDE: Ctl#%d: async I/O not idle for cmd %#04x (state %d), waiting...\n",
+        Log(("PIIX3 IDE: Ctl#%d: async I/O not idle for cmd %#04x (state %d), waiting...\n",
                 pCtl->iCtl, s->uATARegCommand, pCtl->uAsyncIOState));
         for (unsigned iWait = 0; iWait < 200; iWait++)
         {
@@ -1120,7 +1120,7 @@ static void ataR3StartTransfer(PPDMDEVINS pDevIns, PATACONTROLLER pCtl, PATADEVS
             PDM_CRITSECT_RELEASE_ASSERT_RC_DEV(pDevIns, &pCtl->lock, rcLock);
             if (ataR3AsyncIOIsIdle(pDevIns, pCtl, true /*fStrict*/))
             {
-                LogRel(("PIIX3 IDE: Ctl#%d: async I/O now idle after %u ms\n", pCtl->iCtl, (iWait + 1) * 5));
+                Log(("PIIX3 IDE: Ctl#%d: async I/O now idle after %u ms\n", pCtl->iCtl, (iWait + 1) * 5));
                 break;
             }
         }
@@ -1150,7 +1150,7 @@ static void ataR3StartTransfer(PPDMDEVINS pDevIns, PATACONTROLLER pCtl, PATADEVS
     ataSetStatusValue(pCtl, s, ATA_STAT_BUSY);
     pCtl->fChainedTransfer = fChainedTransfer;
 
-    LogRel(("PIIX3 ATA: Ctl#%d: ataR3StartTransfer LUN#%d cmd=%#04x cbTotal=%u txDir=%u beginXfer=%u srcSink=%u chained=%d\n",
+    Log(("PIIX3 ATA: Ctl#%d: ataR3StartTransfer LUN#%d cmd=%#04x cbTotal=%u txDir=%u beginXfer=%u srcSink=%u chained=%d\n",
             pCtl->iCtl, s->iLUN, s->uATARegCommand, cbTotalTransfer, uTxDir,
             iBeginTransfer, iSourceSink, fChainedTransfer));
 
@@ -2082,7 +2082,7 @@ static bool atapiR3ReadSS(PPDMDEVINS pDevIns, PATACONTROLLER pCtl, PATADEVSTATE 
     uint32_t const cbATAPISector = s->cbATAPISector;
     uint32_t const cSectors      = cbTransfer / cbATAPISector;
     Assert(cSectors * cbATAPISector <= cbTransfer);
-    LogRel(("PIIX3 ATA: Ctl#%d LUN#%d: atapiR3ReadSS LBA=%u sectors=%u cbTransfer=%u\n",
+    Log(("PIIX3 ATA: Ctl#%d LUN#%d: atapiR3ReadSS LBA=%u sectors=%u cbTransfer=%u\n",
             pCtl->iCtl, s->iLUN, iATAPILBA, cSectors, cbTransfer));
     Log(("%s: %d sectors at LBA %d\n", __FUNCTION__, cSectors, iATAPILBA));
     AssertLogRelReturn(cSectors * cbATAPISector <= sizeof(s->abIOBuffer), false);
@@ -2681,7 +2681,7 @@ static bool atapiR3ReadSectors(PPDMDEVINS pDevIns, PATACONTROLLER pCtl, PATADEVS
                                uint32_t iATAPILBA, uint32_t cSectors, uint32_t cbSector)
 {
     Assert(cSectors > 0);
-    LogRel(("PIIX3 ATA: Ctl#%d LUN#%d: ATAPI READ LBA=%u sectors=%u sectorSize=%u\n",
+    Log(("PIIX3 ATA: Ctl#%d LUN#%d: ATAPI READ LBA=%u sectors=%u sectorSize=%u\n",
             pCtl->iCtl, s->iLUN, iATAPILBA, cSectors, cbSector));
     s->iCurLBA = iATAPILBA;
     s->cbATAPISector = cbSector;
@@ -4078,7 +4078,7 @@ static bool ataR3PacketSS(PPDMDEVINS pDevIns, PATACONTROLLER pCtl, PATADEVSTATE 
     s->cbTotalTransfer = 0;
     s->cbElementaryTransfer = 0;
     s->cbAtapiPassthroughTransfer = 0;
-    LogRel(("PIIX3 ATA: Ctl#%d LUN#%d: ATAPI PACKET cmd=%#04x [%02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x] DMA=%d\n",
+    Log(("PIIX3 ATA: Ctl#%d LUN#%d: ATAPI PACKET cmd=%#04x [%02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x] DMA=%d\n",
             pCtl->iCtl, s->iLUN, s->abATAPICmd[0],
             s->abATAPICmd[0], s->abATAPICmd[1], s->abATAPICmd[2], s->abATAPICmd[3],
             s->abATAPICmd[4], s->abATAPICmd[5], s->abATAPICmd[6], s->abATAPICmd[7],
@@ -4429,7 +4429,7 @@ static void ataR3ParseCmd(PPDMDEVINS pDevIns, PATACONTROLLER pCtl, PATADEVSTATE 
         uint64_t uNow = RTTimeNanoTS();
         if (s->u64CmdTS)
             uCmdWait = (uNow - s->u64CmdTS) / 1000;
-        LogRel(("PIIX3 ATA: LUN#%d: IDLE IMMEDIATE, CmdIf=%#04x (%d usec ago)\n",
+        Log(("PIIX3 ATA: LUN#%d: IDLE IMMEDIATE, CmdIf=%#04x (%d usec ago)\n",
                 s->iLUN, s->uATARegCommand, uCmdWait));
     }
     s->uATARegCommand = cmd;
@@ -4952,7 +4952,7 @@ static VBOXSTRICTRC ataIOPortReadU8(PPDMDEVINS pDevIns, PATACONTROLLER pCtl, uin
                 {
                     static uint32_t s_cBsyPolls = 0;
                     s_cBsyPolls++;
-                    if ((s_cBsyPolls % 10000) == 1)
+                    if ((s_cBsyPolls % 100000) == 1)
                         LogRel(("PIIX3 ATA: LUN#%d: BSY poll #%u status=%#x asyncState=%d head=%u tail=%u\n",
                                 s->iLUN, s_cBsyPolls, val, pCtl->uAsyncIOState,
                                 pCtl->AsyncIOReqHead, pCtl->AsyncIOReqTail));
@@ -5191,7 +5191,7 @@ static void ataHCPIOTransfer(PPDMDEVINS pDevIns, PATACONTROLLER pCtl)
     if (s->cbTotalTransfer && s->iIOBufferCur > s->iIOBufferEnd)
     {
 # ifdef IN_RING3
-        LogRel(("PIIX3 ATA: LUN#%d: %s data in the middle of a PIO transfer - VERY SLOW\n",
+        Log(("PIIX3 ATA: LUN#%d: %s data in the middle of a PIO transfer - VERY SLOW\n",
                 s->iLUN, s->uTxDir == PDMMEDIATXDIR_FROM_DEVICE ? "loading" : "storing"));
         /* Any guest OS that triggers this case has a pathetic ATA driver.
          * In a real system it would block the CPU via IORDY, here we do it
@@ -5977,10 +5977,10 @@ static DECLCALLBACK(int) ataR3AsyncIOThread(RTTHREAD hThreadSelf, void *pvUser)
         {
             if (pCtlR3->fSignalIdle)
                 ataR3AsyncSignalIdle(pDevIns, pCtl, pCtlR3);
-            LogRel(("PIIX3 ATA: Ctl#%d: async I/O thread waiting on semaphore (head=%u tail=%u)\n",
+            Log(("PIIX3 ATA: Ctl#%d: async I/O thread waiting on semaphore (head=%u tail=%u)\n",
                     pCtl->iCtl, pCtl->AsyncIOReqHead, pCtl->AsyncIOReqTail));
             rc = PDMDevHlpSUPSemEventWaitNoResume(pDevIns, pCtl->hAsyncIOSem, RT_INDEFINITE_WAIT);
-            LogRel(("PIIX3 ATA: Ctl#%d: async I/O semaphore wait returned rc=%d (head=%u tail=%u)\n",
+            Log(("PIIX3 ATA: Ctl#%d: async I/O semaphore wait returned rc=%d (head=%u tail=%u)\n",
                     pCtl->iCtl, rc, pCtl->AsyncIOReqHead, pCtl->AsyncIOReqTail));
             /* Continue if we got a signal by RTThreadPoke().
              * We will get notified if there is a request to process.
@@ -6001,7 +6001,7 @@ static DECLCALLBACK(int) ataR3AsyncIOThread(RTTHREAD hThreadSelf, void *pvUser)
 
         ATAAIO ReqType = pReq->ReqType;
 
-        LogRel(("PIIX3 ATA: Ctl#%d: async I/O thread processing request type=%d (state=%d)\n",
+        Log(("PIIX3 ATA: Ctl#%d: async I/O thread processing request type=%d (state=%d)\n",
                 pCtl->iCtl, ReqType, pCtl->uAsyncIOState));
         Log2(("%s: Ctl#%d: state=%d, req=%d\n", __FUNCTION__, pCtl->iCtl, pCtl->uAsyncIOState, ReqType));
         if (pCtl->uAsyncIOState != ReqType)

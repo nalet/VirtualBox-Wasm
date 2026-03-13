@@ -580,9 +580,25 @@
     };
 
     // ── Emscripten Module hooks ──
+    let printErrCount = 0;
+    let printErrSuppressed = 0;
+    let printErrLastReport = 0;
     var Module = {
       print(text) { appendLine(text, 'log'); console.log(text); },
       printErr(text) {
+        printErrCount++;
+        // Rate-limit stderr output: show first 200, then every 500th, to prevent
+        // DOM manipulation from bottlenecking the VM when LogRel fires frequently.
+        if (printErrCount > 200 && (printErrCount % 500) !== 0) {
+          printErrSuppressed++;
+          // Report suppression count every 10 seconds
+          const now = Date.now();
+          if (now - printErrLastReport > 10000) {
+            printErrLastReport = now;
+            console.warn('[VM] suppressed ' + printErrSuppressed + ' stderr lines (total=' + printErrCount + ')');
+          }
+          return;
+        }
         if (text.startsWith('info:') || text.includes('INFO'))
           appendLine(text, 'info');
         else appendLine(text, 'warn');

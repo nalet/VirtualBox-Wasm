@@ -4350,8 +4350,8 @@ globalThis.VBoxJIT = (function() {
   let stuckDumped = false;
   function execBlockWrapped(cpuP, ramB, maxInsn) {
     statTotalCalls++;
-    // Per-call diagnostics for first 20 calls, then every 10000
-    if (statTotalCalls <= 20 || (statTotalCalls % 1e4) === 0) {
+    // Per-call diagnostics for first 20 calls, then every 100000
+    if (statTotalCalls <= 20 || (statTotalCalls % 1e5) === 0) {
       const cpuN = Number(cpuP), ramN = Number(ramB);
       console.log("[JIT-DBG] call#" + statTotalCalls + " cpuPtr=0x" + cpuN.toString(16) + " ramBase=0x" + ramN.toString(16) + " romBufSize=" + romBufSize + " maxInsn=" + maxInsn);
     }
@@ -4419,9 +4419,9 @@ globalThis.VBoxJIT = (function() {
         console.log("[JIT-STUCK] port I/O fallbacks: IN=" + inCount + " OUT=" + outCount);
       }
     }
-    // Log stats every 5 seconds
+    // Log stats every 30 seconds
     const now = Date.now();
-    if (now - statLastReport > 5e3) {
+    if (now - statLastReport > 3e4) {
       statLastReport = now;
       {
         // Top fallback opcodes

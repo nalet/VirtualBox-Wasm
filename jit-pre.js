@@ -3029,8 +3029,8 @@ let stuckDumped = false;
 
 function execBlockWrapped(cpuP, ramB, maxInsn) {
   statTotalCalls++;
-  // Per-call diagnostics for first 20 calls, then every 10000
-  if (statTotalCalls <= 20 || (statTotalCalls % 10000) === 0) {
+  // Per-call diagnostics for first 20 calls, then every 100000
+  if (statTotalCalls <= 20 || (statTotalCalls % 100000) === 0) {
     const cpuN = Number(cpuP), ramN = Number(ramB);
     console.log('[JIT-DBG] call#' + statTotalCalls +
       ' cpuPtr=0x' + cpuN.toString(16) +
@@ -3114,9 +3114,9 @@ function execBlockWrapped(cpuP, ramB, maxInsn) {
     }
   }
 
-  // Log stats every 5 seconds
+  // Log stats every 30 seconds
   const now = Date.now();
-  if (now - statLastReport > 5000) {
+  if (now - statLastReport > 30000) {
     statLastReport = now;
     {
       // Top fallback opcodes

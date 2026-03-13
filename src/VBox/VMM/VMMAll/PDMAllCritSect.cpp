@@ -831,7 +831,7 @@ VMMDECL(int) PDMCritSectLeave(PVMCC pVM, PPDMCRITSECT pCritSect)
        Fixup the owner and continue instead of aborting. */
     if (RT_UNLIKELY(pCritSect->s.Core.NativeThreadOwner != hNativeSelf && hNativeSelf != NIL_RTNATIVETHREAD))
     {
-        LogRel(("PDMCritSectLeave: owner fixup %p %s: %p -> %p; cLockers=%d cNestings=%d\n",
+        Log(("PDMCritSectLeave: owner fixup %p %s: %p -> %p; cLockers=%d cNestings=%d\n",
                 pCritSect, R3STRING(pCritSect->s.pszName),
                 pCritSect->s.Core.NativeThreadOwner, hNativeSelf,
                 pCritSect->s.Core.cLockers, pCritSect->s.Core.cNestings));

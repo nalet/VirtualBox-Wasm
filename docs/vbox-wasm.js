@@ -1014,14 +1014,14 @@ globalThis.VBoxJIT = (function() {
     let codeLinear = csBase + ip;
     let codePhys;
     // Check if address is in accessible range.
-    // VirtualBox's PGM stores ROM (0xC0000-0xFFFFF) and MMIO (0xA0000-0xBFFFF)
-    // via page handlers — these addresses are NOT in the flat RAM buffer (they read as 0).
-    // Accessible: flat RAM below MMIO hole (<0xA0000), ROM buffer (0xC0000-0xFFFFF),
-    // or extended RAM above 1MB (>=0x100000, for unreal mode / paging).
+    // ROM (0xC0000-0xFFFFF) is in a separate ROM buffer.
+    // VGA MMIO (0xA0000-0xBFFFF): PGM dispatches to VGA device, but for Wasm
+    // we also allow the flat RAM buffer here since bootloaders (ISOLINUX)
+    // relocate code to this range. PGM's write-through may or may not populate
+    // the flat buffer — if not, the JIT will execute stale data and bail quickly
+    // on decode failure, falling back to IEM.
     const addrAccessible = addr => {
       if (romBufSize > 0 && addr >= romGCPhysStart && addr < romGCPhysEnd) return true;
-      // MMIO hole: 0xA0000-0xBFFFF (VGA memory) — never accessible via flat RAM
-      if (addr >= 655360 && addr < 786432) return false;
       // ROM range (0xC0000-0xFFFFF) is handled by ROM buffer above — if not in ROM, reject
       if (addr >= 786432 && addr < 1048576) return false;
       // Must be within the flat RAM buffer range

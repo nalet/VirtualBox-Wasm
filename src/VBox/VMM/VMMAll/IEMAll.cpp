@@ -155,6 +155,10 @@
 #include <iprt/assert.h>
 #include <iprt/string.h>
 #include <iprt/x86.h>
+#ifdef __EMSCRIPTEN__
+# include <iprt/time.h>
+# include <iprt/stream.h>
+#endif
 
 #include "IEMInline.h"
 #include "IEMInlineExec.h"
@@ -1154,6 +1158,24 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                  * This avoids calling the JIT just for 2-3 instructions between consecutive
                  * IN instructions, saving significant overhead during ATA BSY polling. */
                 static uint32_t s_cIemAfterJitBail = 0;
+                /* Periodic CPU state diagnostic — visible on main thread via RTPrintf */
+                {
+                    static uint64_t s_nsLastDiag = 0;
+                    uint64_t nsNow = RTTimeNanoTS();
+                    if (nsNow - s_nsLastDiag > RT_NS_10SEC)
+                    {
+                        s_nsLastDiag = nsNow;
+                        uint16_t cs = pVCpu->cpum.GstCtx.cs.Sel;
+                        uint64_t rip = pVCpu->cpum.GstCtx.rip;
+                        uint32_t cr0 = pVCpu->cpum.GstCtx.cr0;
+                        uint32_t efl = pVCpu->cpum.GstCtx.eflags.u;
+                        uint32_t eax = pVCpu->cpum.GstCtx.eax;
+                        uint32_t edx = pVCpu->cpum.GstCtx.edx;
+                        RTPrintf("[CPU-DIAG] CS=%04x IP=%08llx CR0=%08x FL=%08x EAX=%08x EDX=%08x insns=%llu jitBail=%u\n",
+                                 cs, (unsigned long long)rip, cr0, efl, eax, edx,
+                                 (unsigned long long)pVCpu->iem.s.cInstructions, s_cIemAfterJitBail);
+                    }
+                }
                 iemJitEnsureInit(pVM);
                 if (s_pvJitRAM && s_cIemAfterJitBail == 0)
                 {

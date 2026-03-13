@@ -187,13 +187,17 @@ function wr8(off, v) { dv.setUint8(cpuPtr + off, v & 0xFF); }
 function segBase(segOff) { return Number(dv.getBigUint64(cpuPtr + segOff + SEG_BASE, true)); }
 
 // Guest physical memory read/write (ROM-aware for reads, paging-aware)
-// A20 masking is applied after address translation (linear -> physical).
+// A20 masking is applied after address translation (linear -> physical),
+// but NOT to ROM range addresses — ROM sits on the chipset bus above the A20 gate.
 // In non-paging mode the linear address IS the physical address.
 function rb(addr) {
   if (_pagingOn) {
     addr = translateLinear(addr >>> 0);
     if (addr < 0) { mmioFault = true; return 0xFF; }
   }
+  // ROM sits on the chipset bus above the A20 gate — check ROM BEFORE A20 masking
+  if (romBufSize > 0 && addr >= romGCPhysStart && addr < romGCPhysEnd)
+    return mem8[romBufBase + (addr - romGCPhysStart)];
   addr = (addr & a20Mask) >>> 0;
   return guestRb(addr);
 }
@@ -202,6 +206,11 @@ function rw(addr) {
     addr = translateLinear(addr >>> 0);
     if (addr < 0) { mmioFault = true; return 0xFFFF; }
   }
+  // ROM sits on the chipset bus above the A20 gate — check ROM BEFORE A20 masking
+  if (romBufSize > 0 && addr >= romGCPhysStart && addr < romGCPhysEnd) {
+    const off = romBufBase + (addr - romGCPhysStart);
+    return dv.getUint16(off, true);
+  }
   addr = (addr & a20Mask) >>> 0;
   return guestRw(addr);
 }
@@ -209,6 +218,11 @@ function rd(addr) {
   if (_pagingOn) {
     addr = translateLinear(addr >>> 0);
     if (addr < 0) { mmioFault = true; return 0xFFFFFFFF; }
+  }
+  // ROM sits on the chipset bus above the A20 gate — check ROM BEFORE A20 masking
+  if (romBufSize > 0 && addr >= romGCPhysStart && addr < romGCPhysEnd) {
+    const off = romBufBase + (addr - romGCPhysStart);
+    return dv.getUint32(off, true);
   }
   addr = (addr & a20Mask) >>> 0;
   return guestRd(addr);
@@ -719,7 +733,9 @@ function execBlock(cpuP, ramB, maxInsn) {
   } else {
     codePhys = codeLinear;
   }
-  codePhys = (codePhys & a20Mask) >>> 0;
+  // ROM is above the A20 gate on the chipset bus — skip A20 masking for ROM range
+  if (!inRomRange(codePhys))
+    codePhys = (codePhys & a20Mask) >>> 0;
   if (!addrAccessible(codePhys)) {
     return 0;
   }
@@ -741,7 +757,9 @@ function execBlock(cpuP, ramB, maxInsn) {
     } else {
       codePhys = codeLinear;
     }
-    codePhys = (codePhys & a20Mask) >>> 0;
+    // ROM is above the A20 gate on the chipset bus — skip A20 masking for ROM range
+    if (!inRomRange(codePhys))
+      codePhys = (codePhys & a20Mask) >>> 0;
     if (codePhys < 0 || (!addrAccessible(codePhys))) break; // safety
 
     // Near page boundary: instruction might span two pages — bail to IEM

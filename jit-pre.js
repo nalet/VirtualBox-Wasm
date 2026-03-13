@@ -3332,6 +3332,23 @@ function execBlock(cpuP, ramB, maxInsn) {
     cb += guestRb(diagAddr + i).toString(16).padStart(2, '0');
   statLastCodeBytes = cb;
 
+  // Log JIT calls at CS=0003 (ISOLINUX) to trace execution before crash
+  {
+    const curCS = rr16(S_CS + SEG_SEL);
+    if (curCS <= 0x10) {
+      if (!Module._isolLog) Module._isolLog = { count: 0 };
+      const cnt = ++Module._isolLog.count;
+      if (cnt <= 300)
+        console.log('[JIT-ISOL] #' + cnt + ' CS=' + curCS.toString(16) +
+          ' IP=' + ip.toString(16).padStart(4, '0') +
+          ' exec=' + executed +
+          ' bail=' + (lastBailOp >= 0 ? '0x' + lastBailOp.toString(16) : 'none') +
+          ' code=' + cb +
+          ' AX=0x' + gr16(0).toString(16).padStart(4, '0') +
+          ' DX=0x' + gr16(2).toString(16).padStart(4, '0'));
+    }
+  }
+
   return executed;
 }
 

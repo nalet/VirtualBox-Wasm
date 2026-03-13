@@ -237,11 +237,37 @@ static void iemJitEnsureInit(PVMCC pVM)
                 /* Compute base: host ptr at GCPhys X  →  base = pv - X */
                 s_pvJitRAM = (uint8_t *)pv - (size_t)s_aGCPhysTry[iTry];
                 wasmJitSetGuestRAM(s_pvJitRAM);
-                char szMsg[96];
+                char szMsg[128];
                 RTStrPrintf(szMsg, sizeof(szMsg),
                             "RAM init OK: gcPhys=0x%x pv=%p base=%p attempt=%u",
                             (unsigned)s_aGCPhysTry[iTry], pv, s_pvJitRAM, s_cJitRetries);
                 wasmJitLog(szMsg);
+
+                /* Verify contiguity: spot-check several pages */
+                {
+                    static const RTGCPHYS s_aCheck[] = {
+                        0x0000, 0x7C00, 0x10000, 0x80000, 0x100000, 0x200000
+                    };
+                    for (unsigned iChk = 0; iChk < RT_ELEMENTS(s_aCheck); iChk++)
+                    {
+                        PGMPAGEMAPLOCK ChkLock;
+                        void *pvChk = NULL;
+                        int rcChk = PGMPhysGCPhys2CCPtr(pVM, s_aCheck[iChk], &pvChk, &ChkLock);
+                        if (RT_SUCCESS(rcChk) && pvChk)
+                        {
+                            intptr_t expected = (intptr_t)s_pvJitRAM + (intptr_t)s_aCheck[iChk];
+                            intptr_t actual   = (intptr_t)pvChk;
+                            intptr_t delta    = actual - expected;
+                            char szChk[128];
+                            RTStrPrintf(szChk, sizeof(szChk),
+                                        "RAM check: gcPhys=0x%x expected=%p actual=%p delta=%lld %s",
+                                        (unsigned)s_aCheck[iChk],
+                                        (void *)expected, pvChk, (long long)delta,
+                                        delta == 0 ? "OK" : "MISMATCH!");
+                            wasmJitLog(szChk);
+                        }
+                    }
+                }
                 /* Don't release the lock — we want the mapping to stay live */
                 break;
             }

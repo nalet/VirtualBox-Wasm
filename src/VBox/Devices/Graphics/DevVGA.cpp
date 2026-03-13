@@ -2767,9 +2767,9 @@ static int vgaR3UpdateDisplay(PPDMDEVINS pDevIns, PVGASTATE pThis, PVGASTATER3 p
             else if (graphic_mode == GMODE_BLANK) s_cBlank++;
             else s_cGraph++;
             if (s_cCalls % 500 == 0)
-                RTPrintf("[VGA] mode stats: calls=%u text=%u blank=%u graph=%u ar_idx=0x%02x sr1=0x%02x fRender=%d cBits=%u cx=%u cy=%u\n",
+                LogRel(("[VGA] mode stats: calls=%u text=%u blank=%u graph=%u ar_idx=0x%02x sr1=0x%02x fRender=%d cBits=%u cx=%u cy=%u\n",
                          s_cCalls, s_cText, s_cBlank, s_cGraph,
-                         pThis->ar_index, pThis->sr[0x01], pThis->fRenderVRAM, pDrv->cBits, pDrv->cx, pDrv->cy);
+                         pThis->ar_index, pThis->sr[0x01], pThis->fRenderVRAM, pDrv->cBits, pDrv->cx, pDrv->cy));
         }
 #endif
         switch(graphic_mode) {

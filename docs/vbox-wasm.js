@@ -4464,6 +4464,18 @@ globalThis.VBoxJIT = (function() {
             iter = maxInsn;
             break;
           }
+          // Log INT 13h calls (disk I/O) to trace ISOLINUX boot failures
+          if (intNum === 19) {
+            if (!execBlock._int13Log) execBlock._int13Log = {
+              count: 0
+            };
+            const cnt13 = ++execBlock._int13Log.count;
+            const ah13 = (gr16(0) >> 8) & 255;
+            const al13 = gr16(0) & 255;
+            const dl13 = gr16(2) & 255;
+            // drive
+            if (cnt13 <= 200) console.log("[INT13] AH=0x" + ah13.toString(16).padStart(2, "0") + " AL=0x" + al13.toString(16).padStart(2, "0") + " DL=0x" + dl13.toString(16).padStart(2, "0") + " CX=0x" + gr16(1).toString(16).padStart(4, "0") + " BX=0x" + gr16(3).toString(16).padStart(4, "0") + " ES=0x" + rr16(S_ES + SEG_SEL).toString(16).padStart(4, "0") + " @" + (csBase >>> 4).toString(16) + ":" + ip.toString(16) + " #" + cnt13);
+          }
           // Materialize FLAGS: arithmetic bits from lazy, IF/DF/IOPL from stored flags
           const arithFlags = flagsToWord();
           const pushFlags = (flags & ~2261) | (arithFlags & 2261);
@@ -4539,6 +4551,17 @@ globalThis.VBoxJIT = (function() {
           flags = (iretFlags & 65535) | 2;
           // bit 1 always set
           loadFlags(flags);
+          // Log IRET returns to ISOLINUX segment (CS=0003) to trace INT 13h results
+          if (iretCS === 3) {
+            if (!execBlock._iretLog) execBlock._iretLog = {
+              count: 0
+            };
+            const cntIret = ++execBlock._iretLog.count;
+            const cf = iretFlags & 1;
+            // CF = error flag for INT 13h
+            const ah_ret = (gr16(0) >> 8) & 255;
+            if (cntIret <= 200) console.log("[IRET→ISOL] CS:IP=" + iretCS.toString(16) + ":" + iretIP.toString(16).padStart(4, "0") + " CF=" + cf + " AH=0x" + ah_ret.toString(16).padStart(2, "0") + " FL=0x" + iretFlags.toString(16).padStart(4, "0") + " #" + cntIret);
+          }
           ilen = 0;
           executed++;
           wrIP(ip);
@@ -4556,6 +4579,11 @@ globalThis.VBoxJIT = (function() {
         //       but the VBox BIOS never executes CLI+HLT during normal POST.
         //       Skipping it caused bootloaders (e.g. ISOLINUX) that do CLI+HLT
         //       on fatal errors to continue executing garbage code and hang.
+        {
+          const hltCS = rr16(S_CS + SEG_SEL);
+          const hltIF = !!(flags & 512);
+          console.log("[JIT-HLT] CS:IP=" + hltCS.toString(16) + ":" + ip.toString(16).padStart(4, "0") + " IF=" + (hltIF ? 1 : 0) + " AX=0x" + gr16(0).toString(16).padStart(4, "0") + " flags=0x" + flagsToWord().toString(16).padStart(4, "0"));
+        }
         lastBailOp = b;
         iter = maxInsn;
         break;

@@ -249,7 +249,6 @@ RUN . /opt/emsdk/emsdk_env.sh 2>/dev/null \
         -Wl,--allow-multiple-definition \
         -sMEMORY64=1 \
         -sALLOW_MEMORY_GROWTH=1 \
-        -msimd128 \
         -sINITIAL_MEMORY=536870912 \
         -sSTACK_SIZE=2097152 \
         -sENVIRONMENT=web,worker \

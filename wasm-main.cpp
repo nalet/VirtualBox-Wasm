@@ -227,6 +227,7 @@ static DECLCALLBACK(int) vboxWasmCfgmConstructor(PUVM pUVM, PVM pVM, PCVMMR3VTAB
     INSERT_NODE(pDevices, "i82078", &pDev);
     INSERT_NODE(pDev, "0", &pInst);
     INSERT_NODE(pInst, "Config", &pCfg);
+    INSERT_INTEGER(pCfg, "DMA", 0xFF);  /* Skip DMA — no floppy drives attached */
 
     /* ── VMMDev ── */
     INSERT_NODE(pDevices, "VMMDev", &pDev);

@@ -1,0 +1,6 @@
+[      20ms] TypeError: Cannot read properties of undefined (reading 'getRegistrations')
+    at eval (eval at evaluate (:301:30), <anonymous>:3:46)
+    at eval (eval at evaluate (:301:30), <anonymous>:8:3)
+    at eval (<anonymous>)
+    at UtilityScript.evaluate (<anonymous>:301:30)
+    at UtilityScript.<anonymous> (<anonymous>:1:44)

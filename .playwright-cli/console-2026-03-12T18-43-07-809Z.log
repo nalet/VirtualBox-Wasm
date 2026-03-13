@@ -1,0 +1,197 @@
+Total messages: 195 (Errors: 0, Warnings: 0)
+
+[LOG] [JIT-IO] @f000:8024 IN port=0xcfe DX=0xcfe AX=0x600c #29 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [JIT-IO] @f000:8024 IN port=0xcfe DX=0xcfe AX=0x600c #30 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [JIT-IO] @f000:8081 IN port=0xcfc DX=0xcfc AX=0x0 #29 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [JIT-IO] @f000:8081 IN port=0xcfc DX=0xcfc AX=0x0 #30 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [JIT-IO] @f000:9ffd IN port=0x330 DX=0x330 AX=0xffff #1 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [JIT-IO] @f000:9ffd IN port=0x330 DX=0x330 AX=0xffff #2 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [JIT-IO] @f000:9ffd IN port=0x334 DX=0x334 AX=0xff #1 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [JIT-IO] @f000:9ffd IN port=0x334 DX=0x334 AX=0xff #2 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [JIT-IO] @f000:ed51 OUT port=0x70 DX=0x1af4 AX=0x10 #17 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [JIT-IO] @f000:ed51 OUT port=0x70 DX=0x1af4 AX=0x10 #18 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [JIT-IO] @f000:ed53 IN port=0x71 DX=0x1af4 AX=0x10 #10 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [JIT-IO] @f000:ed85 OUT port=0xa DX=0x1af4 AX=0x2 #1 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [JIT-IO] @f000:ed85 OUT port=0xa DX=0x1af4 AX=0x2 #2 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [JIT-IO] @f000:7b37 OUT port=0x43 DX=0x0 AX=0x34 #3 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [JIT-IO] @f000:7b37 OUT port=0x43 DX=0x0 AX=0x34 #4 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [JIT-IO] @f000:7b3b OUT port=0x40 DX=0x0 AX=0xd3 #4 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [JIT-IO] @f000:7b3b OUT port=0x40 DX=0x0 AX=0xd3 #5 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [JIT-IO] @f000:7b3f OUT port=0x40 DX=0x0 AX=0x48 #6 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [JIT-IO] @f000:7b3f OUT port=0x40 DX=0x0 AX=0x48 #7 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [JIT-IO] @f000:79ba OUT port=0x3b8 DX=0x3b8 AX=0x100 #1 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [JIT-IO] @f000:79ba OUT port=0x3b8 DX=0x3b8 AX=0x100 #2 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [JIT-IO] @f000:79bb IN port=0x3b8 DX=0x3b8 AX=0x100 #3 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [INT10] AH=0x00 AL=0x03 BX=0x02b9 @f000:7c59 #99 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:4060
+[LOG] [INT10] AH=0x00 AL=0x03 BX=0x02b9 @f000:7c59 #100 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:4060
+[LOG] [JIT-IO] @f000:7d50 OUT port=0x43 DX=0x0 AX=0x34 #5 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [JIT-IO] @f000:7d50 OUT port=0x43 DX=0x0 AX=0x34 #6 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [JIT-IO] @f000:7d54 OUT port=0x40 DX=0x0 AX=0x0 #8 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [JIT-IO] @f000:7d54 OUT port=0x40 DX=0x0 AX=0x0 #9 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [JIT-IO] @f000:7d56 OUT port=0x40 DX=0x0 AX=0x0 #10 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [JIT-IO] @f000:edba OUT port=0x70 DX=0x0 AX=0x0 #19 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [JIT-IO] @f000:edba OUT port=0x70 DX=0x0 AX=0x0 #20 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [JIT-IO] @f000:edbc IN port=0x71 DX=0x0 AX=0x0 #11 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [JIT-IO] @f000:edde OUT port=0x70 DX=0xebd0 AX=0x2 #21 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [JIT-IO] @f000:edde OUT port=0x70 DX=0xebd0 AX=0x2 #22 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [JIT-IO] @f000:ede0 IN port=0x71 DX=0xebd0 AX=0x2 #12 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [JIT-IO] @f000:ee02 OUT port=0x70 DX=0x40 AX=0x4 #23 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [JIT-IO] @f000:ee02 OUT port=0x70 DX=0x40 AX=0x4 #24 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [JIT-IO] @f000:ee04 IN port=0x71 DX=0x40 AX=0x4 #13 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [JIT-IO] @f000:1815 OUT port=0x70 DX=0x70 AX=0x703d #25 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [JIT-IO] @f000:1815 OUT port=0x70 DX=0x70 AX=0x703d #26 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [JIT-IO] @f000:181a IN port=0x71 DX=0x71 AX=0x703d #14 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [JIT-IO] @f000:181a IN port=0x71 DX=0x71 AX=0x703d #15 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [JIT-IO] @f000:1815 OUT port=0x70 DX=0x70 AX=0x7038 #27 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [JIT-IO] @f000:1815 OUT port=0x70 DX=0x70 AX=0x7038 #28 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [JIT-IO] @f000:181a IN port=0x71 DX=0x71 AX=0x7038 #16 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [JIT-IO] @f000:181a IN port=0x71 DX=0x71 AX=0x7038 #17 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [JIT-IO] @f000:1815 OUT port=0x70 DX=0x70 AX=0x703c #29 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [JIT-IO] @f000:1815 OUT port=0x70 DX=0x70 AX=0x703c #30 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [JIT-IO] @f000:181a IN port=0x71 DX=0x71 AX=0x703c #18 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [JIT-IO] @f000:181a IN port=0x71 DX=0x71 AX=0x703c #19 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [JIT-IO] @f000:181a IN port=0x71 DX=0x71 AX=0x703c #20 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [JIT-IO] @f000:181a IN port=0x71 DX=0x71 AX=0x703c #21 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [BIOS] BIOS: Boot : bseqnr=1, bootseq=0023 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:333
+[LOG] [JIT-IO] @f000:2f25 IN port=0x177 DX=0x177 AX=0xc #19 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [JIT-IO] @f000:2f25 IN port=0x177 DX=0x177 AX=0xc #20 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [JIT-IO] @f000:2f3a OUT port=0x376 DX=0x376 AX=0xa #13 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [JIT-IO] @f000:2f3a OUT port=0x376 DX=0x376 AX=0xa #14 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [JIT-IO] @f000:2f43 OUT port=0x174 DX=0x174 AX=0xf0 #5 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [JIT-IO] @f000:2f43 OUT port=0x174 DX=0x174 AX=0xf0 #6 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [JIT-IO] @f000:2f4c OUT port=0x175 DX=0x175 AX=0xff #5 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [JIT-IO] @f000:2f4c OUT port=0x175 DX=0x175 AX=0xff #6 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [JIT-IO] @f000:2f61 OUT port=0x176 DX=0x176 AX=0xa0 #7 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [JIT-IO] @f000:2f61 OUT port=0x176 DX=0x176 AX=0xa0 #8 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [JIT-IO] @f000:2f6a OUT port=0x177 DX=0x177 AX=0xa0 #21 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [JIT-IO] @f000:2f6a OUT port=0x177 DX=0x177 AX=0xa0 #22 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [JIT-IO] @f000:2f71 IN port=0x177 DX=0x177 AX=0xa0 #23 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [JIT-IO] @f000:2f71 IN port=0x177 DX=0x177 AX=0xa0 #24 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [JIT-IO] @f000:2fd1 IN port=0x177 DX=0x177 AX=0x6fb #25 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [JIT-IO] @f000:2fd1 IN port=0x177 DX=0x177 AX=0x6fb #26 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [JIT-IO] @f000:2fd1 IN port=0x177 DX=0x177 AX=0x90 #27 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [JIT-IO] @f000:2fd1 IN port=0x177 DX=0x177 AX=0x90 #28 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [JIT-IO] @f000:2fd1 IN port=0x177 DX=0x177 AX=0x90 #29 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [JIT-IO] @f000:2fd1 IN port=0x177 DX=0x177 AX=0x90 #30 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [JIT-IO] @f000:301f IN port=0x175 DX=0x175 AX=0xc #7 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [JIT-IO] @f000:301f IN port=0x175 DX=0x175 AX=0xc #8 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [JIT-IO] @f000:302d IN port=0x174 DX=0x174 AX=0x8 #7 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [JIT-IO] @f000:302d IN port=0x174 DX=0x174 AX=0x8 #8 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [JIT-IO] @f000:30a1 OUT port=0x376 DX=0x376 AX=0x8 #15 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [JIT-IO] @f000:30a1 OUT port=0x376 DX=0x376 AX=0x8 #16 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [JIT-IO] @f000:2f3a OUT port=0x376 DX=0x376 AX=0xa #17 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [JIT-IO] @f000:2f3a OUT port=0x376 DX=0x376 AX=0xa #18 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [JIT-IO] @f000:2f43 OUT port=0x174 DX=0x174 AX=0xf0 #9 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [JIT-IO] @f000:2f43 OUT port=0x174 DX=0x174 AX=0xf0 #10 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [JIT-IO] @f000:2f4c OUT port=0x175 DX=0x175 AX=0xff #9 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [JIT-IO] @f000:2f4c OUT port=0x175 DX=0x175 AX=0xff #10 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [JIT-IO] @f000:2f61 OUT port=0x176 DX=0x176 AX=0xa0 #9 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [JIT-IO] @f000:2f61 OUT port=0x176 DX=0x176 AX=0xa0 #10 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [JIT-IO] @f000:301f IN port=0x175 DX=0x175 AX=0xc #11 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [JIT-IO] @f000:301f IN port=0x175 DX=0x175 AX=0xc #12 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [JIT-IO] @f000:302d IN port=0x174 DX=0x174 AX=0x8 #11 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [JIT-IO] @f000:302d IN port=0x174 DX=0x174 AX=0x8 #12 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [JIT-IO] @f000:30a1 OUT port=0x376 DX=0x376 AX=0x8 #19 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [JIT-IO] @f000:30a1 OUT port=0x376 DX=0x376 AX=0x8 #20 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [JIT-IO] @f000:2f3a OUT port=0x376 DX=0x376 AX=0xa #21 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [JIT-IO] @f000:2f3a OUT port=0x376 DX=0x376 AX=0xa #22 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [JIT-IO] @f000:2f43 OUT port=0x174 DX=0x174 AX=0xf0 #13 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [JIT-IO] @f000:2f43 OUT port=0x174 DX=0x174 AX=0xf0 #14 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [JIT-IO] @f000:2f4c OUT port=0x175 DX=0x175 AX=0xff #13 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [JIT-IO] @f000:2f4c OUT port=0x175 DX=0x175 AX=0xff #14 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [JIT-IO] @f000:2f61 OUT port=0x176 DX=0x176 AX=0xa0 #11 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [JIT-IO] @f000:2f61 OUT port=0x176 DX=0x176 AX=0xa0 #12 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [JIT-IO] @f000:301f IN port=0x175 DX=0x175 AX=0x0 #15 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [JIT-IO] @f000:301f IN port=0x175 DX=0x175 AX=0x0 #16 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [JIT-IO] @f000:302d IN port=0x174 DX=0x174 AX=0x8 #15 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [JIT-IO] @f000:302d IN port=0x174 DX=0x174 AX=0x8 #16 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [JIT-IO] @f000:30a1 OUT port=0x376 DX=0x376 AX=0x8 #23 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [JIT-IO] @f000:30a1 OUT port=0x376 DX=0x376 AX=0x8 #24 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [BIOS] BIOS: Booting from CD-ROM... @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:333
+[LOG] [JIT-IO] @f000:2f3a OUT port=0x376 DX=0x376 AX=0xa #25 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [JIT-IO] @f000:2f3a OUT port=0x376 DX=0x376 AX=0xa #26 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [JIT-IO] @f000:2f43 OUT port=0x174 DX=0x174 AX=0xf0 #17 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [JIT-IO] @f000:2f43 OUT port=0x174 DX=0x174 AX=0xf0 #18 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [JIT-IO] @f000:2f4c OUT port=0x175 DX=0x175 AX=0xff #17 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [JIT-IO] @f000:2f4c OUT port=0x175 DX=0x175 AX=0xff #18 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [JIT-IO] @f000:2f61 OUT port=0x176 DX=0x176 AX=0xa0 #13 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [JIT-IO] @f000:2f61 OUT port=0x176 DX=0x176 AX=0xa0 #14 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [JIT-IO] @f000:2f9a OUT port=0x376 DX=0x376 AX=0x8 #27 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [JIT-IO] @f000:2f9a OUT port=0x376 DX=0x376 AX=0x8 #28 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [BIOS] BIOS: int13_cdrom: function 42, status 04 ! @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:333
+[LOG] [JIT-IO] @f000:2f3a OUT port=0x376 DX=0x376 AX=0xa #29 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [JIT-IO] @f000:2f3a OUT port=0x376 DX=0x376 AX=0xa #30 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [JIT-IO] @f000:2f43 OUT port=0x174 DX=0x174 AX=0xf0 #19 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [JIT-IO] @f000:2f43 OUT port=0x174 DX=0x174 AX=0xf0 #20 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [JIT-IO] @f000:2f4c OUT port=0x175 DX=0x175 AX=0xff #19 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [JIT-IO] @f000:2f4c OUT port=0x175 DX=0x175 AX=0xff #20 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [JIT-IO] @f000:2f61 OUT port=0x176 DX=0x176 AX=0xa0 #15 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [JIT-IO] @f000:2f61 OUT port=0x176 DX=0x176 AX=0xa0 #16 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [JIT-IO] @f000:2f43 OUT port=0x174 DX=0x174 AX=0xf0 #21 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [JIT-IO] @f000:2f43 OUT port=0x174 DX=0x174 AX=0xf0 #22 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [JIT-IO] @f000:2f4c OUT port=0x175 DX=0x175 AX=0xff #21 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [JIT-IO] @f000:2f4c OUT port=0x175 DX=0x175 AX=0xff #22 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [JIT-IO] @f000:2f61 OUT port=0x176 DX=0x176 AX=0xa0 #17 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [JIT-IO] @f000:2f61 OUT port=0x176 DX=0x176 AX=0xa0 #18 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [JIT-IO] @f000:301f IN port=0x175 DX=0x175 AX=0x0 #23 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [JIT-IO] @f000:301f IN port=0x175 DX=0x175 AX=0x0 #24 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [JIT-IO] @f000:302d IN port=0x174 DX=0x174 AX=0x58 #23 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [JIT-IO] @f000:302d IN port=0x174 DX=0x174 AX=0x58 #24 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [JIT-IO] @f000:e036 OUT port=0x20 DX=0x233c AX=0xb220 #5 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [JIT-IO] @f000:e036 OUT port=0x20 DX=0x233c AX=0xb220 #6 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2065
+[LOG] [POST80] code=0x41 @0:9e41 seq=2 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2045
+[LOG] [JIT-DBG] call#10000 cpuPtr=0xf34000 ramBase=0x7e4000 romBufSize=262144 maxInsn=4096 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:4223
+[LOG] [POST] 5s: refresh=96 updateRect=25 720x400 @ https://nalet.github.io/VirtualBox-Wasm/:820
+[LOG] [JIT] calls=15141 insns=52935529 fallbacks=1126 avg=3777.1 @0:a734 IF=0 code=e3fafc8925e8ae00 top=[0xec:1186 0xef:444 0xcd:162 0xee:156 0xed:117 0xe6:73 0xe4:13 0x8e:11] @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:4249
+[LOG] [JIT-DBG] call#20000 cpuPtr=0xf34000 ramBase=0x7e4000 romBufSize=262144 maxInsn=4096 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:4223
+[LOG] [POST] 10s: refresh=194 updateRect=49 720x400 @ https://nalet.github.io/VirtualBox-Wasm/:820
+[LOG] [JIT] calls=28727 insns=108583785 fallbacks=1126 avg=3934.1 @0:a734 IF=0 code=e3fafc8925e8ae00 top=[0xec:1186 0xef:444 0xcd:162 0xee:156 0xed:117 0xe6:73 0xe4:13 0x8e:11] @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:4249
+[LOG] [JIT-DBG] call#30000 cpuPtr=0xf34000 ramBase=0x7e4000 romBufSize=262144 maxInsn=4096 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:4223
+[LOG] [JIT-DBG] call#40000 cpuPtr=0xf34000 ramBase=0x7e4000 romBufSize=262144 maxInsn=4096 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:4223
+[LOG] [POST] 15s: refresh=293 updateRect=74 720x400 @ https://nalet.github.io/VirtualBox-Wasm/:820
+[LOG] [JIT] calls=42625 insns=165509993 fallbacks=1126 avg=3988.3 @0:a734 IF=0 code=e3fafc8925e8ae00 top=[0xec:1186 0xef:444 0xcd:162 0xee:156 0xed:117 0xe6:73 0xe4:13 0x8e:11] @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:4249
+[LOG] [JIT-DBG] call#50000 cpuPtr=0xf34000 ramBase=0x7e4000 romBufSize=262144 maxInsn=4096 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:4223
+[LOG] [POST] 20s: refresh=392 updateRect=99 720x400 @ https://nalet.github.io/VirtualBox-Wasm/:820
+[LOG] [JIT] calls=57058 insns=224627561 fallbacks=1126 avg=4016.1 @0:a734 IF=0 code=e3fafc8925e8ae00 top=[0xec:1186 0xef:444 0xcd:162 0xee:156 0xed:117 0xe6:73 0xe4:13 0x8e:11] @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:4249
+[LOG] [JIT-DBG] call#60000 cpuPtr=0xf34000 ramBase=0x7e4000 romBufSize=262144 maxInsn=4096 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:4223
+[LOG] [JIT-DBG] call#70000 cpuPtr=0xf34000 ramBase=0x7e4000 romBufSize=262144 maxInsn=4096 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:4223
+[LOG] [POST] 25s: refresh=491 updateRect=124 720x400 @ https://nalet.github.io/VirtualBox-Wasm/:820
+[LOG] [JIT] calls=71220 insns=282635113 fallbacks=1126 avg=4032.2 @0:a734 IF=0 code=e3fafc8925e8ae00 top=[0xec:1186 0xef:444 0xcd:162 0xee:156 0xed:117 0xe6:73 0xe4:13 0x8e:11] @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:4249
+[LOG] [WasmDisplay] refresh #500, updateRect #127 @ https://nalet.github.io/VirtualBox-Wasm/:583
+[LOG] [JIT-DBG] call#80000 cpuPtr=0xf34000 ramBase=0x7e4000 romBufSize=262144 maxInsn=4096 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:4223
+[LOG] [POST] 30s: refresh=590 updateRect=150 720x400 @ https://nalet.github.io/VirtualBox-Wasm/:820
+[LOG] [JIT] calls=85393 insns=340687721 fallbacks=1126 avg=4043.0 @0:a734 IF=0 code=e3fafc8925e8ae00 top=[0xec:1186 0xef:444 0xcd:162 0xee:156 0xed:117 0xe6:73 0xe4:13 0x8e:11] @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:4249
+[LOG] [JIT-DBG] call#90000 cpuPtr=0xf34000 ramBase=0x7e4000 romBufSize=262144 maxInsn=4096 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:4223
+[LOG] [POST] 35s: refresh=689 updateRect=175 720x400 @ https://nalet.github.io/VirtualBox-Wasm/:820
+[LOG] [JIT] calls=99716 insns=399354729 fallbacks=1126 avg=4050.7 @0:a734 IF=0 code=e3fafc8925e8ae00 top=[0xec:1186 0xef:444 0xcd:162 0xee:156 0xed:117 0xe6:73 0xe4:13 0x8e:11] @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:4249
+[LOG] [JIT-DBG] call#100000 cpuPtr=0xf34000 ramBase=0x7e4000 romBufSize=262144 maxInsn=4096 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:4223
+[LOG] [JIT-DBG] call#110000 cpuPtr=0xf34000 ramBase=0x7e4000 romBufSize=262144 maxInsn=4096 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:4223
+[LOG] [POST] 40s: refresh=788 updateRect=200 720x400 @ https://nalet.github.io/VirtualBox-Wasm/:820
+[LOG] [JIT] calls=113773 insns=456932201 fallbacks=1126 avg=4056.3 @0:a734 IF=0 code=e3fafc8925e8ae00 top=[0xec:1186 0xef:444 0xcd:162 0xee:156 0xed:117 0xe6:73 0xe4:13 0x8e:11] @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:4249
+[LOG] [JIT-DBG] call#120000 cpuPtr=0xf34000 ramBase=0x7e4000 romBufSize=262144 maxInsn=4096 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:4223
+[LOG] [JIT-DBG] call#130000 cpuPtr=0xf34000 ramBase=0x7e4000 romBufSize=262144 maxInsn=4096 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:4223
+[LOG] [POST] 45s: refresh=886 updateRect=224 720x400 @ https://nalet.github.io/VirtualBox-Wasm/:820
+[LOG] [JIT] calls=130935 insns=527227753 fallbacks=1126 avg=4061.6 @0:a734 IF=0 code=e3fafc8925e8ae00 top=[0xec:1186 0xef:444 0xcd:162 0xee:156 0xed:117 0xe6:73 0xe4:13 0x8e:11] @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:4249
+[LOG] [JIT-DBG] call#140000 cpuPtr=0xf34000 ramBase=0x7e4000 romBufSize=262144 maxInsn=4096 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:4223
+[LOG] [POST] 50s: refresh=985 updateRect=249 720x400 @ https://nalet.github.io/VirtualBox-Wasm/:820
+[LOG] [JIT] calls=145243 insns=585833321 fallbacks=1126 avg=4065.0 @0:a734 IF=0 code=e3fafc8925e8ae00 top=[0xec:1186 0xef:444 0xcd:162 0xee:156 0xed:117 0xe6:73 0xe4:13 0x8e:11] @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:4249
+[LOG] [WasmDisplay] refresh #1000, updateRect #253 @ https://nalet.github.io/VirtualBox-Wasm/:583
+[LOG] [JIT-DBG] call#150000 cpuPtr=0xf34000 ramBase=0x7e4000 romBufSize=262144 maxInsn=4096 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:4223
+[LOG] [POST] 55s: refresh=1084 updateRect=275 720x400 @ https://nalet.github.io/VirtualBox-Wasm/:820
+[LOG] [JIT] calls=159442 insns=643992425 fallbacks=1126 avg=4067.8 @0:a734 IF=0 code=e3fafc8925e8ae00 top=[0xec:1186 0xef:444 0xcd:162 0xee:156 0xed:117 0xe6:73 0xe4:13 0x8e:11] @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:4249
+[LOG] [JIT-DBG] call#160000 cpuPtr=0xf34000 ramBase=0x7e4000 romBufSize=262144 maxInsn=4096 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:4223
+[LOG] [JIT-DBG] call#170000 cpuPtr=0xf34000 ramBase=0x7e4000 romBufSize=262144 maxInsn=4096 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:4223
+[LOG] [POST] 60s: refresh=1183 updateRect=300 720x400 @ https://nalet.github.io/VirtualBox-Wasm/:820
+[LOG] [JIT] calls=173506 insns=701598569 fallbacks=1126 avg=4070.1 @0:a734 IF=0 code=e3fafc8925e8ae00 top=[0xec:1186 0xef:444 0xcd:162 0xee:156 0xed:117 0xe6:73 0xe4:13 0x8e:11] @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:4249
+[LOG] [JIT-DBG] call#180000 cpuPtr=0xf34000 ramBase=0x7e4000 romBufSize=262144 maxInsn=4096 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:4223
+[LOG] [POST] 65s: refresh=1281 updateRect=324 720x400 @ https://nalet.github.io/VirtualBox-Wasm/:820
+[LOG] [JIT] calls=187883 insns=760486761 fallbacks=1126 avg=4072.1 @0:a734 IF=0 code=e3fafc8925e8ae00 top=[0xec:1186 0xef:444 0xcd:162 0xee:156 0xed:117 0xe6:73 0xe4:13 0x8e:11] @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:4249
+[LOG] [JIT-DBG] call#190000 cpuPtr=0xf34000 ramBase=0x7e4000 romBufSize=262144 maxInsn=4096 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:4223
+[LOG] [JIT-DBG] call#200000 cpuPtr=0xf34000 ramBase=0x7e4000 romBufSize=262144 maxInsn=4096 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:4223
+[LOG] [POST] 70s: refresh=1380 updateRect=349 720x400 @ https://nalet.github.io/VirtualBox-Wasm/:820
+[LOG] [JIT] calls=202168 insns=818998121 fallbacks=1126 avg=4073.8 @0:a734 IF=0 code=e3fafc8925e8ae00 top=[0xec:1186 0xef:444 0xcd:162 0xee:156 0xed:117 0xe6:73 0xe4:13 0x8e:11] @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:4249
+[LOG] [JIT-DBG] call#210000 cpuPtr=0xf34000 ramBase=0x7e4000 romBufSize=262144 maxInsn=4096 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:4223
+[LOG] [POST] 75s: refresh=1479 updateRect=375 720x400 @ https://nalet.github.io/VirtualBox-Wasm/:820
+[LOG] [JIT] calls=216355 insns=877108073 fallbacks=1126 avg=4075.2 @0:a734 IF=0 code=e3fafc8925e8ae00 top=[0xec:1186 0xef:444 0xcd:162 0xee:156 0xed:117 0xe6:73 0xe4:13 0x8e:11] @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:4249
+[LOG] [WasmDisplay] refresh #1500, updateRect #380 @ https://nalet.github.io/VirtualBox-Wasm/:583
+[LOG] [JIT-DBG] call#220000 cpuPtr=0xf34000 ramBase=0x7e4000 romBufSize=262144 maxInsn=4096 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:4223

@@ -1144,7 +1144,15 @@ IEM_DECL_IMPL_DEF(uint32_t, iemAImpl_test_u8,(uint32_t fEFlags, uint8_t const *p
  */
 
 /** 64-bit locked binary operand operation. */
-# define DO_LOCKED_BIN_OP(a_Mnemonic, a_cBitsWidth) \
+# ifdef __EMSCRIPTEN__
+/* Wasm atomics require natural alignment; x86 LOCK prefix does not.
+   Since IEM is single-threaded per vCPU, just use the non-atomic path. */
+#  define DO_LOCKED_BIN_OP(a_Mnemonic, a_cBitsWidth) \
+    do { \
+        return iemAImpl_ ## a_Mnemonic ## _u ## a_cBitsWidth(fEFlagsIn, puDst, uSrc); \
+    } while (0)
+# else
+#  define DO_LOCKED_BIN_OP(a_Mnemonic, a_cBitsWidth) \
     do { \
         uint ## a_cBitsWidth ## _t uOld = ASMAtomicUoReadU ## a_cBitsWidth(puDst); \
         uint ## a_cBitsWidth ## _t uTmp; \
@@ -1156,6 +1164,7 @@ IEM_DECL_IMPL_DEF(uint32_t, iemAImpl_test_u8,(uint32_t fEFlags, uint8_t const *p
         } while (!ASMAtomicCmpXchgExU ## a_cBitsWidth(puDst, uTmp, uOld, &uOld)); \
         return fEflTmp; \
     } while (0)
+# endif
 
 
 #define EMIT_LOCKED_BIN_OP(a_Mnemonic, a_cBitsWidth) \
@@ -2013,7 +2022,12 @@ EMIT_POPCNT(16, uint16_t, RT_NOTHING)
 
 IEM_DECL_IMPL_DEF(void, iemAImpl_xchg_u64_locked,(uint64_t *puMem, uint64_t *puReg))
 {
-#if ARCH_BITS >= 64
+#ifdef __EMSCRIPTEN__
+    /* Wasm atomics require natural alignment; use non-atomic xchg (single-threaded). */
+    uint64_t const uOld = *puMem;
+    *puMem = *puReg;
+    *puReg = uOld;
+#elif ARCH_BITS >= 64
     *puReg = ASMAtomicXchgU64(puMem, *puReg);
 #else
     uint64_t uOldMem = *puMem;
@@ -2027,19 +2041,37 @@ IEM_DECL_IMPL_DEF(void, iemAImpl_xchg_u64_locked,(uint64_t *puMem, uint64_t *puR
 
 IEM_DECL_IMPL_DEF(void, iemAImpl_xchg_u32_locked,(uint32_t *puMem, uint32_t *puReg))
 {
+#ifdef __EMSCRIPTEN__
+    uint32_t const uOld = *puMem;
+    *puMem = *puReg;
+    *puReg = uOld;
+#else
     *puReg = ASMAtomicXchgU32(puMem, *puReg);
+#endif
 }
 
 
 IEM_DECL_IMPL_DEF(void, iemAImpl_xchg_u16_locked,(uint16_t *puMem, uint16_t *puReg))
 {
+#ifdef __EMSCRIPTEN__
+    uint16_t const uOld = *puMem;
+    *puMem = *puReg;
+    *puReg = uOld;
+#else
     *puReg = ASMAtomicXchgU16(puMem, *puReg);
+#endif
 }
 
 
 IEM_DECL_IMPL_DEF(void, iemAImpl_xchg_u8_locked,(uint8_t *puMem, uint8_t *puReg))
 {
+#ifdef __EMSCRIPTEN__
+    uint8_t const uOld = *puMem;
+    *puMem = *puReg;
+    *puReg = uOld;
+#else
     *puReg = ASMAtomicXchgU8(puMem, *puReg);
+#endif
 }
 
 # endif /* !defined(RT_ARCH_X86) || defined(IEM_WITHOUT_ASSEMBLY) */
@@ -2094,7 +2126,17 @@ IEM_DECL_IMPL_DEF(void, iemAImpl_xadd_u ## a_cBitsWidth,(a_Type *puDst, a_Type *
     *puDst = uResult; \
     *puReg = uDst; \
 } \
-\
+EMIT_LOCKED_XADD(a_cBitsWidth, a_Type)
+
+# ifdef __EMSCRIPTEN__
+/* Wasm atomics require natural alignment; use non-atomic path (single-threaded). */
+#  define EMIT_LOCKED_XADD(a_cBitsWidth, a_Type) \
+IEM_DECL_IMPL_DEF(void, iemAImpl_xadd_u ## a_cBitsWidth ## _locked,(a_Type *puDst, a_Type *puReg, uint32_t *pfEFlags)) \
+{ \
+    iemAImpl_xadd_u ## a_cBitsWidth(puDst, puReg, pfEFlags); \
+}
+# else
+#  define EMIT_LOCKED_XADD(a_cBitsWidth, a_Type) \
 IEM_DECL_IMPL_DEF(void, iemAImpl_xadd_u ## a_cBitsWidth ## _locked,(a_Type *puDst, a_Type *puReg, uint32_t *pfEFlags)) \
 { \
     a_Type uOld = ASMAtomicUoReadU ## a_cBitsWidth(puDst); \
@@ -2108,6 +2150,7 @@ IEM_DECL_IMPL_DEF(void, iemAImpl_xadd_u ## a_cBitsWidth ## _locked,(a_Type *puDs
     *puReg    = uOld; \
     *pfEFlags = fEflTmp; \
 }
+# endif
 EMIT_XADD(64, uint64_t)
 # if !defined(RT_ARCH_X86) || defined(IEM_WITHOUT_ASSEMBLY)
 EMIT_XADD(32, uint32_t)
@@ -2128,8 +2171,20 @@ EMIT_XADD(8, uint8_t)
 IEM_DECL_IMPL_DEF(void, iemAImpl_cmpxchg_u8_locked, (uint8_t  *pu8Dst,  uint8_t  *puAl,  uint8_t  uSrcReg, uint32_t *pEFlags))
 {
     uint8_t uOld = *puAl;
+#ifdef __EMSCRIPTEN__
+    /* Wasm atomics require natural alignment; non-atomic is safe (single-threaded). */
+    uint8_t uDst = *pu8Dst;
+    if (uDst == uOld)
+    {
+        *pu8Dst = uSrcReg;
+        *puAl = uOld;
+    }
+    else
+        *puAl = uDst;
+#else
     if (ASMAtomicCmpXchgExU8(pu8Dst, uSrcReg, uOld, puAl))
         Assert(*puAl == uOld);
+#endif
     *pEFlags = iemAImpl_cmp_u8(*pEFlags, &uOld, *puAl);
 }
 
@@ -2137,8 +2192,19 @@ IEM_DECL_IMPL_DEF(void, iemAImpl_cmpxchg_u8_locked, (uint8_t  *pu8Dst,  uint8_t 
 IEM_DECL_IMPL_DEF(void, iemAImpl_cmpxchg_u16_locked,(uint16_t *pu16Dst, uint16_t *puAx,  uint16_t uSrcReg, uint32_t *pEFlags))
 {
     uint16_t uOld = *puAx;
+#ifdef __EMSCRIPTEN__
+    uint16_t uDst = *pu16Dst;
+    if (uDst == uOld)
+    {
+        *pu16Dst = uSrcReg;
+        *puAx = uOld;
+    }
+    else
+        *puAx = uDst;
+#else
     if (ASMAtomicCmpXchgExU16(pu16Dst, uSrcReg, uOld, puAx))
         Assert(*puAx == uOld);
+#endif
     *pEFlags = iemAImpl_cmp_u16(*pEFlags, &uOld, *puAx);
 }
 
@@ -2146,8 +2212,19 @@ IEM_DECL_IMPL_DEF(void, iemAImpl_cmpxchg_u16_locked,(uint16_t *pu16Dst, uint16_t
 IEM_DECL_IMPL_DEF(void, iemAImpl_cmpxchg_u32_locked,(uint32_t *pu32Dst, uint32_t *puEax, uint32_t uSrcReg, uint32_t *pEFlags))
 {
     uint32_t uOld = *puEax;
+#ifdef __EMSCRIPTEN__
+    uint32_t uDst = *pu32Dst;
+    if (uDst == uOld)
+    {
+        *pu32Dst = uSrcReg;
+        *puEax = uOld;
+    }
+    else
+        *puEax = uDst;
+#else
     if (ASMAtomicCmpXchgExU32(pu32Dst, uSrcReg, uOld, puEax))
         Assert(*puEax == uOld);
+#endif
     *pEFlags = iemAImpl_cmp_u32(*pEFlags, &uOld, *puEax);
 }
 
@@ -2162,8 +2239,19 @@ IEM_DECL_IMPL_DEF(void, iemAImpl_cmpxchg_u64_locked,(uint64_t *pu64Dst, uint64_t
     uint64_t const uSrcReg = *puSrcReg;
 # endif
     uint64_t uOld = *puRax;
+#ifdef __EMSCRIPTEN__
+    uint64_t uDst = *pu64Dst;
+    if (uDst == uOld)
+    {
+        *pu64Dst = uSrcReg;
+        *puRax = uOld;
+    }
+    else
+        *puRax = uDst;
+#else
     if (ASMAtomicCmpXchgExU64(pu64Dst, uSrcReg, uOld, puRax))
         Assert(*puRax == uOld);
+#endif
     *pEFlags = iemAImpl_cmp_u64(*pEFlags, &uOld, *puRax);
 }
 
@@ -2173,6 +2261,19 @@ IEM_DECL_IMPL_DEF(void, iemAImpl_cmpxchg8b_locked,(uint64_t *pu64Dst, PRTUINT64U
 {
     uint64_t const uNew = pu64EbxEcx->u;
     uint64_t const uOld = pu64EaxEdx->u;
+#ifdef __EMSCRIPTEN__
+    uint64_t uDst = *pu64Dst;
+    if (uDst == uOld)
+    {
+        *pu64Dst = uNew;
+        *pEFlags |= X86_EFL_ZF;
+    }
+    else
+    {
+        pu64EaxEdx->u = uDst;
+        *pEFlags &= ~X86_EFL_ZF;
+    }
+#else
     if (ASMAtomicCmpXchgExU64(pu64Dst, uNew, uOld, &pu64EaxEdx->u))
     {
         Assert(pu64EaxEdx->u == uOld);
@@ -2180,6 +2281,7 @@ IEM_DECL_IMPL_DEF(void, iemAImpl_cmpxchg8b_locked,(uint64_t *pu64Dst, PRTUINT64U
     }
     else
         *pEFlags &= ~X86_EFL_ZF;
+#endif
 }
 
 
@@ -3040,7 +3142,17 @@ IEM_DECL_IMPL_DEF(void, iemAImpl_neg_u8,(uint8_t *puDst, uint32_t *pfEFlags))
  */
 
 /** Emit a function for doing a locked unary operand operation. */
-# define EMIT_LOCKED_UNARY_OP(a_Mnemonic, a_cBitsWidth) \
+# ifdef __EMSCRIPTEN__
+/* Wasm atomics require natural alignment; x86 LOCK prefix does not.
+   Since IEM is single-threaded per vCPU, just use the non-atomic path. */
+#  define EMIT_LOCKED_UNARY_OP(a_Mnemonic, a_cBitsWidth) \
+    IEM_DECL_IMPL_DEF(void, iemAImpl_ ## a_Mnemonic ## _u ## a_cBitsWidth ## _locked,(uint ## a_cBitsWidth ## _t *puDst, \
+                                                                                      uint32_t *pfEFlags)) \
+    { \
+        iemAImpl_ ## a_Mnemonic ## _u ## a_cBitsWidth(puDst, pfEFlags); \
+    }
+# else
+#  define EMIT_LOCKED_UNARY_OP(a_Mnemonic, a_cBitsWidth) \
     IEM_DECL_IMPL_DEF(void, iemAImpl_ ## a_Mnemonic ## _u ## a_cBitsWidth ## _locked,(uint ## a_cBitsWidth ## _t *puDst, \
                                                                                       uint32_t *pfEFlags)) \
     { \
@@ -3055,6 +3167,7 @@ IEM_DECL_IMPL_DEF(void, iemAImpl_neg_u8,(uint8_t *puDst, uint32_t *pfEFlags))
         } while (!ASMAtomicCmpXchgExU ## a_cBitsWidth(puDst, uTmp, uOld, &uOld)); \
         *pfEFlags = fEflTmp; \
     }
+# endif
 
 EMIT_LOCKED_UNARY_OP(inc, 64)
 EMIT_LOCKED_UNARY_OP(dec, 64)

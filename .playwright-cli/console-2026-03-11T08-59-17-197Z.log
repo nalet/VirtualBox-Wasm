@@ -1,0 +1,13 @@
+[   54179ms] [WARNING] worker sent an error! https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:265: Uncaught RuntimeError: memory access out of bounds @ https://nalet.github.io/VirtualBox-Wasm/:500
+[   54181ms] ErrorEvent
+[   54182ms] RuntimeError: memory access out of bounds
+    at https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.wasm:wasm-function[6232]:0x2fb005
+    at https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.wasm:wasm-function[6230]:0x2fabd0
+    at invoke_ijji (https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:6296:44)
+    at https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.wasm:wasm-function[880]:0x780a0
+    at https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.wasm:wasm-function[1993]:0xe78c0
+    at https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.wasm:wasm-function[1992]:0xe7036
+    at https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.wasm:wasm-function[32163]:0x1a0a51b
+    at https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.wasm:wasm-function[292]:0x225ca
+    at https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:928:46
+    at invokeEntryPoint (https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:928:69)

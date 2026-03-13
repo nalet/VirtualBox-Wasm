@@ -1,0 +1,25 @@
+[   38959ms] [WARNING] worker: onmessage() captured an uncaught exception: RuntimeError: memory access out of bounds @ https://nalet.github.io/VirtualBox-Wasm/?nocache=1773153365:500
+[   38960ms] [WARNING] RuntimeError: memory access out of bounds
+    at https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.wasm:wasm-function[6237]:0x2fde48
+    at https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.wasm:wasm-function[6235]:0x2fda13
+    at invoke_ijji (https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:7031:44)
+    at https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.wasm:wasm-function[885]:0x7aee3
+    at https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.wasm:wasm-function[1998]:0xea703
+    at https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.wasm:wasm-function[1997]:0xe9e79
+    at https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.wasm:wasm-function[32167]:0x1a0d1cb
+    at https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.wasm:wasm-function[297]:0x2498e
+    at https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:1299:46
+    at invokeEntryPoint (https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:1299:69) @ https://nalet.github.io/VirtualBox-Wasm/?nocache=1773153365:500
+[   38961ms] [WARNING] Pthread 0x0000000000d5a008 sent an error! https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:522: Uncaught RuntimeError: memory access out of bounds @ https://nalet.github.io/VirtualBox-Wasm/?nocache=1773153365:500
+[   38962ms] ErrorEvent
+[   38963ms] RuntimeError: memory access out of bounds
+    at https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.wasm:wasm-function[6237]:0x2fde48
+    at https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.wasm:wasm-function[6235]:0x2fda13
+    at invoke_ijji (https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:7031:44)
+    at https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.wasm:wasm-function[885]:0x7aee3
+    at https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.wasm:wasm-function[1998]:0xea703
+    at https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.wasm:wasm-function[1997]:0xe9e79
+    at https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.wasm:wasm-function[32167]:0x1a0d1cb
+    at https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.wasm:wasm-function[297]:0x2498e
+    at https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:1299:46
+    at invokeEntryPoint (https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:1299:69)

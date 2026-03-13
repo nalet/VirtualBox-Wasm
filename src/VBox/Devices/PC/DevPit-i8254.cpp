@@ -62,7 +62,7 @@
 #include <iprt/asm-math.h>
 
 #ifdef IN_RING3
-# ifdef RT_OS_LINUX
+# if defined(RT_OS_LINUX) && !defined(__EMSCRIPTEN__)
 #  include <fcntl.h>
 #  include <errno.h>
 #  include <unistd.h>
@@ -260,7 +260,7 @@ typedef struct PITSTATER3
     bool                    fSpeakerCfg;
     /** Config: What to do with speaker activity. */
     PITSPEAKEREMU           enmSpeakerEmu;
-#ifdef RT_OS_LINUX
+#if defined(RT_OS_LINUX) && !defined(__EMSCRIPTEN__)
     /** File handle for host speaker functionality. */
     int                     hHostSpeaker;
     int                     afAlignment2;
@@ -879,7 +879,7 @@ pitR3IOPortSpeakerWrite(PPDMDEVINS pDevIns, void *pvUser, RTIOPORT offPort, uint
         /** @todo r=klaus move this to a (system-specific) driver, which can
          * abstract the details, and if necessary create a thread to minimize
          * impact on VM execution. */
-# ifdef RT_OS_LINUX
+# if defined(RT_OS_LINUX) && !defined(__EMSCRIPTEN__)
         PPITSTATER3 pThisCC = PDMDEVINS_2_DATA_CC(pDevIns, PPITSTATER3);
 
         if (pThisCC->enmSpeakerEmu != PIT_SPEAKER_EMU_NONE)
@@ -1263,7 +1263,7 @@ static DECLCALLBACK(void) pitR3Reset(PPDMDEVINS pDevIns)
     DEVPIT_UNLOCK_BOTH(pDevIns, pThis);
 }
 
-# ifdef RT_OS_LINUX
+# if defined(RT_OS_LINUX) && !defined(__EMSCRIPTEN__)
 
 static int pitR3TryDeviceOpen(const char *pszPath, int flags)
 {
@@ -1314,7 +1314,7 @@ static DECLCALLBACK(int)  pitR3Destruct(PPDMDEVINS pDevIns)
 {
     PDMDEV_CHECK_VERSIONS_RETURN(pDevIns);
 
-#ifdef RT_OS_LINUX
+#if defined(RT_OS_LINUX) && !defined(__EMSCRIPTEN__)
     PPITSTATER3 pThisCC = PDMDEVINS_2_DATA_CC(pDevIns, PPITSTATER3);
 
     if (pThisCC->enmSpeakerEmu != PIT_SPEAKER_EMU_NONE)
@@ -1389,7 +1389,7 @@ static DECLCALLBACK(int)  pitR3Construct(PPDMDEVINS pDevIns, int iInstance, PCFG
     if (uPassthroughSpeaker)
     {
         /** @todo r=klaus move this to a (system-specific) driver */
-#ifdef RT_OS_LINUX
+#if defined(RT_OS_LINUX) && !defined(__EMSCRIPTEN__)
         /** @todo r=andy Use defines / enums(?) for all those uPassthroughSpeaker below. */
         int fd = -1;
         if (uPassthroughSpeaker == 1 || uPassthroughSpeaker == 100)

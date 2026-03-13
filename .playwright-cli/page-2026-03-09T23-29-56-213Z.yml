@@ -1,0 +1,29 @@
+- generic [active] [ref=e1]:
+  - heading "VirtualBox/Wasm" [level=1] [ref=e2]
+  - paragraph [ref=e3]: VirtualBox VMM + IEM x86 interpreter compiled to WebAssembly (Wasm64 / memory64)
+  - generic [ref=e4]:
+    - generic [ref=e5]: ✓ Memory64
+    - generic [ref=e6]: ✓ SIMD128
+    - generic [ref=e7]: ✓ SharedArrayBuffer
+    - generic [ref=e8]: ✓ Cross-Origin Isolated
+  - generic [ref=e9]: Downloading FossaPup64 9.5...
+  - generic [ref=e10]:
+    - button "Start VM" [disabled] [ref=e11]
+    - button "Upload Custom ISO" [disabled] [ref=e12]
+    - generic [ref=e13]: "Default: FossaPup64 9.5 (409 MB)"
+  - generic [ref=e29]:
+    - generic [ref=e30]: Downloading FossaPup64 9.5...
+    - generic [ref=e31]: 12% (50 / 409 MB)
+  - generic [ref=e16]:
+    - generic [ref=e17]:
+      - text: "Input:"
+      - generic [ref=e18]: Keyboard
+      - generic [ref=e19]: Mouse
+    - generic [ref=e20]: "-"
+  - generic [ref=e21]: "Detecting browser capabilities... memory64: OK SharedArrayBuffer: OK Cross-Origin Isolated: OK Loading VBoxVMM + VBoxDD + IEM engine... Loading WebAssembly module... Streaming compile... Compiled in 439ms Emscripten runtime initialized. Preparing FossaPup64 9.5... Checking ISO cache... Downloading FossaPup64 9.5 (9 parts, 409 MB)... Part 1/9: fossapup64.part00 Part 2/9: fossapup64.part01"
+  - generic [ref=e22]:
+    - generic [ref=e23]: Wasm64 (memory64)
+    - generic [ref=e24]: VBoxVMM + IEM + VBoxDD
+    - generic [ref=e25]: IPRT 7.2.97
+    - link "GitHub" [ref=e27] [cursor=pointer]:
+      - /url: https://github.com/nalet/VirtualBox-Wasm

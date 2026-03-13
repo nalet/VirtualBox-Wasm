@@ -1,0 +1,39 @@
+Total messages: 17 (Errors: 2, Warnings: 3)
+
+[LOG] [enable-threads] SW activated, reloading for COOP/COEP... @ https://nalet.github.io/VirtualBox-Wasm/enable-threads.js:39
+[LOG]  @ https://nalet.github.io/VirtualBox-Wasm/:457
+[LOG] === VirtualBox/Wasm VM Harness === @ https://nalet.github.io/VirtualBox-Wasm/:457
+[LOG] IPRT version : 7.2.97 @ https://nalet.github.io/VirtualBox-Wasm/:457
+[LOG] sizeof(void*): 8 (Wasm64) @ https://nalet.github.io/VirtualBox-Wasm/:457
+[LOG]  @ https://nalet.github.io/VirtualBox-Wasm/:457
+[LOG] CD-ROM image: /cdrom.iso (409 MB) @ https://nalet.github.io/VirtualBox-Wasm/:457
+[LOG] Creating VM... @ https://nalet.github.io/VirtualBox-Wasm/:457
+[LOG] [WASM-THREAD] rtThreadNativeCreate: name= cbStack=1048576 @ https://nalet.github.io/VirtualBox-Wasm/:457
+[LOG] [WASM-THREAD] pthread_create for '': rc=0 id=0000000000ba7008 @ https://nalet.github.io/VirtualBox-Wasm/:457
+[LOG] [WASM-THREAD] wasmThreadNativeMain entered: name= self=0000000000ba7008 @ https://nalet.github.io/VirtualBox-Wasm/:457
+[LOG] [WASM-THREAD] calling rtThreadMain for '' @ https://nalet.github.io/VirtualBox-Wasm/:457
+[WARNING] worker: onmessage() captured an uncaught exception: TypeError: Cannot convert 241 to a BigInt @ https://nalet.github.io/VirtualBox-Wasm/:462
+[WARNING] TypeError: Cannot convert 241 to a BigInt
+    at wasmCallFuncPtrTrampoline (https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:6513:24)
+    at vbox-wasm.wasm.vmR3ReqProcessOne(VMREQ*) (https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.wasm:wasm-function[1983]:0xd02c2)
+    at vbox-wasm.wasm.VMR3ReqProcessU (https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.wasm:wasm-function[1984]:0xd04ba)
+    at vbox-wasm.wasm.vmR3EmulationThreadWithId(RTTHREADINT*, UVMCPU*, unsigned int) (https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.wasm:wasm-function[1943]:0xcd16a)
+    at vbox-wasm.wasm.vmR3EmulationThread (https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.wasm:wasm-function[1942]:0xcd043)
+    at vbox-wasm.wasm.rtThreadMain (https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.wasm:wasm-function[7551]:0x30c6c6)
+    at vbox-wasm.wasm.wasmThreadNativeMain(void*) (https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.wasm:wasm-function[299]:0xe937)
+    at https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:1299:46
+    at invokeEntryPoint (https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:1299:69)
+    at handleMessage (https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:498:11) @ https://nalet.github.io/VirtualBox-Wasm/:462
+[WARNING] Pthread 0x0000000000ba7008 sent an error! https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:6513: Uncaught TypeError: Cannot convert 241 to a BigInt @ https://nalet.github.io/VirtualBox-Wasm/:462
+TypeError: Cannot convert 241 to a BigInt
+    at wasmCallFuncPtrTrampoline (https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:6513:24)
+    at vbox-wasm.wasm.vmR3ReqProcessOne(VMREQ*) (https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.wasm:wasm-function[1983]:0xd02c2)
+    at vbox-wasm.wasm.VMR3ReqProcessU (https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.wasm:wasm-function[1984]:0xd04ba)
+    at vbox-wasm.wasm.vmR3EmulationThreadWithId(RTTHREADINT*, UVMCPU*, unsigned int) (https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.wasm:wasm-function[1943]:0xcd16a)
+    at vbox-wasm.wasm.vmR3EmulationThread (https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.wasm:wasm-function[1942]:0xcd043)
+    at vbox-wasm.wasm.rtThreadMain (https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.wasm:wasm-function[7551]:0x30c6c6)
+    at vbox-wasm.wasm.wasmThreadNativeMain(void*) (https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.wasm:wasm-function[299]:0xe937)
+    at https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:1299:46
+    at invokeEntryPoint (https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:1299:69)
+    at handleMessage (https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:498:11)
+ErrorEvent

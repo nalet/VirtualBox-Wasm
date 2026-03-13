@@ -1,0 +1,40 @@
+Total messages: 38 (Errors: 0, Warnings: 0)
+
+[LOG] [enable-threads] SW activated, reloading for COOP/COEP... @ https://nalet.github.io/VirtualBox-Wasm/enable-threads.js:39
+[LOG]  @ https://nalet.github.io/VirtualBox-Wasm/:573
+[LOG] === VirtualBox/Wasm VM Harness === @ https://nalet.github.io/VirtualBox-Wasm/:573
+[LOG] IPRT version : 7.2.97 @ https://nalet.github.io/VirtualBox-Wasm/:573
+[LOG] sizeof(void*): 8 (Wasm64) @ https://nalet.github.io/VirtualBox-Wasm/:573
+[LOG]  @ https://nalet.github.io/VirtualBox-Wasm/:573
+[LOG] CD-ROM image: /cdrom.iso (409 MB) @ https://nalet.github.io/VirtualBox-Wasm/:573
+[LOG] Creating VM... @ https://nalet.github.io/VirtualBox-Wasm/:573
+[LOG] [WASM-THREAD] rtThreadNativeCreate: name= cbStack=1048576 @ https://nalet.github.io/VirtualBox-Wasm/:573
+[LOG] [WASM-THREAD] pthread_create for '': rc=0 id=0000000000bca008 @ https://nalet.github.io/VirtualBox-Wasm/:573
+[LOG] [WASM-THREAD] wasmThreadNativeMain entered: name= self=0000000000bca008 @ https://nalet.github.io/VirtualBox-Wasm/:573
+[LOG] [WASM-THREAD] calling rtThreadMain for '' @ https://nalet.github.io/VirtualBox-Wasm/:573
+[LOG] CFGM configuration tree built successfully. @ https://nalet.github.io/VirtualBox-Wasm/:573
+[LOG] STUB: RTRandAdvCreateSystemFaster returning VERR_NOT_SUPPORTED @ https://nalet.github.io/VirtualBox-Wasm/:573
+[LOG] [WasmDisplay] VGA refresh timer armed (50ms / 20fps) @ https://nalet.github.io/VirtualBox-Wasm/:573
+[LOG] [WasmDisplay] Display driver attached (initial 720x400 32bpp) @ https://nalet.github.io/VirtualBox-Wasm/:573
+[LOG] [WASM-THREAD] rtThreadNativeCreate: name= cbStack=0 @ https://nalet.github.io/VirtualBox-Wasm/:573
+[LOG] [WASM-THREAD] pthread_create for '': rc=0 id=0000000001ef7120 @ https://nalet.github.io/VirtualBox-Wasm/:573
+[LOG] [WASM-THREAD] wasmThreadNativeMain entered: name= self=0000000001ef7120 @ https://nalet.github.io/VirtualBox-Wasm/:573
+[LOG] [WASM-THREAD] calling rtThreadMain for '' @ https://nalet.github.io/VirtualBox-Wasm/:573
+[LOG] [WASM-THREAD] rtThreadNativeCreate: name= cbStack=0 @ https://nalet.github.io/VirtualBox-Wasm/:573
+[LOG] [WASM-THREAD] pthread_create for '': rc=0 id=0000000001f78d10 @ https://nalet.github.io/VirtualBox-Wasm/:573
+[LOG] [WASM-THREAD] wasmThreadNativeMain entered: name= self=0000000001f78d10 @ https://nalet.github.io/VirtualBox-Wasm/:573
+[LOG] [WASM-THREAD] calling rtThreadMain for '' @ https://nalet.github.io/VirtualBox-Wasm/:573
+[LOG] VM Error: rc=-225 at /build/vbox/src/VBox/VMM/VMMR3/PDMR3Device.cpp:572 (int pdmR3DevInit(PVM)) @ https://nalet.github.io/VirtualBox-Wasm/:573
+[LOG]   Failed to construct device 'piix3ide' instance #0 @ https://nalet.github.io/VirtualBox-Wasm/:573
+[LOG] [WASM-THREAD] rtThreadMain returned rc=0 for '' @ https://nalet.github.io/VirtualBox-Wasm/:573
+[LOG] [WASM-THREAD] rtThreadMain returned rc=0 for '' @ https://nalet.github.io/VirtualBox-Wasm/:573
+[LOG] [WASM-THREAD] rtThreadMain returned rc=1100 for '' @ https://nalet.github.io/VirtualBox-Wasm/:573
+[LOG] VMR3Create failed: VERR_INTERNAL_ERROR (rc=-225) @ https://nalet.github.io/VirtualBox-Wasm/:573
+[LOG] === Stub log (from EMT thread) === @ https://nalet.github.io/VirtualBox-Wasm/:573
+[LOG] STUB: RTRandAdvCreateSystemFaster @ https://nalet.github.io/VirtualBox-Wasm/:573
+[LOG] === End stub log === @ https://nalet.github.io/VirtualBox-Wasm/:573
+[LOG] === VM Error details (from EMT thread) === @ https://nalet.github.io/VirtualBox-Wasm/:573
+[LOG] VM Error: rc=-225 at /build/vbox/src/VBox/VMM/VMMR3/PDMR3Device.cpp:572 (int pdmR3DevInit(PVM)) @ https://nalet.github.io/VirtualBox-Wasm/:573
+[LOG]   Failed to construct device 'piix3ide' instance #0 @ https://nalet.github.io/VirtualBox-Wasm/:573
+[LOG] === End VM Error === @ https://nalet.github.io/VirtualBox-Wasm/:573
+[LOG] [POST] 5s: refresh=0 updateRect=0 0x0 @ https://nalet.github.io/VirtualBox-Wasm/:810

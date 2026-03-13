@@ -1,0 +1,23 @@
+[   79807ms] [WARNING] worker: onmessage() captured an uncaught exception: RuntimeError: function signature mismatch @ https://nalet.github.io/VirtualBox-Wasm/:462
+[   79813ms] [WARNING] RuntimeError: function signature mismatch
+    at https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.wasm:wasm-function[1982]:0xd0329
+    at https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.wasm:wasm-function[1983]:0xd0846
+    at https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.wasm:wasm-function[1942]:0xcd136
+    at https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.wasm:wasm-function[1941]:0xcd00f
+    at https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.wasm:wasm-function[7550]:0x30ca52
+    at https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.wasm:wasm-function[298]:0xe903
+    at https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:1299:46
+    at invokeEntryPoint (https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:1299:69)
+    at handleMessage (https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:498:11) @ https://nalet.github.io/VirtualBox-Wasm/:462
+[   79814ms] [WARNING] Pthread 0x0000000000ba7008 sent an error! https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:522: Uncaught RuntimeError: function signature mismatch @ https://nalet.github.io/VirtualBox-Wasm/:462
+[   79920ms] ErrorEvent
+[   79925ms] RuntimeError: function signature mismatch
+    at https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.wasm:wasm-function[1982]:0xd0329
+    at https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.wasm:wasm-function[1983]:0xd0846
+    at https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.wasm:wasm-function[1942]:0xcd136
+    at https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.wasm:wasm-function[1941]:0xcd00f
+    at https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.wasm:wasm-function[7550]:0x30ca52
+    at https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.wasm:wasm-function[298]:0xe903
+    at https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:1299:46
+    at invokeEntryPoint (https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:1299:69)
+    at handleMessage (https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:498:11)

@@ -1,0 +1,79 @@
+Total messages: 77 (Errors: 0, Warnings: 0)
+
+[LOG] [enable-threads] SW activated, reloading for COOP/COEP... @ https://nalet.github.io/VirtualBox-Wasm/enable-threads.js:39
+[LOG]  @ https://nalet.github.io/VirtualBox-Wasm/:495
+[LOG] === VirtualBox/Wasm VM Harness === @ https://nalet.github.io/VirtualBox-Wasm/:495
+[LOG] IPRT version : 7.2.97 @ https://nalet.github.io/VirtualBox-Wasm/:495
+[LOG] sizeof(void*): 8 (Wasm64) @ https://nalet.github.io/VirtualBox-Wasm/:495
+[LOG]  @ https://nalet.github.io/VirtualBox-Wasm/:495
+[LOG] CD-ROM image: /cdrom.iso (409 MB) @ https://nalet.github.io/VirtualBox-Wasm/:495
+[LOG] Creating VM... @ https://nalet.github.io/VirtualBox-Wasm/:495
+[LOG] [WASM-THREAD] rtThreadNativeCreate: name= cbStack=1048576 @ https://nalet.github.io/VirtualBox-Wasm/:495
+[LOG] [WASM-THREAD] pthread_create for '': rc=0 id=0000000000bca008 @ https://nalet.github.io/VirtualBox-Wasm/:495
+[LOG] [WASM-THREAD] wasmThreadNativeMain entered: name= self=0000000000bca008 @ https://nalet.github.io/VirtualBox-Wasm/:495
+[LOG] [WASM-THREAD] calling rtThreadMain for '' @ https://nalet.github.io/VirtualBox-Wasm/:495
+[LOG] CFGM configuration tree built successfully. @ https://nalet.github.io/VirtualBox-Wasm/:495
+[LOG] STUB: RTRandAdvCreateSystemFaster returning VERR_NOT_SUPPORTED @ https://nalet.github.io/VirtualBox-Wasm/:495
+[LOG] [WasmDisplay] VGA refresh timer armed (50ms / 20fps) @ https://nalet.github.io/VirtualBox-Wasm/:495
+[LOG] [WasmDisplay] Display driver attached (initial 720x400 32bpp) @ https://nalet.github.io/VirtualBox-Wasm/:495
+[LOG] [WASM-THREAD] rtThreadNativeCreate: name= cbStack=0 @ https://nalet.github.io/VirtualBox-Wasm/:495
+[LOG] [WASM-THREAD] pthread_create for '': rc=0 id=0000000001ef6fe0 @ https://nalet.github.io/VirtualBox-Wasm/:495
+[LOG] [WASM-THREAD] rtThreadNativeCreate: name= cbStack=0 @ https://nalet.github.io/VirtualBox-Wasm/:495
+[LOG] [WASM-THREAD] wasmThreadNativeMain entered: name= self=0000000001ef6fe0 @ https://nalet.github.io/VirtualBox-Wasm/:495
+[LOG] [WASM-THREAD] calling rtThreadMain for '' @ https://nalet.github.io/VirtualBox-Wasm/:495
+[LOG] [WASM-THREAD] wasmThreadNativeMain entered: name= self=0000000001f78bd0 @ https://nalet.github.io/VirtualBox-Wasm/:495
+[LOG] [WASM-THREAD] calling rtThreadMain for '' @ https://nalet.github.io/VirtualBox-Wasm/:495
+[LOG] [WASM-THREAD] pthread_create for '': rc=0 id=0000000001f78bd0 @ https://nalet.github.io/VirtualBox-Wasm/:495
+[LOG] VM created successfully! @ https://nalet.github.io/VirtualBox-Wasm/:495
+[LOG] Powering on VM... @ https://nalet.github.io/VirtualBox-Wasm/:495
+[LOG] VM is running! @ https://nalet.github.io/VirtualBox-Wasm/:495
+[LOG] IEM is executing guest x86 code... @ https://nalet.github.io/VirtualBox-Wasm/:495
+[LOG] Main thread returning (EMT continues in background). @ https://nalet.github.io/VirtualBox-Wasm/:495
+[LOG] [JIT] bail: codePhys=0xfffffff0 ramSize=0x1f81d000 ramBase=0x7e3000 csBase=0xffff0000 ip=0xfff0 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:733
+[LOG] [JIT] calls=1 insns=0 fallbacks=1 avg=0.0 top=[] @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:3647
+[LOG] [JIT] FF/7 modrm=0xff at f0000:1 ci+1=ff,ff,ff @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2839
+[LOG] [JIT] FF/7 modrm=0xff at f0000:3 ci+1=ff,ff,ff @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2839
+[LOG] [JIT] FF/7 modrm=0xff at f0000:5 ci+1=ff,ff,ff @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2839
+[LOG] [JIT] FF/7 modrm=0xff at f0000:19 ci+1=ff,ff,ff @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2839
+[LOG] [JIT] FF/7 modrm=0xff at f0000:1b ci+1=ff,ff,ff @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2839
+[LOG] [JIT] FF/7 modrm=0xff at f0000:1d ci+1=ff,ff,ff @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2839
+[LOG] [JIT] FF/7 modrm=0xff at f0000:1128 ci+1=ff,ff,ff @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2839
+[LOG] [JIT] FF/7 modrm=0xff at f0000:112a ci+1=ff,ff,ff @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2839
+[LOG] [JIT] FF/7 modrm=0xff at f0000:112c ci+1=ff,ff,ff @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2839
+[LOG] [JIT] FF/7 modrm=0xff at f0000:112e ci+1=ff,ff,0 @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2839
+[LOG] [JIT] FF/7 modrm=0xff at f0000:0 ci+1=ff,ff,ff @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:2839
+[LOG] [WasmDisplay] Resize: 720x400 0bpp (scanline 0 bytes) @ https://nalet.github.io/VirtualBox-Wasm/:495
+[LOG] [POST] 5s: refresh=95 updateRect=24 720x400 @ https://nalet.github.io/VirtualBox-Wasm/:732
+[LOG] [JIT] calls=158029 insns=80903143 fallbacks=3 avg=512.0 top=[0xff07:11 0x8f:2 0xdd:2 0xd0:1] @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:3647
+[LOG] [POST] 10s: refresh=194 updateRect=49 720x400 @ https://nalet.github.io/VirtualBox-Wasm/:732
+[LOG] [JIT] calls=323276 insns=165509607 fallbacks=3 avg=512.0 top=[0xff07:11 0x8f:2 0xdd:2 0xd0:1] @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:3647
+[LOG] [POST] 15s: refresh=293 updateRect=74 720x400 @ https://nalet.github.io/VirtualBox-Wasm/:732
+[LOG] [JIT] calls=484615 insns=248115175 fallbacks=3 avg=512.0 top=[0xff07:11 0x8f:2 0xdd:2 0xd0:1] @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:3647
+[LOG] [POST] 20s: refresh=392 updateRect=99 720x400 @ https://nalet.github.io/VirtualBox-Wasm/:732
+[LOG] [JIT] calls=645460 insns=330467815 fallbacks=3 avg=512.0 top=[0xff07:11 0x8f:2 0xdd:2 0xd0:1] @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:3647
+[LOG] [POST] 25s: refresh=491 updateRect=124 720x400 @ https://nalet.github.io/VirtualBox-Wasm/:732
+[LOG] [JIT] calls=810472 insns=414953959 fallbacks=3 avg=512.0 top=[0xff07:11 0x8f:2 0xdd:2 0xd0:1] @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:3647
+[LOG] [WasmDisplay] refresh #500, updateRect #127 @ https://nalet.github.io/VirtualBox-Wasm/:495
+[LOG] [POST] 30s: refresh=590 updateRect=150 720x400 @ https://nalet.github.io/VirtualBox-Wasm/:732
+[LOG] [JIT] calls=975090 insns=499238375 fallbacks=3 avg=512.0 top=[0xff07:11 0x8f:2 0xdd:2 0xd0:1] @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:3647
+[LOG] [POST] 35s: refresh=689 updateRect=175 720x400 @ https://nalet.github.io/VirtualBox-Wasm/:732
+[LOG] [JIT] calls=1139913 insns=583627751 fallbacks=3 avg=512.0 top=[0xff07:11 0x8f:2 0xdd:2 0xd0:1] @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:3647
+[LOG] [POST] 40s: refresh=788 updateRect=200 720x400 @ https://nalet.github.io/VirtualBox-Wasm/:732
+[LOG] [JIT] calls=1310990 insns=671219175 fallbacks=3 avg=512.0 top=[0xff07:11 0x8f:2 0xdd:2 0xd0:1] @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:3647
+[LOG] [POST] 45s: refresh=887 updateRect=225 720x400 @ https://nalet.github.io/VirtualBox-Wasm/:732
+[LOG] [JIT] calls=1476734 insns=756080103 fallbacks=3 avg=512.0 top=[0xff07:11 0x8f:2 0xdd:2 0xd0:1] @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:3647
+[LOG] [POST] 50s: refresh=985 updateRect=249 720x400 @ https://nalet.github.io/VirtualBox-Wasm/:732
+[LOG] [JIT] calls=1642784 insns=841097703 fallbacks=3 avg=512.0 top=[0xff07:11 0x8f:2 0xdd:2 0xd0:1] @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:3647
+[LOG] [WasmDisplay] refresh #1000, updateRect #253 @ https://nalet.github.io/VirtualBox-Wasm/:495
+[LOG] [POST] 55s: refresh=1084 updateRect=274 720x400 @ https://nalet.github.io/VirtualBox-Wasm/:732
+[LOG] [JIT] calls=1806484 insns=924912103 fallbacks=3 avg=512.0 top=[0xff07:11 0x8f:2 0xdd:2 0xd0:1] @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:3647
+[LOG] [POST] 60s: refresh=1183 updateRect=299 720x400 @ https://nalet.github.io/VirtualBox-Wasm/:732
+[LOG] [JIT] calls=1968367 insns=1007796199 fallbacks=3 avg=512.0 top=[0xff07:11 0x8f:2 0xdd:2 0xd0:1] @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:3647
+[LOG] [POST] 65s: refresh=1282 updateRect=324 720x400 @ https://nalet.github.io/VirtualBox-Wasm/:732
+[LOG] [JIT] calls=2134223 insns=1092714471 fallbacks=3 avg=512.0 top=[0xff07:11 0x8f:2 0xdd:2 0xd0:1] @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:3647
+[LOG] [POST] 70s: refresh=1381 updateRect=349 720x400 @ https://nalet.github.io/VirtualBox-Wasm/:732
+[LOG] [JIT] calls=2298096 insns=1176617447 fallbacks=3 avg=512.0 top=[0xff07:11 0x8f:2 0xdd:2 0xd0:1] @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:3647
+[LOG] [POST] 75s: refresh=1480 updateRect=375 720x400 @ https://nalet.github.io/VirtualBox-Wasm/:732
+[LOG] [JIT] calls=2459083 insns=1259042791 fallbacks=3 avg=512.0 top=[0xff07:11 0x8f:2 0xdd:2 0xd0:1] @ https://nalet.github.io/VirtualBox-Wasm/vbox-wasm.js:3647
+[LOG] [WasmDisplay] refresh #1500, updateRect #379 @ https://nalet.github.io/VirtualBox-Wasm/:495
+[LOG] [POST] 80s: refresh=1579 updateRect=400 720x400 @ https://nalet.github.io/VirtualBox-Wasm/:732

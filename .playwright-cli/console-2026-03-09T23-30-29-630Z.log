@@ -1,0 +1,28 @@
+Total messages: 26 (Errors: 0, Warnings: 1)
+
+[LOG] [enable-threads] SW activated, reloading for COOP/COEP... @ https://nalet.github.io/VirtualBox-Wasm/enable-threads.js:39
+[LOG]  @ https://nalet.github.io/VirtualBox-Wasm/:457
+[LOG] === VirtualBox/Wasm VM Harness === @ https://nalet.github.io/VirtualBox-Wasm/:457
+[LOG] IPRT version : 7.2.97 @ https://nalet.github.io/VirtualBox-Wasm/:457
+[LOG] sizeof(void*): 8 (Wasm64) @ https://nalet.github.io/VirtualBox-Wasm/:457
+[LOG]  @ https://nalet.github.io/VirtualBox-Wasm/:457
+[LOG] CD-ROM image: /cdrom.iso (409 MB) @ https://nalet.github.io/VirtualBox-Wasm/:457
+[LOG] Creating VM... @ https://nalet.github.io/VirtualBox-Wasm/:457
+[LOG] [WASM-THREAD] rtThreadNativeCreate: name= cbStack=1048576 @ https://nalet.github.io/VirtualBox-Wasm/:457
+[LOG] [WASM-THREAD] pthread_create for '': rc=0 id=0000000000ba7008 @ https://nalet.github.io/VirtualBox-Wasm/:457
+[LOG] [WASM-THREAD] wasmThreadNativeMain entered: name= self=0000000000ba7008 @ https://nalet.github.io/VirtualBox-Wasm/:457
+[LOG] [WASM-THREAD] calling rtThreadMain for '' @ https://nalet.github.io/VirtualBox-Wasm/:457
+[LOG] CFGM configuration tree built successfully. @ https://nalet.github.io/VirtualBox-Wasm/:457
+[LOG] STUB: RTRandAdvCreateSystemFaster returning VERR_NOT_SUPPORTED @ https://nalet.github.io/VirtualBox-Wasm/:457
+[LOG] VM Error: rc=-2163 at /build/vbox/src/VBox/VMM/VMMR3/CFGMR3.cpp:1024 (int CFGMR3ValidateConfig(PCFGMNODE, const char *, const char *, const char *, const char *, uint32_t)) @ https://nalet.github.io/VirtualBox-Wasm/:457
+[LOG]   Unknown configuration value '/CdromDevice' found in the configuration of pcbios instance #0 @ https://nalet.github.io/VirtualBox-Wasm/:457
+[LOG] [WASM-THREAD] rtThreadMain returned rc=1100 for '' @ https://nalet.github.io/VirtualBox-Wasm/:457
+[LOG] VMR3Create failed: VERR_CFGM_CONFIG_UNKNOWN_VALUE (rc=-2163) @ https://nalet.github.io/VirtualBox-Wasm/:457
+[LOG] === Stub log (from EMT thread) === @ https://nalet.github.io/VirtualBox-Wasm/:457
+[LOG] STUB: RTRandAdvCreateSystemFaster @ https://nalet.github.io/VirtualBox-Wasm/:457
+[LOG] === End stub log === @ https://nalet.github.io/VirtualBox-Wasm/:457
+[LOG] === VM Error details (from EMT thread) === @ https://nalet.github.io/VirtualBox-Wasm/:457
+[LOG] VM Error: rc=-2163 at /build/vbox/src/VBox/VMM/VMMR3/CFGMR3.cpp:1024 (int CFGMR3ValidateConfig(PCFGMNODE, const char *, const char *, const char *, const char *, uint32_t)) @ https://nalet.github.io/VirtualBox-Wasm/:457
+[LOG]   Unknown configuration value '/CdromDevice' found in the configuration of pcbios instance #0 @ https://nalet.github.io/VirtualBox-Wasm/:457
+[LOG] === End VM Error === @ https://nalet.github.io/VirtualBox-Wasm/:457
+[WARNING] program exited (with status: 1), but keepRuntimeAlive() is set (counter=0) due to an async operation, so halting execution but not exiting the runtime or preventing further async execution (you can use emscripten_force_exit, if you want to force a true shutdown) @ https://nalet.github.io/VirtualBox-Wasm/:462

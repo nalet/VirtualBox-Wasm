@@ -1,0 +1,4 @@
+Total messages: 2 (Errors: 1, Warnings: 0)
+
+[LOG] [enable-threads] SW activated, reloading for COOP/COEP... @ https://nalet.github.io/VirtualBox-Wasm/enable-threads.js:39
+Unexpected token '}'

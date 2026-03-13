@@ -86,8 +86,9 @@ static DECLCALLBACK(int) vboxWasmCfgmConstructor(PUVM pUVM, PVM pVM, PCVMMR3VTAB
      * VM properties.
      */
     INSERT_STRING(pRoot, "Name", "VBoxWasm");
-    INSERT_INTEGER(pRoot, "RamSize",      (uint64_t)4 * _1M);
+    INSERT_INTEGER(pRoot, "RamSize",      (uint64_t)32 * _1M);
     INSERT_INTEGER(pRoot, "RamHoleSize",  (uint64_t)512 * _1M);
+    INSERT_INTEGER(pRoot, "EnablePAE",    1);
     INSERT_INTEGER(pRoot, "TimerMillies", 10);
     INSERT_INTEGER(pRoot, "NumCPUs",      1);
 

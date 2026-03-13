@@ -85,6 +85,7 @@ extern "C" DECLEXPORT(int) VBoxDevicesRegister(PPDMDEVREGCB pCallbacks, uint32_t
     REGISTER_DEVICE(g_DeviceVMMDev);
     REGISTER_DEVICE(g_DeviceDMA);
     REGISTER_DEVICE(g_DeviceACPI);
+    REGISTER_DEVICE(g_DeviceFloppyController);
 
 #undef REGISTER_DEVICE
 

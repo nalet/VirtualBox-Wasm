@@ -223,6 +223,11 @@ static DECLCALLBACK(int) vboxWasmCfgmConstructor(PUVM pUVM, PVM pVM, PCVMMR3VTAB
     INSERT_INTEGER(pLun2Cfg, "ReadOnly", 1);
     INSERT_INTEGER(pLun2Cfg, "Mountable", 1);
 
+    /* ── Floppy Controller (i82078) — no drives, just respond to BIOS probe ── */
+    INSERT_NODE(pDevices, "i82078", &pDev);
+    INSERT_NODE(pDev, "0", &pInst);
+    INSERT_NODE(pInst, "Config", &pCfg);
+
     /* ── VMMDev ── */
     INSERT_NODE(pDevices, "VMMDev", &pDev);
     INSERT_NODE(pDev, "0", &pInst);

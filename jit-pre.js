@@ -2941,6 +2941,10 @@ let statLastFlags = 0;
 let statLastCodeBytes = '';
 let statLastReport = 0;
 const fallbackOpcodes = new Map(); // opcode -> count
+// Stuck-detection: track how long we've been at the same IP range
+let stuckLastIP = -1;
+let stuckCount = 0;
+let stuckDumped = false;
 
 function execBlockWrapped(cpuP, ramB, maxInsn) {
   statTotalCalls++;
@@ -2968,6 +2972,67 @@ function execBlockWrapped(cpuP, ramB, maxInsn) {
   } else {
     statFallbacks++;
   }
+
+  // Stuck-detection: if we stay in the same 32-byte IP range for >50000 calls, dump full state
+  {
+    const curIP = rr16(R_IP);
+    const curIPBlock = curIP >>> 5; // 32-byte blocks
+    if (curIPBlock === stuckLastIP) {
+      stuckCount++;
+    } else {
+      stuckLastIP = curIPBlock;
+      stuckCount = 0;
+      stuckDumped = false;
+    }
+    if (stuckCount >= 50000 && !stuckDumped) {
+      stuckDumped = true;
+      refreshViews();
+      const csB = segBase(S_CS);
+      const ssB = segBase(S_SS);
+      const dsB = segBase(S_DS);
+      const esB = segBase(S_ES);
+      const ax = rr16(R_AX), bx = rr16(R_BX), cx = rr16(R_CX), dx = rr16(R_DX);
+      const si = rr16(R_SI), di = rr16(R_DI), bp = rr16(R_BP), sp = rr16(R_SP);
+      const fl = rr32(R_FLAGS);
+      console.log('[JIT-STUCK] IP stuck at 0x' + curIP.toString(16) + ' for ' + stuckCount + ' calls');
+      console.log('[JIT-STUCK] AX=' + ax.toString(16).padStart(4,'0') +
+        ' BX=' + bx.toString(16).padStart(4,'0') +
+        ' CX=' + cx.toString(16).padStart(4,'0') +
+        ' DX=' + dx.toString(16).padStart(4,'0'));
+      console.log('[JIT-STUCK] SI=' + si.toString(16).padStart(4,'0') +
+        ' DI=' + di.toString(16).padStart(4,'0') +
+        ' BP=' + bp.toString(16).padStart(4,'0') +
+        ' SP=' + sp.toString(16).padStart(4,'0'));
+      console.log('[JIT-STUCK] CS=' + (csB>>>4).toString(16) + ' DS=' + (dsB>>>4).toString(16) +
+        ' ES=' + (esB>>>4).toString(16) + ' SS=' + (ssB>>>4).toString(16) +
+        ' FLAGS=' + fl.toString(16));
+      // Dump 64 bytes of code around the stuck IP
+      const codeAddr = csB + curIP;
+      let dump = '';
+      for (let i = -16; i < 48; i++) {
+        if (i === 0) dump += '[';
+        const b = guestRb((codeAddr + i) & 0xFFFFF);
+        dump += b.toString(16).padStart(2, '0');
+        if (i === 0) dump += ']';
+        else dump += ' ';
+      }
+      console.log('[JIT-STUCK] code @' + codeAddr.toString(16) + ': ' + dump);
+      // Dump stack (top 16 words)
+      let stackDump = '';
+      for (let i = 0; i < 16; i++) {
+        const saddr = ssB + ((sp + i*2) & 0xFFFF);
+        stackDump += guestRw(saddr).toString(16).padStart(4, '0') + ' ';
+      }
+      console.log('[JIT-STUCK] stack @SS:SP: ' + stackDump);
+      // Check if there are any IN/OUT opcodes in fallback map (port I/O activity)
+      const inCount = (fallbackOpcodes.get(0xEC) || 0) + (fallbackOpcodes.get(0xED) || 0) +
+                      (fallbackOpcodes.get(0xE4) || 0) + (fallbackOpcodes.get(0xE5) || 0);
+      const outCount = (fallbackOpcodes.get(0xEE) || 0) + (fallbackOpcodes.get(0xEF) || 0) +
+                       (fallbackOpcodes.get(0xE6) || 0) + (fallbackOpcodes.get(0xE7) || 0);
+      console.log('[JIT-STUCK] port I/O fallbacks: IN=' + inCount + ' OUT=' + outCount);
+    }
+  }
+
   // Log stats every 5 seconds
   const now = Date.now();
   if (now - statLastReport > 5000) {

@@ -937,8 +937,13 @@ static void ataHCAsyncIOPutRequest(PPDMDEVINS pDevIns, PATACONTROLLER pCtl, cons
     rc = PDMDevHlpCritSectScheduleExitEvent(pDevIns, &pCtl->lock, pCtl->hAsyncIOSem);
     if (RT_FAILURE(rc))
     {
+        LogRel(("PIIX3 ATA: Ctl#%d: ScheduleExitEvent failed rc=%d, signaling directly\n", pCtl->iCtl, rc));
         rc = PDMDevHlpSUPSemEventSignal(pDevIns, pCtl->hAsyncIOSem);
         AssertRC(rc);
+    }
+    else
+    {
+        LogRel(("PIIX3 ATA: Ctl#%d: ScheduleExitEvent OK, signal deferred to critsect leave\n", pCtl->iCtl));
     }
 }
 
@@ -1144,6 +1149,10 @@ static void ataR3StartTransfer(PPDMDEVINS pDevIns, PATACONTROLLER pCtl, PATADEVS
     Req.u.t.iSourceSink = iSourceSink;
     ataSetStatusValue(pCtl, s, ATA_STAT_BUSY);
     pCtl->fChainedTransfer = fChainedTransfer;
+
+    LogRel(("PIIX3 ATA: Ctl#%d: ataR3StartTransfer LUN#%d cmd=%#04x cbTotal=%u txDir=%u beginXfer=%u srcSink=%u chained=%d\n",
+            pCtl->iCtl, s->iLUN, s->uATARegCommand, cbTotalTransfer, uTxDir,
+            iBeginTransfer, iSourceSink, fChainedTransfer));
 
     /*
      * Kick the worker thread into action.
@@ -2073,6 +2082,8 @@ static bool atapiR3ReadSS(PPDMDEVINS pDevIns, PATACONTROLLER pCtl, PATADEVSTATE 
     uint32_t const cbATAPISector = s->cbATAPISector;
     uint32_t const cSectors      = cbTransfer / cbATAPISector;
     Assert(cSectors * cbATAPISector <= cbTransfer);
+    LogRel(("PIIX3 ATA: Ctl#%d LUN#%d: atapiR3ReadSS LBA=%u sectors=%u cbTransfer=%u\n",
+            pCtl->iCtl, s->iLUN, iATAPILBA, cSectors, cbTransfer));
     Log(("%s: %d sectors at LBA %d\n", __FUNCTION__, cSectors, iATAPILBA));
     AssertLogRelReturn(cSectors * cbATAPISector <= sizeof(s->abIOBuffer), false);
 
@@ -2670,6 +2681,8 @@ static bool atapiR3ReadSectors(PPDMDEVINS pDevIns, PATACONTROLLER pCtl, PATADEVS
                                uint32_t iATAPILBA, uint32_t cSectors, uint32_t cbSector)
 {
     Assert(cSectors > 0);
+    LogRel(("PIIX3 ATA: Ctl#%d LUN#%d: ATAPI READ LBA=%u sectors=%u sectorSize=%u\n",
+            pCtl->iCtl, s->iLUN, iATAPILBA, cSectors, cbSector));
     s->iCurLBA = iATAPILBA;
     s->cbATAPISector = cbSector;
     ataR3StartTransfer(pDevIns, pCtl, s, cSectors * cbSector,
@@ -4065,6 +4078,12 @@ static bool ataR3PacketSS(PPDMDEVINS pDevIns, PATACONTROLLER pCtl, PATADEVSTATE 
     s->cbTotalTransfer = 0;
     s->cbElementaryTransfer = 0;
     s->cbAtapiPassthroughTransfer = 0;
+    LogRel(("PIIX3 ATA: Ctl#%d LUN#%d: ATAPI PACKET cmd=%#04x [%02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x] DMA=%d\n",
+            pCtl->iCtl, s->iLUN, s->abATAPICmd[0],
+            s->abATAPICmd[0], s->abATAPICmd[1], s->abATAPICmd[2], s->abATAPICmd[3],
+            s->abATAPICmd[4], s->abATAPICmd[5], s->abATAPICmd[6], s->abATAPICmd[7],
+            s->abATAPICmd[8], s->abATAPICmd[9], s->abATAPICmd[10], s->abATAPICmd[11],
+            s->fDMA));
     atapiR3ParseCmd(pDevIns, pCtl, s, pDevR3);
     return false;
 }
@@ -4929,6 +4948,16 @@ static VBOXSTRICTRC ataIOPortReadU8(PPDMDEVINS pDevIns, PATACONTROLLER pCtl, uin
             if (val & ATA_STAT_BUSY)
             {
 #ifdef IN_RING3
+#ifdef __EMSCRIPTEN__
+                {
+                    static uint32_t s_cBsyPolls = 0;
+                    s_cBsyPolls++;
+                    if ((s_cBsyPolls % 10000) == 1)
+                        LogRel(("PIIX3 ATA: LUN#%d: BSY poll #%u status=%#x asyncState=%d head=%u tail=%u\n",
+                                s->iLUN, s_cBsyPolls, val, pCtl->uAsyncIOState,
+                                pCtl->AsyncIOReqHead, pCtl->AsyncIOReqTail));
+                }
+#endif
                 /* @bugref{1960}: Don't yield all the time, unless it's a reset (can be tricky). */
 #ifdef __EMSCRIPTEN__
                 /* Wasm: sched_yield() is a no-op in Emscripten, and ASMNopPause()
@@ -5912,6 +5941,7 @@ static DECLCALLBACK(int) ataR3AsyncIOThread(RTTHREAD hThreadSelf, void *pvUser)
     PPDMDEVINSR3 const      pDevIns = pCtlR3->pDevIns;
     PATASTATE const         pThis   = PDMDEVINS_2_DATA(pDevIns, PATASTATE);
     PATASTATER3 const       pThisCC = PDMDEVINS_2_DATA_CC(pDevIns, PATASTATER3);
+    LogRel(("PIIX3 ATA: ataR3AsyncIOThread STARTED for Ctl#%u\n", (unsigned)(pCtlR3 - &pThisCC->aCts[0])));
     uintptr_t const         iCtl    = pCtlR3 - &pThisCC->aCts[0];
     PATACONTROLLER const    pCtl    = &RT_SAFE_SUBSCRIPT(pThis->aCts, iCtl);
     int                     rc      = VINF_SUCCESS;
@@ -5947,7 +5977,11 @@ static DECLCALLBACK(int) ataR3AsyncIOThread(RTTHREAD hThreadSelf, void *pvUser)
         {
             if (pCtlR3->fSignalIdle)
                 ataR3AsyncSignalIdle(pDevIns, pCtl, pCtlR3);
+            LogRel(("PIIX3 ATA: Ctl#%d: async I/O thread waiting on semaphore (head=%u tail=%u)\n",
+                    pCtl->iCtl, pCtl->AsyncIOReqHead, pCtl->AsyncIOReqTail));
             rc = PDMDevHlpSUPSemEventWaitNoResume(pDevIns, pCtl->hAsyncIOSem, RT_INDEFINITE_WAIT);
+            LogRel(("PIIX3 ATA: Ctl#%d: async I/O semaphore wait returned rc=%d (head=%u tail=%u)\n",
+                    pCtl->iCtl, rc, pCtl->AsyncIOReqHead, pCtl->AsyncIOReqTail));
             /* Continue if we got a signal by RTThreadPoke().
              * We will get notified if there is a request to process.
              */
@@ -5967,6 +6001,8 @@ static DECLCALLBACK(int) ataR3AsyncIOThread(RTTHREAD hThreadSelf, void *pvUser)
 
         ATAAIO ReqType = pReq->ReqType;
 
+        LogRel(("PIIX3 ATA: Ctl#%d: async I/O thread processing request type=%d (state=%d)\n",
+                pCtl->iCtl, ReqType, pCtl->uAsyncIOState));
         Log2(("%s: Ctl#%d: state=%d, req=%d\n", __FUNCTION__, pCtl->iCtl, pCtl->uAsyncIOState, ReqType));
         if (pCtl->uAsyncIOState != ReqType)
         {

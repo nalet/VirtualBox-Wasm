@@ -4553,6 +4553,13 @@ globalThis.VBoxJIT = (function() {
   let stuckLastIP = -1;
   let stuckCount = 0;
   let stuckDumped = false;
+  // Protected-mode diagnostic: one-time dump when JIT first sees CR0.PE=1
+  let protModeDiagDone = false;
+  // CPUMCTX offsets for GDTR/IDTR (packed structs with padding)
+  // gdtr at 0x01C6: cbGdt(u16) at +0, pGdt(u64) at +2
+  // idtr at 0x01D6: cbIdt(u16) at +0, pIdt(u64) at +2
+  const R_GDTR = 454;
+  const R_IDTR = 470;
   function execBlockWrapped(cpuP, ramB, maxInsn) {
     statTotalCalls++;
     // Per-call diagnostics for first 20 calls, then every 100000
@@ -4568,6 +4575,111 @@ globalThis.VBoxJIT = (function() {
       const c0000 = Array.from(m.slice(rb + 786432, rb + 786432 + 8)).map(x => x.toString(16).padStart(2, "0")).join(" ");
       const fffff0 = Array.from(m.slice(rb + 1048560, rb + 1048560 + 8)).map(x => x.toString(16).padStart(2, "0")).join(" ");
       console.log("[JIT-ROM-CHECK] ramBase=0x" + rb.toString(16) + " FE05B:" + fe05b + " C0000:" + c0000 + " FFFF0:" + fffff0);
+    }
+    // ── Protected-mode entry diagnostic (one-time) ──
+    if (!protModeDiagDone) {
+      refreshViews();
+      const diagCR0 = rr32(R_CR0);
+      if (diagCR0 & 1) {
+        // CR0.PE set — protected mode
+        protModeDiagDone = true;
+        const diagCR3 = rr32(R_CR3);
+        const diagCR4 = rr32(R_CR4);
+        const diagEIP = rr32(R_IP);
+        const diagFlags = rr32(R_FLAGS);
+        // Segment selectors and cached descriptors
+        const segNames = [ "ES", "CS", "SS", "DS", "FS", "GS" ];
+        const segOffs = [ S_ES, S_CS, S_SS, S_DS, S_FS, S_GS ];
+        console.log("[JIT-PROT] === PROTECTED MODE ENTRY DIAGNOSTIC ===");
+        console.log("[JIT-PROT] CR0=0x" + diagCR0.toString(16).padStart(8, "0") + " CR3=0x" + diagCR3.toString(16).padStart(8, "0") + " CR4=0x" + diagCR4.toString(16).padStart(8, "0") + " EFLAGS=0x" + diagFlags.toString(16).padStart(8, "0"));
+        for (let si = 0; si < 6; si++) {
+          const sel = rr16(segOffs[si] + SEG_SEL);
+          const base = Number(dv.getBigUint64(cpuPtr + segOffs[si] + SEG_BASE, true));
+          const limit = rr32(segOffs[si] + SEG_LIMIT);
+          const attr = rr32(segOffs[si] + SEG_ATTR);
+          console.log("[JIT-PROT]   " + segNames[si] + ": sel=0x" + sel.toString(16).padStart(4, "0") + " base=0x" + base.toString(16).padStart(8, "0") + " limit=0x" + limit.toString(16).padStart(8, "0") + " attr=0x" + attr.toString(16).padStart(4, "0"));
+        }
+        // GDTR
+        const gdtLimit = dv.getUint16(cpuPtr + R_GDTR, true);
+        const gdtBase = Number(dv.getBigUint64(cpuPtr + R_GDTR + 2, true));
+        console.log("[JIT-PROT] GDTR: base=0x" + gdtBase.toString(16).padStart(8, "0") + " limit=0x" + gdtLimit.toString(16).padStart(4, "0"));
+        // IDTR
+        const idtLimit = dv.getUint16(cpuPtr + R_IDTR, true);
+        const idtBase = Number(dv.getBigUint64(cpuPtr + R_IDTR + 2, true));
+        console.log("[JIT-PROT] IDTR: base=0x" + idtBase.toString(16).padStart(8, "0") + " limit=0x" + idtLimit.toString(16).padStart(4, "0"));
+        // Dump first 8 GDT entries (each 8 bytes)
+        const ramN = Number(ramB);
+        const m8 = new Uint8Array(wasmMemory.buffer);
+        const dvW = new DataView(wasmMemory.buffer);
+        const numGdtEntries = Math.min(8, (gdtLimit + 1) / 8);
+        console.log("[JIT-PROT] GDT entries (first " + numGdtEntries + "):");
+        for (let gi = 0; gi < numGdtEntries; gi++) {
+          const entryAddr = gdtBase + gi * 8;
+          // GDT entries are in guest physical memory (no paging since CR0.PG=0 typically)
+          const off = ramN + entryAddr;
+          if (off + 8 <= m8.length) {
+            const lo = dvW.getUint32(off, true);
+            const hi = dvW.getUint32(off + 4, true);
+            // Parse x86 segment descriptor
+            const dBase = ((hi & 4278190080) | ((hi & 255) << 16) | ((lo >>> 16) & 65535)) >>> 0;
+            const dLimit = ((hi & 983040) | (lo & 65535)) >>> 0;
+            const dGranularity = (hi >>> 23) & 1;
+            const dEffLimit = dGranularity ? ((dLimit << 12) | 4095) : dLimit;
+            const dAccess = (hi >>> 8) & 255;
+            const dFlagsHi = (hi >>> 20) & 15;
+            // G, D/B, L, AVL
+            console.log("[JIT-PROT]   GDT[" + gi + "] sel=0x" + (gi * 8).toString(16).padStart(4, "0") + ": base=0x" + dBase.toString(16).padStart(8, "0") + " limit=0x" + dEffLimit.toString(16).padStart(8, "0") + " access=0x" + dAccess.toString(16).padStart(2, "0") + " flags=0x" + dFlagsHi.toString(16) + " raw=" + hi.toString(16).padStart(8, "0") + "_" + lo.toString(16).padStart(8, "0"));
+          } else {
+            console.log("[JIT-PROT]   GDT[" + gi + "] sel=0x" + (gi * 8).toString(16).padStart(4, "0") + ": OUT OF RANGE (addr=0x" + entryAddr.toString(16) + ")");
+          }
+        }
+        // Current EIP and first 32 bytes of code at CS:EIP
+        const diagCSBase = Number(dv.getBigUint64(cpuPtr + S_CS + SEG_BASE, true));
+        const codeAddr = diagCSBase + diagEIP;
+        console.log("[JIT-PROT] EIP=0x" + diagEIP.toString(16).padStart(8, "0") + " CS:EIP linear=0x" + codeAddr.toString(16).padStart(8, "0"));
+        let codeDump = "";
+        for (let ci = 0; ci < 32; ci++) {
+          const off = ramN + codeAddr + ci;
+          if (off < m8.length) {
+            codeDump += m8[off].toString(16).padStart(2, "0") + " ";
+          } else if (romBufSize > 0 && (codeAddr + ci) >= romGCPhysStart && (codeAddr + ci) < romGCPhysEnd) {
+            codeDump += m8[romBufBase + (codeAddr + ci - romGCPhysStart)].toString(16).padStart(2, "0") + " ";
+          } else {
+            codeDump += "?? ";
+          }
+        }
+        console.log("[JIT-PROT] code bytes: " + codeDump.trim());
+        // Check specifically: what is at CS=0x0020 offset 0x17?
+        // Selector 0x0020 = GDT index 4, so look up GDT[4].base + 0x17
+        const sel20Idx = 32 / 8;
+        // = 4
+        const gdt4Addr = gdtBase + sel20Idx * 8;
+        const gdt4Off = ramN + gdt4Addr;
+        if (gdt4Off + 8 <= m8.length) {
+          const gdt4Lo = dvW.getUint32(gdt4Off, true);
+          const gdt4Hi = dvW.getUint32(gdt4Off + 4, true);
+          const gdt4Base = ((gdt4Hi & 4278190080) | ((gdt4Hi & 255) << 16) | ((gdt4Lo >>> 16) & 65535)) >>> 0;
+          const tripAddr = gdt4Base + 23;
+          console.log("[JIT-PROT] GDT[4] (sel 0x0020) base=0x" + gdt4Base.toString(16).padStart(8, "0"));
+          let tripBytes = "";
+          for (let ti = -4; ti < 20; ti++) {
+            const off = ramN + tripAddr + ti;
+            if (off < m8.length) {
+              if (ti === 0) tripBytes += "[";
+              tripBytes += m8[off].toString(16).padStart(2, "0");
+              if (ti === 1) tripBytes += "] "; else tripBytes += " ";
+            }
+          }
+          console.log("[JIT-PROT] bytes at 0020:0017 (linear 0x" + tripAddr.toString(16) + "): " + tripBytes.trim());
+        }
+        // Also dump the last few real-mode instructions before mode switch
+        // (from fallback opcodes map)
+        const sorted = [ ...fallbackOpcodes.entries() ].sort((a, b) => b[1] - a[1]).slice(0, 12);
+        const topStr = sorted.map(([op, cnt]) => "0x" + op.toString(16) + ":" + cnt).join(" ");
+        console.log("[JIT-PROT] fallback opcodes at prot entry: [" + topStr + "]");
+        console.log("[JIT-PROT] total insns so far: " + statTotalInsns + " calls: " + statTotalCalls);
+        console.log("[JIT-PROT] === END PROTECTED MODE DIAGNOSTIC ===");
+      }
     }
     const n = execBlock(cpuP, ramB, maxInsn);
     if (n > 0) {

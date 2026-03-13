@@ -174,168 +174,842 @@ RTDECL(bool) RTErrVarsHaveChanged(PCRTERRVARS pVars)
 
 
 /*
- * ── Semaphore stubs ──
+ * ── Semaphore implementations (pthread-based) ──
  *
- * Wasm is single-threaded. Semaphores are no-ops.
+ * Emscripten with -pthread supports real pthreads via Web Workers and
+ * SharedArrayBuffer.  These implementations replace the old no-op stubs
+ * so that cross-thread synchronisation (e.g. ATA async I/O ↔ EMT) works.
  */
+#include <unistd.h>
+#include <sys/time.h>
+
+
+/*********************************************************************************************************************************
+ * RTSemEvent — Auto-reset event semaphore                                                                                      *
+ *********************************************************************************************************************************/
+
+/** The values of the u32State variable in RTSEMEVENTINTERNAL. */
+#define WASM_EVENT_STATE_UNINITIALIZED   0
+#define WASM_EVENT_STATE_SIGNALED        0xff00ff00
+#define WASM_EVENT_STATE_NOT_SIGNALED    0x00ff00ff
+
+struct RTSEMEVENTINTERNAL
+{
+    /** pthread condition variable. */
+    pthread_cond_t      Cond;
+    /** pthread mutex protecting the condition and state. */
+    pthread_mutex_t     Mutex;
+    /** Semaphore state (signaled / not-signaled / uninitialized). */
+    volatile uint32_t   u32State;
+    /** Number of waiters. */
+    volatile uint32_t   cWaiters;
+    /** Creation flags. */
+    uint32_t            fFlags;
+};
+
 RTDECL(int) RTSemEventCreate(PRTSEMEVENT phEventSem)
 {
-    *phEventSem = (RTSEMEVENT)(uintptr_t)1;
-    return VINF_SUCCESS;
+    return RTSemEventCreateEx(phEventSem, 0 /*fFlags*/, NIL_RTLOCKVALCLASS, NULL);
 }
 
 RTDECL(int) RTSemEventCreateEx(PRTSEMEVENT phEventSem, uint32_t fFlags, RTLOCKVALCLASS hClass, const char *pszNameFmt, ...)
 {
-    RT_NOREF(fFlags, hClass, pszNameFmt);
-    *phEventSem = (RTSEMEVENT)(uintptr_t)1;
+    RT_NOREF(hClass, pszNameFmt);
+
+    struct RTSEMEVENTINTERNAL *pThis = (struct RTSEMEVENTINTERNAL *)RTMemAllocZ(sizeof(*pThis));
+    if (!pThis)
+        return VERR_NO_MEMORY;
+
+    int rc = pthread_mutex_init(&pThis->Mutex, NULL);
+    if (rc)
+    {
+        RTMemFree(pThis);
+        return RTErrConvertFromErrno(rc);
+    }
+
+    rc = pthread_cond_init(&pThis->Cond, NULL);
+    if (rc)
+    {
+        pthread_mutex_destroy(&pThis->Mutex);
+        RTMemFree(pThis);
+        return RTErrConvertFromErrno(rc);
+    }
+
+    ASMAtomicWriteU32(&pThis->u32State, WASM_EVENT_STATE_NOT_SIGNALED);
+    ASMAtomicWriteU32(&pThis->cWaiters, 0);
+    pThis->fFlags = fFlags;
+
+    *phEventSem = pThis;
     return VINF_SUCCESS;
 }
 
 RTDECL(int) RTSemEventDestroy(RTSEMEVENT hEventSem)
 {
-    RT_NOREF_PV(hEventSem);
+    struct RTSEMEVENTINTERNAL *pThis = hEventSem;
+    if (pThis == NIL_RTSEMEVENT)
+        return VINF_SUCCESS;
+    AssertPtrReturn(pThis, VERR_INVALID_HANDLE);
+
+    /* Mark as uninitialized and wake all waiters so they bail out. */
+    int rc;
+    for (int i = 30; i > 0; i--)
+    {
+        ASMAtomicWriteU32(&pThis->u32State, WASM_EVENT_STATE_UNINITIALIZED);
+        rc = pthread_cond_destroy(&pThis->Cond);
+        if (rc != EBUSY)
+            break;
+        pthread_cond_broadcast(&pThis->Cond);
+        usleep(1000);
+    }
+
+    for (int i = 30; i > 0; i--)
+    {
+        rc = pthread_mutex_destroy(&pThis->Mutex);
+        if (rc != EBUSY)
+            break;
+        usleep(1000);
+    }
+
+    RTMemFree(pThis);
     return VINF_SUCCESS;
 }
 
 RTDECL(int) RTSemEventSignal(RTSEMEVENT hEventSem)
 {
-    RT_NOREF_PV(hEventSem);
+    struct RTSEMEVENTINTERNAL *pThis = hEventSem;
+    AssertPtrReturn(pThis, VERR_INVALID_HANDLE);
+
+    int rc = pthread_mutex_lock(&pThis->Mutex);
+    if (rc)
+        return RTErrConvertFromErrno(rc);
+
+    if (pThis->u32State == WASM_EVENT_STATE_NOT_SIGNALED)
+    {
+        ASMAtomicWriteU32(&pThis->u32State, WASM_EVENT_STATE_SIGNALED);
+        pthread_cond_signal(&pThis->Cond);
+    }
+    else if (pThis->u32State == WASM_EVENT_STATE_SIGNALED)
+    {
+        /* Already signaled, give another kick in case of spurious issues. */
+        pthread_cond_signal(&pThis->Cond);
+    }
+
+    pthread_mutex_unlock(&pThis->Mutex);
     return VINF_SUCCESS;
+}
+
+/**
+ * Internal: indefinite wait on auto-reset event.
+ */
+static int rtSemEventWasmWaitIndefinite(struct RTSEMEVENTINTERNAL *pThis)
+{
+    if (ASMAtomicIncU32(&pThis->cWaiters) > 1
+        && pThis->u32State == WASM_EVENT_STATE_SIGNALED)
+        sched_yield();
+
+    int rc = pthread_mutex_lock(&pThis->Mutex);
+    if (rc)
+    {
+        ASMAtomicDecU32(&pThis->cWaiters);
+        return RTErrConvertFromErrno(rc);
+    }
+
+    for (;;)
+    {
+        if (pThis->u32State == WASM_EVENT_STATE_SIGNALED)
+        {
+            ASMAtomicWriteU32(&pThis->u32State, WASM_EVENT_STATE_NOT_SIGNALED); /* auto-reset */
+            ASMAtomicDecU32(&pThis->cWaiters);
+            pthread_mutex_unlock(&pThis->Mutex);
+            return VINF_SUCCESS;
+        }
+        if (pThis->u32State == WASM_EVENT_STATE_UNINITIALIZED)
+        {
+            ASMAtomicDecU32(&pThis->cWaiters);
+            pthread_mutex_unlock(&pThis->Mutex);
+            return VERR_SEM_DESTROYED;
+        }
+
+        rc = pthread_cond_wait(&pThis->Cond, &pThis->Mutex);
+        if (rc)
+        {
+            ASMAtomicDecU32(&pThis->cWaiters);
+            pthread_mutex_unlock(&pThis->Mutex);
+            return RTErrConvertFromErrno(rc);
+        }
+    }
+}
+
+/**
+ * Internal: timed wait on auto-reset event.
+ */
+static int rtSemEventWasmWaitTimed(struct RTSEMEVENTINTERNAL *pThis, RTMSINTERVAL cMillies)
+{
+    /* Calculate absolute deadline. */
+    struct timespec AbsDeadline;
+    clock_gettime(CLOCK_REALTIME, &AbsDeadline);
+    uint64_t nsTimeout = (uint64_t)cMillies * UINT64_C(1000000);
+    AbsDeadline.tv_sec  += (time_t)(nsTimeout / UINT64_C(1000000000));
+    AbsDeadline.tv_nsec += (long)(nsTimeout % UINT64_C(1000000000));
+    if (AbsDeadline.tv_nsec >= 1000000000L)
+    {
+        AbsDeadline.tv_nsec -= 1000000000L;
+        AbsDeadline.tv_sec++;
+    }
+
+    ASMAtomicIncU32(&pThis->cWaiters);
+
+    int rc = pthread_mutex_lock(&pThis->Mutex);
+    if (rc)
+    {
+        ASMAtomicDecU32(&pThis->cWaiters);
+        return RTErrConvertFromErrno(rc);
+    }
+
+    for (;;)
+    {
+        if (pThis->u32State == WASM_EVENT_STATE_SIGNALED)
+        {
+            ASMAtomicWriteU32(&pThis->u32State, WASM_EVENT_STATE_NOT_SIGNALED); /* auto-reset */
+            ASMAtomicDecU32(&pThis->cWaiters);
+            pthread_mutex_unlock(&pThis->Mutex);
+            return VINF_SUCCESS;
+        }
+        if (pThis->u32State == WASM_EVENT_STATE_UNINITIALIZED)
+        {
+            ASMAtomicDecU32(&pThis->cWaiters);
+            pthread_mutex_unlock(&pThis->Mutex);
+            return VERR_SEM_DESTROYED;
+        }
+
+        rc = pthread_cond_timedwait(&pThis->Cond, &pThis->Mutex, &AbsDeadline);
+        if (rc == ETIMEDOUT)
+        {
+            /* One last check — signal may have arrived just as we timed out. */
+            if (pThis->u32State == WASM_EVENT_STATE_SIGNALED)
+            {
+                ASMAtomicWriteU32(&pThis->u32State, WASM_EVENT_STATE_NOT_SIGNALED);
+                ASMAtomicDecU32(&pThis->cWaiters);
+                pthread_mutex_unlock(&pThis->Mutex);
+                return VINF_SUCCESS;
+            }
+            ASMAtomicDecU32(&pThis->cWaiters);
+            pthread_mutex_unlock(&pThis->Mutex);
+            return VERR_TIMEOUT;
+        }
+        if (rc && rc != EINTR)
+        {
+            ASMAtomicDecU32(&pThis->cWaiters);
+            pthread_mutex_unlock(&pThis->Mutex);
+            return RTErrConvertFromErrno(rc);
+        }
+    }
 }
 
 RTDECL(int) RTSemEventWait(RTSEMEVENT hEventSem, RTMSINTERVAL cMillies)
 {
-    RT_NOREF(hEventSem, cMillies);
-    return VINF_SUCCESS;
+    struct RTSEMEVENTINTERNAL *pThis = hEventSem;
+    AssertPtrReturn(pThis, VERR_INVALID_HANDLE);
+
+    if (cMillies == RT_INDEFINITE_WAIT)
+        return rtSemEventWasmWaitIndefinite(pThis);
+
+    /* Poll (zero timeout): just check state under lock. */
+    if (cMillies == 0)
+    {
+        int rc = pthread_mutex_lock(&pThis->Mutex);
+        if (rc)
+            return RTErrConvertFromErrno(rc);
+        if (pThis->u32State == WASM_EVENT_STATE_SIGNALED)
+        {
+            ASMAtomicWriteU32(&pThis->u32State, WASM_EVENT_STATE_NOT_SIGNALED);
+            pthread_mutex_unlock(&pThis->Mutex);
+            return VINF_SUCCESS;
+        }
+        int rcRet = (pThis->u32State == WASM_EVENT_STATE_UNINITIALIZED) ? VERR_SEM_DESTROYED : VERR_TIMEOUT;
+        pthread_mutex_unlock(&pThis->Mutex);
+        return rcRet;
+    }
+
+    return rtSemEventWasmWaitTimed(pThis, cMillies);
 }
 
 RTDECL(int) RTSemEventWaitNoResume(RTSEMEVENT hEventSem, RTMSINTERVAL cMillies)
 {
-    RT_NOREF(hEventSem, cMillies);
-    return VINF_SUCCESS;
+    /* In Emscripten pthread_cond_wait doesn't return EINTR, so this is equivalent. */
+    return RTSemEventWait(hEventSem, cMillies);
 }
+
+RTDECL(int) RTSemEventWaitEx(RTSEMEVENT hEventSem, uint32_t fFlags, uint64_t uTimeout)
+{
+    struct RTSEMEVENTINTERNAL *pThis = hEventSem;
+    AssertPtrReturn(pThis, VERR_INVALID_HANDLE);
+
+    if (fFlags & RTSEMWAIT_FLAGS_INDEFINITE)
+        return rtSemEventWasmWaitIndefinite(pThis);
+
+    /* Convert to milliseconds. */
+    RTMSINTERVAL cMillies;
+    if (fFlags & RTSEMWAIT_FLAGS_NANOSECS)
+        cMillies = (RTMSINTERVAL)((uTimeout + RT_NS_1MS - 1) / RT_NS_1MS);
+    else
+        cMillies = (RTMSINTERVAL)uTimeout;
+
+    if (fFlags & RTSEMWAIT_FLAGS_ABSOLUTE)
+    {
+        /* Convert absolute to relative. */
+        uint64_t u64Now = RTTimeSystemNanoTS();
+        uint64_t u64Abs;
+        if (fFlags & RTSEMWAIT_FLAGS_NANOSECS)
+            u64Abs = uTimeout;
+        else
+            u64Abs = uTimeout * RT_NS_1MS;
+        if (u64Abs <= u64Now)
+            cMillies = 0;
+        else
+            cMillies = (RTMSINTERVAL)((u64Abs - u64Now + RT_NS_1MS - 1) / RT_NS_1MS);
+    }
+
+    return RTSemEventWait(hEventSem, cMillies);
+}
+
+RTDECL(int) RTSemEventWaitExDebug(RTSEMEVENT hEventSem, uint32_t fFlags, uint64_t uTimeout,
+                                   RTHCUINTPTR uId, RT_SRC_POS_DECL)
+{
+    RT_NOREF(uId, RT_SRC_POS_ARGS);
+    return RTSemEventWaitEx(hEventSem, fFlags, uTimeout);
+}
+
+RTDECL(uint32_t) RTSemEventGetResolution(void)
+{
+    return 1000000; /* 1ms */
+}
+
+RTDECL(void) RTSemEventSetSignaller(RTSEMEVENT hEventSem, RTTHREAD hThread)
+{
+    RT_NOREF(hEventSem, hThread);
+}
+
+RTDECL(void) RTSemEventAddSignaller(RTSEMEVENT hEventSem, RTTHREAD hThread)
+{
+    RT_NOREF(hEventSem, hThread);
+}
+
+RTDECL(void) RTSemEventRemoveSignaller(RTSEMEVENT hEventSem, RTTHREAD hThread)
+{
+    RT_NOREF(hEventSem, hThread);
+}
+
+
+/*********************************************************************************************************************************
+ * RTSemEventMulti — Manual-reset event semaphore                                                                                *
+ *********************************************************************************************************************************/
+
+#define WASM_EVENTMULTI_STATE_UNINITIALIZED  0
+#define WASM_EVENTMULTI_STATE_SIGNALED       0xff00ff00
+#define WASM_EVENTMULTI_STATE_NOT_SIGNALED   0x00ff00ff
+
+struct RTSEMEVENTMULTIINTERNAL
+{
+    /** pthread condition variable. */
+    pthread_cond_t      Cond;
+    /** pthread mutex protecting the condition and state. */
+    pthread_mutex_t     Mutex;
+    /** Semaphore state (signaled / not-signaled / uninitialized). */
+    volatile uint32_t   u32State;
+    /** Number of waiters. */
+    volatile uint32_t   cWaiters;
+};
 
 RTDECL(int) RTSemEventMultiCreate(PRTSEMEVENTMULTI phEventMultiSem)
 {
-    *phEventMultiSem = (RTSEMEVENTMULTI)(uintptr_t)1;
-    return VINF_SUCCESS;
+    return RTSemEventMultiCreateEx(phEventMultiSem, 0 /*fFlags*/, NIL_RTLOCKVALCLASS, NULL);
 }
 
 RTDECL(int) RTSemEventMultiCreateEx(PRTSEMEVENTMULTI phEventMultiSem, uint32_t fFlags, RTLOCKVALCLASS hClass, const char *pszNameFmt, ...)
 {
     RT_NOREF(fFlags, hClass, pszNameFmt);
-    *phEventMultiSem = (RTSEMEVENTMULTI)(uintptr_t)1;
+
+    struct RTSEMEVENTMULTIINTERNAL *pThis = (struct RTSEMEVENTMULTIINTERNAL *)RTMemAllocZ(sizeof(*pThis));
+    if (!pThis)
+        return VERR_NO_MEMORY;
+
+    int rc = pthread_mutex_init(&pThis->Mutex, NULL);
+    if (rc)
+    {
+        RTMemFree(pThis);
+        return RTErrConvertFromErrno(rc);
+    }
+
+    rc = pthread_cond_init(&pThis->Cond, NULL);
+    if (rc)
+    {
+        pthread_mutex_destroy(&pThis->Mutex);
+        RTMemFree(pThis);
+        return RTErrConvertFromErrno(rc);
+    }
+
+    ASMAtomicWriteU32(&pThis->u32State, WASM_EVENTMULTI_STATE_NOT_SIGNALED);
+    ASMAtomicWriteU32(&pThis->cWaiters, 0);
+
+    *phEventMultiSem = pThis;
     return VINF_SUCCESS;
 }
 
 RTDECL(int) RTSemEventMultiDestroy(RTSEMEVENTMULTI hEventMultiSem)
 {
-    RT_NOREF_PV(hEventMultiSem);
+    struct RTSEMEVENTMULTIINTERNAL *pThis = hEventMultiSem;
+    if (pThis == NIL_RTSEMEVENTMULTI)
+        return VINF_SUCCESS;
+    AssertPtrReturn(pThis, VERR_INVALID_HANDLE);
+
+    int rc;
+    for (int i = 30; i > 0; i--)
+    {
+        ASMAtomicWriteU32(&pThis->u32State, WASM_EVENTMULTI_STATE_UNINITIALIZED);
+        rc = pthread_cond_destroy(&pThis->Cond);
+        if (rc != EBUSY)
+            break;
+        pthread_cond_broadcast(&pThis->Cond);
+        usleep(1000);
+    }
+
+    for (int i = 30; i > 0; i--)
+    {
+        rc = pthread_mutex_destroy(&pThis->Mutex);
+        if (rc != EBUSY)
+            break;
+        usleep(1000);
+    }
+
+    RTMemFree(pThis);
     return VINF_SUCCESS;
 }
 
 RTDECL(int) RTSemEventMultiSignal(RTSEMEVENTMULTI hEventMultiSem)
 {
-    RT_NOREF_PV(hEventMultiSem);
+    struct RTSEMEVENTMULTIINTERNAL *pThis = hEventMultiSem;
+    AssertPtrReturn(pThis, VERR_INVALID_HANDLE);
+
+    int rc = pthread_mutex_lock(&pThis->Mutex);
+    if (rc)
+        return RTErrConvertFromErrno(rc);
+
+    if (pThis->u32State == WASM_EVENTMULTI_STATE_NOT_SIGNALED)
+    {
+        ASMAtomicWriteU32(&pThis->u32State, WASM_EVENTMULTI_STATE_SIGNALED);
+        pthread_cond_broadcast(&pThis->Cond); /* Wake ALL waiters for manual-reset. */
+    }
+    else if (pThis->u32State == WASM_EVENTMULTI_STATE_SIGNALED)
+    {
+        pthread_cond_broadcast(&pThis->Cond);
+    }
+
+    pthread_mutex_unlock(&pThis->Mutex);
     return VINF_SUCCESS;
 }
 
 RTDECL(int) RTSemEventMultiReset(RTSEMEVENTMULTI hEventMultiSem)
 {
-    RT_NOREF_PV(hEventMultiSem);
+    struct RTSEMEVENTMULTIINTERNAL *pThis = hEventMultiSem;
+    AssertPtrReturn(pThis, VERR_INVALID_HANDLE);
+
+    int rc = pthread_mutex_lock(&pThis->Mutex);
+    if (rc)
+        return RTErrConvertFromErrno(rc);
+
+    if (pThis->u32State == WASM_EVENTMULTI_STATE_SIGNALED)
+        ASMAtomicWriteU32(&pThis->u32State, WASM_EVENTMULTI_STATE_NOT_SIGNALED);
+    else if (pThis->u32State == WASM_EVENTMULTI_STATE_UNINITIALIZED)
+    {
+        pthread_mutex_unlock(&pThis->Mutex);
+        return VERR_SEM_DESTROYED;
+    }
+
+    pthread_mutex_unlock(&pThis->Mutex);
     return VINF_SUCCESS;
+}
+
+/**
+ * Internal: indefinite wait on manual-reset event.
+ */
+static int rtSemEventMultiWasmWaitIndefinite(struct RTSEMEVENTMULTIINTERNAL *pThis)
+{
+    int rc = pthread_mutex_lock(&pThis->Mutex);
+    if (rc)
+        return RTErrConvertFromErrno(rc);
+    ASMAtomicIncU32(&pThis->cWaiters);
+
+    for (;;)
+    {
+        uint32_t const u32State = pThis->u32State;
+        if (u32State != WASM_EVENTMULTI_STATE_NOT_SIGNALED)
+        {
+            ASMAtomicDecU32(&pThis->cWaiters);
+            pthread_mutex_unlock(&pThis->Mutex);
+            return u32State == WASM_EVENTMULTI_STATE_SIGNALED ? VINF_SUCCESS : VERR_SEM_DESTROYED;
+        }
+
+        rc = pthread_cond_wait(&pThis->Cond, &pThis->Mutex);
+        if (rc)
+        {
+            ASMAtomicDecU32(&pThis->cWaiters);
+            pthread_mutex_unlock(&pThis->Mutex);
+            return RTErrConvertFromErrno(rc);
+        }
+    }
+}
+
+/**
+ * Internal: timed wait on manual-reset event.
+ */
+static int rtSemEventMultiWasmWaitTimed(struct RTSEMEVENTMULTIINTERNAL *pThis, RTMSINTERVAL cMillies)
+{
+    struct timespec AbsDeadline;
+    clock_gettime(CLOCK_REALTIME, &AbsDeadline);
+    uint64_t nsTimeout = (uint64_t)cMillies * UINT64_C(1000000);
+    AbsDeadline.tv_sec  += (time_t)(nsTimeout / UINT64_C(1000000000));
+    AbsDeadline.tv_nsec += (long)(nsTimeout % UINT64_C(1000000000));
+    if (AbsDeadline.tv_nsec >= 1000000000L)
+    {
+        AbsDeadline.tv_nsec -= 1000000000L;
+        AbsDeadline.tv_sec++;
+    }
+
+    int rc = pthread_mutex_lock(&pThis->Mutex);
+    if (rc)
+        return RTErrConvertFromErrno(rc);
+    ASMAtomicIncU32(&pThis->cWaiters);
+
+    for (;;)
+    {
+        uint32_t const u32State = pThis->u32State;
+        if (u32State != WASM_EVENTMULTI_STATE_NOT_SIGNALED)
+        {
+            ASMAtomicDecU32(&pThis->cWaiters);
+            pthread_mutex_unlock(&pThis->Mutex);
+            return u32State == WASM_EVENTMULTI_STATE_SIGNALED ? VINF_SUCCESS : VERR_SEM_DESTROYED;
+        }
+
+        rc = pthread_cond_timedwait(&pThis->Cond, &pThis->Mutex, &AbsDeadline);
+        if (rc == ETIMEDOUT)
+        {
+            /* Last check before reporting timeout. */
+            if (pThis->u32State == WASM_EVENTMULTI_STATE_SIGNALED)
+            {
+                ASMAtomicDecU32(&pThis->cWaiters);
+                pthread_mutex_unlock(&pThis->Mutex);
+                return VINF_SUCCESS;
+            }
+            ASMAtomicDecU32(&pThis->cWaiters);
+            pthread_mutex_unlock(&pThis->Mutex);
+            return VERR_TIMEOUT;
+        }
+        if (rc && rc != EINTR)
+        {
+            ASMAtomicDecU32(&pThis->cWaiters);
+            pthread_mutex_unlock(&pThis->Mutex);
+            return RTErrConvertFromErrno(rc);
+        }
+    }
 }
 
 RTDECL(int) RTSemEventMultiWait(RTSEMEVENTMULTI hEventMultiSem, RTMSINTERVAL cMillies)
 {
-    RT_NOREF(hEventMultiSem, cMillies);
-    return VINF_SUCCESS;
+    struct RTSEMEVENTMULTIINTERNAL *pThis = hEventMultiSem;
+    AssertPtrReturn(pThis, VERR_INVALID_HANDLE);
+
+    if (cMillies == RT_INDEFINITE_WAIT)
+        return rtSemEventMultiWasmWaitIndefinite(pThis);
+
+    if (cMillies == 0)
+    {
+        int rc = pthread_mutex_lock(&pThis->Mutex);
+        if (rc)
+            return RTErrConvertFromErrno(rc);
+        uint32_t const u32State = pThis->u32State;
+        pthread_mutex_unlock(&pThis->Mutex);
+        return u32State == WASM_EVENTMULTI_STATE_SIGNALED ? VINF_SUCCESS
+             : u32State != WASM_EVENTMULTI_STATE_UNINITIALIZED ? VERR_TIMEOUT
+             : VERR_SEM_DESTROYED;
+    }
+
+    return rtSemEventMultiWasmWaitTimed(pThis, cMillies);
 }
 
 RTDECL(int) RTSemEventMultiWaitNoResume(RTSEMEVENTMULTI hEventMultiSem, RTMSINTERVAL cMillies)
 {
-    RT_NOREF(hEventMultiSem, cMillies);
-    return VINF_SUCCESS;
+    return RTSemEventMultiWait(hEventMultiSem, cMillies);
 }
+
+RTDECL(int) RTSemEventMultiWaitEx(RTSEMEVENTMULTI hEventMultiSem, uint32_t fFlags, uint64_t uTimeout)
+{
+    struct RTSEMEVENTMULTIINTERNAL *pThis = hEventMultiSem;
+    AssertPtrReturn(pThis, VERR_INVALID_HANDLE);
+
+    if (fFlags & RTSEMWAIT_FLAGS_INDEFINITE)
+        return rtSemEventMultiWasmWaitIndefinite(pThis);
+
+    RTMSINTERVAL cMillies;
+    if (fFlags & RTSEMWAIT_FLAGS_NANOSECS)
+        cMillies = (RTMSINTERVAL)((uTimeout + RT_NS_1MS - 1) / RT_NS_1MS);
+    else
+        cMillies = (RTMSINTERVAL)uTimeout;
+
+    if (fFlags & RTSEMWAIT_FLAGS_ABSOLUTE)
+    {
+        uint64_t u64Now = RTTimeSystemNanoTS();
+        uint64_t u64Abs = (fFlags & RTSEMWAIT_FLAGS_NANOSECS) ? uTimeout : uTimeout * RT_NS_1MS;
+        if (u64Abs <= u64Now)
+            cMillies = 0;
+        else
+            cMillies = (RTMSINTERVAL)((u64Abs - u64Now + RT_NS_1MS - 1) / RT_NS_1MS);
+    }
+
+    return RTSemEventMultiWait(hEventMultiSem, cMillies);
+}
+
+RTDECL(int) RTSemEventMultiWaitExDebug(RTSEMEVENTMULTI hEventMultiSem, uint32_t fFlags, uint64_t uTimeout,
+                                        RTHCUINTPTR uId, RT_SRC_POS_DECL)
+{
+    RT_NOREF(uId, RT_SRC_POS_ARGS);
+    return RTSemEventMultiWaitEx(hEventMultiSem, fFlags, uTimeout);
+}
+
+RTDECL(uint32_t) RTSemEventMultiGetResolution(void)
+{
+    return 1000000; /* 1ms */
+}
+
+RTDECL(void) RTSemEventMultiSetSignaller(RTSEMEVENTMULTI hEventMultiSem, RTTHREAD hThread)
+{
+    RT_NOREF(hEventMultiSem, hThread);
+}
+
+RTDECL(void) RTSemEventMultiAddSignaller(RTSEMEVENTMULTI hEventMultiSem, RTTHREAD hThread)
+{
+    RT_NOREF(hEventMultiSem, hThread);
+}
+
+RTDECL(void) RTSemEventMultiRemoveSignaller(RTSEMEVENTMULTI hEventMultiSem, RTTHREAD hThread)
+{
+    RT_NOREF(hEventMultiSem, hThread);
+}
+
+
+/*********************************************************************************************************************************
+ * RTSemMutex — Recursive mutex semaphore                                                                                        *
+ *********************************************************************************************************************************/
+
+struct RTSEMMUTEXINTERNAL
+{
+    /** Recursive pthread mutex. */
+    pthread_mutex_t     Mutex;
+    /** Owner thread (for debugging). */
+    volatile pthread_t  Owner;
+    /** Recursion count. */
+    volatile uint32_t   cRecursions;
+};
 
 RTDECL(int) RTSemMutexCreate(PRTSEMMUTEX phMutexSem)
 {
-    *phMutexSem = (RTSEMMUTEX)(uintptr_t)1;
-    return VINF_SUCCESS;
+    return RTSemMutexCreateEx(phMutexSem, 0, NIL_RTLOCKVALCLASS, 0, NULL);
 }
 
 RTDECL(int) RTSemMutexCreateEx(PRTSEMMUTEX phMutexSem, uint32_t fFlags, RTLOCKVALCLASS hClass, uint32_t uSubClass, const char *pszNameFmt, ...)
 {
     RT_NOREF(fFlags, hClass, uSubClass, pszNameFmt);
-    *phMutexSem = (RTSEMMUTEX)(uintptr_t)1;
+
+    struct RTSEMMUTEXINTERNAL *pThis = (struct RTSEMMUTEXINTERNAL *)RTMemAllocZ(sizeof(*pThis));
+    if (!pThis)
+        return VERR_NO_MEMORY;
+
+    pthread_mutexattr_t Attr;
+    int rc = pthread_mutexattr_init(&Attr);
+    if (rc)
+    {
+        RTMemFree(pThis);
+        return RTErrConvertFromErrno(rc);
+    }
+
+    rc = pthread_mutexattr_settype(&Attr, PTHREAD_MUTEX_RECURSIVE);
+    if (rc)
+    {
+        pthread_mutexattr_destroy(&Attr);
+        RTMemFree(pThis);
+        return RTErrConvertFromErrno(rc);
+    }
+
+    rc = pthread_mutex_init(&pThis->Mutex, &Attr);
+    pthread_mutexattr_destroy(&Attr);
+    if (rc)
+    {
+        RTMemFree(pThis);
+        return RTErrConvertFromErrno(rc);
+    }
+
+    pThis->Owner = (pthread_t)0;
+    pThis->cRecursions = 0;
+
+    *phMutexSem = pThis;
     return VINF_SUCCESS;
 }
 
 RTDECL(int) RTSemMutexDestroy(RTSEMMUTEX hMutexSem)
 {
-    RT_NOREF_PV(hMutexSem);
-    return VINF_SUCCESS;
+    struct RTSEMMUTEXINTERNAL *pThis = hMutexSem;
+    if (pThis == NIL_RTSEMMUTEX)
+        return VINF_SUCCESS;
+    AssertPtrReturn(pThis, VERR_INVALID_HANDLE);
+
+    int rc = pthread_mutex_destroy(&pThis->Mutex);
+    RTMemFree(pThis);
+    return rc ? RTErrConvertFromErrno(rc) : VINF_SUCCESS;
 }
 
 RTDECL(int) RTSemMutexRequest(RTSEMMUTEX hMutexSem, RTMSINTERVAL cMillies)
 {
-    RT_NOREF(hMutexSem, cMillies);
+    struct RTSEMMUTEXINTERNAL *pThis = hMutexSem;
+    AssertPtrReturn(pThis, VERR_INVALID_HANDLE);
+    RT_NOREF(cMillies);
+
+    int rc = pthread_mutex_lock(&pThis->Mutex);
+    if (rc)
+        return RTErrConvertFromErrno(rc);
+
+    ASMAtomicIncU32(&pThis->cRecursions);
+    pThis->Owner = pthread_self();
     return VINF_SUCCESS;
 }
 
 RTDECL(int) RTSemMutexRequestNoResume(RTSEMMUTEX hMutexSem, RTMSINTERVAL cMillies)
 {
-    RT_NOREF(hMutexSem, cMillies);
-    return VINF_SUCCESS;
+    return RTSemMutexRequest(hMutexSem, cMillies);
 }
 
 RTDECL(int) RTSemMutexRelease(RTSEMMUTEX hMutexSem)
 {
-    RT_NOREF_PV(hMutexSem);
-    return VINF_SUCCESS;
+    struct RTSEMMUTEXINTERNAL *pThis = hMutexSem;
+    AssertPtrReturn(pThis, VERR_INVALID_HANDLE);
+
+    ASMAtomicDecU32(&pThis->cRecursions);
+    int rc = pthread_mutex_unlock(&pThis->Mutex);
+    return rc ? RTErrConvertFromErrno(rc) : VINF_SUCCESS;
 }
+
+
+/*********************************************************************************************************************************
+ * RTSemRW — Read-write semaphore                                                                                                *
+ *********************************************************************************************************************************/
+
+struct RTSEMRWINTERNAL
+{
+    /** pthread read-write lock. */
+    pthread_rwlock_t    RWLock;
+};
 
 RTDECL(int) RTSemRWCreate(PRTSEMRW phRWSem)
 {
-    *phRWSem = (RTSEMRW)(uintptr_t)1;
-    return VINF_SUCCESS;
+    return RTSemRWCreateEx(phRWSem, 0, NIL_RTLOCKVALCLASS, 0, NULL);
 }
 
 RTDECL(int) RTSemRWCreateEx(PRTSEMRW phRWSem, uint32_t fFlags, RTLOCKVALCLASS hClass, uint32_t uSubClass, const char *pszNameFmt, ...)
 {
     RT_NOREF(fFlags, hClass, uSubClass, pszNameFmt);
-    *phRWSem = (RTSEMRW)(uintptr_t)1;
+
+    struct RTSEMRWINTERNAL *pThis = (struct RTSEMRWINTERNAL *)RTMemAllocZ(sizeof(*pThis));
+    if (!pThis)
+        return VERR_NO_MEMORY;
+
+    int rc = pthread_rwlock_init(&pThis->RWLock, NULL);
+    if (rc)
+    {
+        RTMemFree(pThis);
+        return RTErrConvertFromErrno(rc);
+    }
+
+    *phRWSem = pThis;
     return VINF_SUCCESS;
 }
 
 RTDECL(int) RTSemRWDestroy(RTSEMRW hRWSem)
 {
-    RT_NOREF_PV(hRWSem);
-    return VINF_SUCCESS;
+    struct RTSEMRWINTERNAL *pThis = hRWSem;
+    if (pThis == NIL_RTSEMRW)
+        return VINF_SUCCESS;
+    AssertPtrReturn(pThis, VERR_INVALID_HANDLE);
+
+    int rc = pthread_rwlock_destroy(&pThis->RWLock);
+    RTMemFree(pThis);
+    return rc ? RTErrConvertFromErrno(rc) : VINF_SUCCESS;
 }
 
 RTDECL(int) RTSemRWRequestRead(RTSEMRW hRWSem, RTMSINTERVAL cMillies)
 {
-    RT_NOREF(hRWSem, cMillies);
-    return VINF_SUCCESS;
+    struct RTSEMRWINTERNAL *pThis = hRWSem;
+    AssertPtrReturn(pThis, VERR_INVALID_HANDLE);
+    RT_NOREF(cMillies);
+
+    int rc = pthread_rwlock_rdlock(&pThis->RWLock);
+    return rc ? RTErrConvertFromErrno(rc) : VINF_SUCCESS;
 }
 
 RTDECL(int) RTSemRWReleaseRead(RTSEMRW hRWSem)
 {
-    RT_NOREF_PV(hRWSem);
-    return VINF_SUCCESS;
+    struct RTSEMRWINTERNAL *pThis = hRWSem;
+    AssertPtrReturn(pThis, VERR_INVALID_HANDLE);
+
+    int rc = pthread_rwlock_unlock(&pThis->RWLock);
+    return rc ? RTErrConvertFromErrno(rc) : VINF_SUCCESS;
 }
 
 RTDECL(int) RTSemRWRequestWrite(RTSEMRW hRWSem, RTMSINTERVAL cMillies)
 {
-    RT_NOREF(hRWSem, cMillies);
-    return VINF_SUCCESS;
+    struct RTSEMRWINTERNAL *pThis = hRWSem;
+    AssertPtrReturn(pThis, VERR_INVALID_HANDLE);
+    RT_NOREF(cMillies);
+
+    int rc = pthread_rwlock_wrlock(&pThis->RWLock);
+    return rc ? RTErrConvertFromErrno(rc) : VINF_SUCCESS;
 }
 
 RTDECL(int) RTSemRWReleaseWrite(RTSEMRW hRWSem)
 {
-    RT_NOREF_PV(hRWSem);
-    return VINF_SUCCESS;
+    struct RTSEMRWINTERNAL *pThis = hRWSem;
+    AssertPtrReturn(pThis, VERR_INVALID_HANDLE);
+
+    int rc = pthread_rwlock_unlock(&pThis->RWLock);
+    return rc ? RTErrConvertFromErrno(rc) : VINF_SUCCESS;
+}
+
+RTDECL(bool) RTSemRWIsWriteOwner(RTSEMRW hRWSem)
+{
+    /* pthread_rwlock doesn't track ownership; conservatively return true
+       if we can try-lock for write (and immediately release). */
+    struct RTSEMRWINTERNAL *pThis = hRWSem;
+    if (!pThis || pThis == NIL_RTSEMRW)
+        return false;
+    int rc = pthread_rwlock_trywrlock(&pThis->RWLock);
+    if (rc == 0)
+    {
+        pthread_rwlock_unlock(&pThis->RWLock);
+        return false; /* We got it, so we weren't the owner. */
+    }
+    /* EBUSY or EDEADLK — could be us or someone else.  Return true to be safe
+       for VBox callers that use this defensively. */
+    return true;
+}
+
+RTDECL(bool) RTSemRWIsReadOwner(RTSEMRW hRWSem, bool fWannaHear)
+{
+    RT_NOREF(hRWSem, fWannaHear);
+    return true; /* Conservative — can't query pthread_rwlock ownership. */
+}
+
+RTDECL(uint32_t) RTSemRWGetWriteRecursion(RTSEMRW hRWSem)
+{
+    RT_NOREF(hRWSem);
+    return 1; /* Conservative — can't query pthread_rwlock recursion. */
 }
 
 
@@ -614,9 +1288,14 @@ RTDECL(int) RTFileFlush(RTFILE hFile)
 
 /*
  * ── Thread yield / misc ──
+ *
+ * sched_yield() works in Emscripten with -pthread (Web Workers).
+ * Without a real yield the EMT thread busy-loops and starves the
+ * async I/O worker threads (e.g. ATA).
  */
 RTDECL(bool) RTThreadYield(void)
 {
+    sched_yield();
     return true;
 }
 

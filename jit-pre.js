@@ -12,8 +12,11 @@ const R_IP=0x140, R_FLAGS=0x148;
 // Segment registers: each 24 bytes (sel[2],pad[2],validSel[2],flags[2],base[8],limit[4],attr[4])
 const S_ES=0x80,S_CS=0x98,S_SS=0xB0,S_DS=0xC8,S_FS=0xE0,S_GS=0xF8;
 const SEG_BASE=8, SEG_LIMIT=16, SEG_ATTR=20, SEG_SEL=0;
-// CR0
+// CR0-CR4
 const R_CR0=0x160;
+const R_CR2=0x168;
+const R_CR3=0x170;
+const R_CR4=0x178;
 const X86DESCATTR_D = 0x4000; // bit 14 of segment descriptor Attr.u
 
 // ── Lazy flags ──
@@ -177,11 +180,33 @@ function wr8(off, v) { dv.setUint8(cpuPtr + off, v & 0xFF); }
 // Segment base (cached)
 function segBase(segOff) { return Number(dv.getBigUint64(cpuPtr + segOff + SEG_BASE, true)); }
 
-// Guest physical memory read/write (ROM-aware for reads)
-function rb(addr) { return guestRb(addr); }
-function rw(addr) { return guestRw(addr); }
-function rd(addr) { return guestRd(addr); }
+// Guest physical memory read/write (ROM-aware for reads, paging-aware)
+function rb(addr) {
+  if (_pagingOn) {
+    addr = translateLinear(addr >>> 0);
+    if (addr < 0) { mmioFault = true; return 0xFF; }
+  }
+  return guestRb(addr);
+}
+function rw(addr) {
+  if (_pagingOn) {
+    addr = translateLinear(addr >>> 0);
+    if (addr < 0) { mmioFault = true; return 0xFFFF; }
+  }
+  return guestRw(addr);
+}
+function rd(addr) {
+  if (_pagingOn) {
+    addr = translateLinear(addr >>> 0);
+    if (addr < 0) { mmioFault = true; return 0xFFFFFFFF; }
+  }
+  return guestRd(addr);
+}
 function wb(addr, v) {
+  if (_pagingOn) {
+    addr = translateLinear(addr >>> 0);
+    if (addr < 0) { mmioFault = true; return; }
+  }
   // VGA memory range: bail to IEM so VGA device sees writes via PGM MMIO handler
   if (addr >= 0xA0000 && addr < 0xC0000) { mmioFault = true; return; }
   const off = ramBase + addr;
@@ -189,12 +214,20 @@ function wb(addr, v) {
   mem8[off] = v;
 }
 function ww(addr, v) {
+  if (_pagingOn) {
+    addr = translateLinear(addr >>> 0);
+    if (addr < 0) { mmioFault = true; return; }
+  }
   if (addr >= 0xA0000 && addr < 0xC0000) { mmioFault = true; return; }
   const off = ramBase + addr;
   if (off + 2 > mem8.length) { mmioFault = true; return; }
   dv.setUint16(off, v & 0xFFFF, true);
 }
 function wd(addr, v) {
+  if (_pagingOn) {
+    addr = translateLinear(addr >>> 0);
+    if (addr < 0) { mmioFault = true; return; }
+  }
   if (addr >= 0xA0000 && addr < 0xC0000) { mmioFault = true; return; }
   const off = ramBase + addr;
   if (off + 4 > mem8.length) { mmioFault = true; return; }
@@ -469,6 +502,111 @@ function pop32(ssBase) {
   }
 }
 
+// ── 32-bit paging support ──
+let _pagingOn = false;
+
+// Direct-mapped TLB: 1024 entries for fast virtual-to-physical lookup
+const TLB_SIZE = 1024;
+const TLB_MASK = TLB_SIZE - 1;
+const tlbTags = new Int32Array(TLB_SIZE).fill(-1);
+const tlbPhys = new Uint32Array(TLB_SIZE);
+let lastCR3 = -1;
+
+function tlbFlush() { tlbTags.fill(-1); }
+
+// 32-bit non-PAE page table walk
+function translateLinear32(linearAddr) {
+  // TLB check
+  const idx = (linearAddr >>> 12) & TLB_MASK;
+  const tag = linearAddr & 0xFFFFF000;
+  if (tlbTags[idx] === (tag | 0)) {
+    return (tlbPhys[idx] | (linearAddr & 0xFFF)) >>> 0;
+  }
+
+  const cr3 = rr32(R_CR3) & 0xFFFFF000;
+  const cr4 = rr32(R_CR4);
+  const pse = !!(cr4 & 0x10);
+
+  // PDE: bits [31:22]
+  const pdeAddr = cr3 + ((linearAddr >>> 22) << 2);
+  const pdeOff = ramBase + pdeAddr;
+  if (pdeOff + 4 > mem8.length) return -1;
+  const pde = dv.getUint32(pdeOff, true);
+  if (!(pde & 1)) return -1; // not present
+
+  // 4MB page (PSE)?
+  if (pse && (pde & 0x80)) {
+    const physBase = pde & 0xFFC00000;
+    const phys = (physBase | (linearAddr & 0x3FFFFF)) >>> 0;
+    tlbTags[idx] = tag | 0;
+    tlbPhys[idx] = phys & 0xFFFFF000;
+    return phys;
+  }
+
+  // PTE: bits [21:12]
+  const ptBase = pde & 0xFFFFF000;
+  const pteAddr = ptBase + (((linearAddr >>> 12) & 0x3FF) << 2);
+  const pteOff = ramBase + pteAddr;
+  if (pteOff + 4 > mem8.length) return -1;
+  const pte = dv.getUint32(pteOff, true);
+  if (!(pte & 1)) return -1; // not present
+
+  const phys = ((pte & 0xFFFFF000) | (linearAddr & 0xFFF)) >>> 0;
+  tlbTags[idx] = tag | 0;
+  tlbPhys[idx] = phys & 0xFFFFF000;
+  return phys;
+}
+
+// PAE page table walk (for ISOLINUX/Linux)
+function translateLinearPAE(linearAddr) {
+  const idx = (linearAddr >>> 12) & TLB_MASK;
+  const tag = linearAddr & 0xFFFFF000;
+  if (tlbTags[idx] === (tag | 0)) {
+    return (tlbPhys[idx] | (linearAddr & 0xFFF)) >>> 0;
+  }
+
+  // PDPTE: read from CPUMCTX.aPaePdpes (offset 0x240, 4 entries x 8 bytes)
+  const pdpteIdx = (linearAddr >>> 30) & 3;
+  const pdpteLo = dv.getUint32(cpuPtr + 0x240 + pdpteIdx * 8, true);
+  if (!(pdpteLo & 1)) return -1;
+
+  // PDE: bits [29:21]
+  const pdBase = pdpteLo & 0xFFFFF000;
+  const pdeIdx = (linearAddr >>> 21) & 0x1FF;
+  const pdeOff = ramBase + pdBase + pdeIdx * 8;
+  if (pdeOff + 4 > mem8.length) return -1;
+  const pdeLo = dv.getUint32(pdeOff, true);
+  if (!(pdeLo & 1)) return -1;
+
+  // 2MB large page?
+  if (pdeLo & 0x80) {
+    const phys = ((pdeLo & 0xFFE00000) | (linearAddr & 0x1FFFFF)) >>> 0;
+    tlbTags[idx] = tag | 0;
+    tlbPhys[idx] = phys & 0xFFFFF000;
+    return phys;
+  }
+
+  // PTE: bits [20:12]
+  const ptBase = pdeLo & 0xFFFFF000;
+  const pteIdx = (linearAddr >>> 12) & 0x1FF;
+  const pteOff = ramBase + ptBase + pteIdx * 8;
+  if (pteOff + 4 > mem8.length) return -1;
+  const pteLo = dv.getUint32(pteOff, true);
+  if (!(pteLo & 1)) return -1;
+
+  const phys = ((pteLo & 0xFFFFF000) | (linearAddr & 0xFFF)) >>> 0;
+  tlbTags[idx] = tag | 0;
+  tlbPhys[idx] = phys & 0xFFFFF000;
+  return phys;
+}
+
+// Unified translate: picks 32-bit or PAE based on CR4.PAE
+function translateLinear(linearAddr) {
+  const cr4 = rr32(R_CR4);
+  if (cr4 & 0x20) return translateLinearPAE(linearAddr);
+  return translateLinear32(linearAddr);
+}
+
 // ═══════════════════════════════════════════════════════
 // MAIN INTERPRETER LOOP
 // ═══════════════════════════════════════════════════════
@@ -491,12 +629,18 @@ function execBlock(cpuP, ramB, maxInsn) {
   let ssBase = segBase(S_SS);
   let esBase = segBase(S_ES);
 
-  // CR0: bail only on paging (we handle real mode + protected mode without paging)
+  // CR0: check PE and PG
   const cr0 = rr32(R_CR0);
   const protMode = !!(cr0 & 1);        // CR0.PE
   const pagingOn = !!(cr0 & 0x80000000); // CR0.PG
-  if (pagingOn) return 0;  // bail if paging enabled
+  _pagingOn = pagingOn;
   const realMode = !protMode;
+
+  // Flush TLB on CR3 change
+  if (pagingOn) {
+    const currentCR3 = rr32(R_CR3);
+    if (currentCR3 !== lastCR3) { tlbFlush(); lastCR3 = currentCR3; }
+  }
 
   // CS descriptor D bit: determines default operand/address size in protected mode
   const csAttr = rr32(S_CS + SEG_ATTR);
@@ -534,16 +678,26 @@ function execBlock(cpuP, ramB, maxInsn) {
   const ramSize = mem8.length - ramBase; // available RAM
 
   // Pre-read a chunk of code for fast access
-  let codePhys = csBase + ip;
+  let codeLinear = csBase + ip;
+  let codePhys;
   // Check if address is in accessible range.
   // VirtualBox's PGM stores ROM (0xC0000-0xFFFFF) and MMIO (0xA0000-0xBFFFF)
   // via page handlers — these addresses are NOT in the flat RAM buffer (they read as 0).
   // Only execute from flat RAM (< 0xA0000) or the ROM buffer (when initialized).
   const addrAccessible = (addr) => {
     if (romBufSize > 0 && addr >= romGCPhysStart && addr < romGCPhysEnd) return true;
-    return addr < 0xA0000 && addr + 16 <= ramSize;
+    // With paging, physical addresses can be anywhere in RAM (not just < 0xA0000).
+    // Without paging, linear=physical and only flat RAM below MMIO hole is usable.
+    if (pagingOn) return addr >= 0 && addr + 16 <= ramSize && !(addr >= 0xA0000 && addr < 0xC0000);
+    return addr >= 0 && addr < 0xA0000 && addr + 16 <= ramSize;
   };
   const inRomRange = (addr) => romBufSize > 0 && addr >= romGCPhysStart && addr < romGCPhysEnd;
+  if (pagingOn) {
+    codePhys = translateLinear(codeLinear >>> 0);
+    if (codePhys < 0) return 0;
+  } else {
+    codePhys = codeLinear;
+  }
   if (!addrAccessible(codePhys)) {
     return 0;
   }
@@ -558,8 +712,20 @@ function execBlock(cpuP, ramB, maxInsn) {
     // Periodic bail for interrupt delivery
     if (executed > 0 && (executed & (interruptCheckInterval - 1)) === 0) break;
 
-    codePhys = csBase + ip;
+    codeLinear = csBase + ip;
+    if (pagingOn) {
+      codePhys = translateLinear(codeLinear >>> 0);
+      if (codePhys < 0) { executed = executed || 0; break; } // bail on code page fault
+    } else {
+      codePhys = codeLinear;
+    }
     if (codePhys < 0 || (!addrAccessible(codePhys))) break; // safety
+
+    // Near page boundary: instruction might span two pages — bail to IEM
+    if (pagingOn && (codePhys & 0xFFF) > 0xFF0) {
+      executed = executed || 0;
+      break;
+    }
 
     // Read up to 15 bytes of instruction (ROM-aware)
     const c0 = guestRb(codePhys);

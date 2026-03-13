@@ -53,8 +53,11 @@ globalThis.VBoxJIT = (function() {
   // Segment registers: each 24 bytes (sel[2],pad[2],validSel[2],flags[2],base[8],limit[4],attr[4])
   const S_ES = 128, S_CS = 152, S_SS = 176, S_DS = 200, S_FS = 224, S_GS = 248;
   const SEG_BASE = 8, SEG_LIMIT = 16, SEG_ATTR = 20, SEG_SEL = 0;
-  // CR0
+  // CR0-CR4
   const R_CR0 = 352;
+  const R_CR2 = 360;
+  const R_CR3 = 368;
+  const R_CR4 = 376;
   const X86DESCATTR_D = 16384;
   // bit 14 of segment descriptor Attr.u
   // ── Lazy flags ──
@@ -252,17 +255,45 @@ globalThis.VBoxJIT = (function() {
   function segBase(segOff) {
     return Number(dv.getBigUint64(cpuPtr + segOff + SEG_BASE, true));
   }
-  // Guest physical memory read/write (ROM-aware for reads)
+  // Guest physical memory read/write (ROM-aware for reads, paging-aware)
   function rb(addr) {
+    if (_pagingOn) {
+      addr = translateLinear(addr >>> 0);
+      if (addr < 0) {
+        mmioFault = true;
+        return 255;
+      }
+    }
     return guestRb(addr);
   }
   function rw(addr) {
+    if (_pagingOn) {
+      addr = translateLinear(addr >>> 0);
+      if (addr < 0) {
+        mmioFault = true;
+        return 65535;
+      }
+    }
     return guestRw(addr);
   }
   function rd(addr) {
+    if (_pagingOn) {
+      addr = translateLinear(addr >>> 0);
+      if (addr < 0) {
+        mmioFault = true;
+        return 4294967295;
+      }
+    }
     return guestRd(addr);
   }
   function wb(addr, v) {
+    if (_pagingOn) {
+      addr = translateLinear(addr >>> 0);
+      if (addr < 0) {
+        mmioFault = true;
+        return;
+      }
+    }
     // VGA memory range: bail to IEM so VGA device sees writes via PGM MMIO handler
     if (addr >= 655360 && addr < 786432) {
       mmioFault = true;
@@ -276,6 +307,13 @@ globalThis.VBoxJIT = (function() {
     mem8[off] = v;
   }
   function ww(addr, v) {
+    if (_pagingOn) {
+      addr = translateLinear(addr >>> 0);
+      if (addr < 0) {
+        mmioFault = true;
+        return;
+      }
+    }
     if (addr >= 655360 && addr < 786432) {
       mmioFault = true;
       return;
@@ -288,6 +326,13 @@ globalThis.VBoxJIT = (function() {
     dv.setUint16(off, v & 65535, true);
   }
   function wd(addr, v) {
+    if (_pagingOn) {
+      addr = translateLinear(addr >>> 0);
+      if (addr < 0) {
+        mmioFault = true;
+        return;
+      }
+    }
     if (addr >= 655360 && addr < 786432) {
       mmioFault = true;
       return;
@@ -777,6 +822,99 @@ globalThis.VBoxJIT = (function() {
       return v;
     }
   }
+  // ── 32-bit paging support ──
+  let _pagingOn = false;
+  // Direct-mapped TLB: 1024 entries for fast virtual-to-physical lookup
+  const TLB_SIZE = 1024;
+  const TLB_MASK = TLB_SIZE - 1;
+  const tlbTags = new Int32Array(TLB_SIZE).fill(-1);
+  const tlbPhys = new Uint32Array(TLB_SIZE);
+  let lastCR3 = -1;
+  function tlbFlush() {
+    tlbTags.fill(-1);
+  }
+  // 32-bit non-PAE page table walk
+  function translateLinear32(linearAddr) {
+    // TLB check
+    const idx = (linearAddr >>> 12) & TLB_MASK;
+    const tag = linearAddr & 4294963200;
+    if (tlbTags[idx] === (tag | 0)) {
+      return (tlbPhys[idx] | (linearAddr & 4095)) >>> 0;
+    }
+    const cr3 = rr32(R_CR3) & 4294963200;
+    const cr4 = rr32(R_CR4);
+    const pse = !!(cr4 & 16);
+    // PDE: bits [31:22]
+    const pdeAddr = cr3 + ((linearAddr >>> 22) << 2);
+    const pdeOff = ramBase + pdeAddr;
+    if (pdeOff + 4 > mem8.length) return -1;
+    const pde = dv.getUint32(pdeOff, true);
+    if (!(pde & 1)) return -1;
+    // not present
+    // 4MB page (PSE)?
+    if (pse && (pde & 128)) {
+      const physBase = pde & 4290772992;
+      const phys = (physBase | (linearAddr & 4194303)) >>> 0;
+      tlbTags[idx] = tag | 0;
+      tlbPhys[idx] = phys & 4294963200;
+      return phys;
+    }
+    // PTE: bits [21:12]
+    const ptBase = pde & 4294963200;
+    const pteAddr = ptBase + (((linearAddr >>> 12) & 1023) << 2);
+    const pteOff = ramBase + pteAddr;
+    if (pteOff + 4 > mem8.length) return -1;
+    const pte = dv.getUint32(pteOff, true);
+    if (!(pte & 1)) return -1;
+    // not present
+    const phys = ((pte & 4294963200) | (linearAddr & 4095)) >>> 0;
+    tlbTags[idx] = tag | 0;
+    tlbPhys[idx] = phys & 4294963200;
+    return phys;
+  }
+  // PAE page table walk (for ISOLINUX/Linux)
+  function translateLinearPAE(linearAddr) {
+    const idx = (linearAddr >>> 12) & TLB_MASK;
+    const tag = linearAddr & 4294963200;
+    if (tlbTags[idx] === (tag | 0)) {
+      return (tlbPhys[idx] | (linearAddr & 4095)) >>> 0;
+    }
+    // PDPTE: read from CPUMCTX.aPaePdpes (offset 0x240, 4 entries x 8 bytes)
+    const pdpteIdx = (linearAddr >>> 30) & 3;
+    const pdpteLo = dv.getUint32(cpuPtr + 576 + pdpteIdx * 8, true);
+    if (!(pdpteLo & 1)) return -1;
+    // PDE: bits [29:21]
+    const pdBase = pdpteLo & 4294963200;
+    const pdeIdx = (linearAddr >>> 21) & 511;
+    const pdeOff = ramBase + pdBase + pdeIdx * 8;
+    if (pdeOff + 4 > mem8.length) return -1;
+    const pdeLo = dv.getUint32(pdeOff, true);
+    if (!(pdeLo & 1)) return -1;
+    // 2MB large page?
+    if (pdeLo & 128) {
+      const phys = ((pdeLo & 4292870144) | (linearAddr & 2097151)) >>> 0;
+      tlbTags[idx] = tag | 0;
+      tlbPhys[idx] = phys & 4294963200;
+      return phys;
+    }
+    // PTE: bits [20:12]
+    const ptBase = pdeLo & 4294963200;
+    const pteIdx = (linearAddr >>> 12) & 511;
+    const pteOff = ramBase + ptBase + pteIdx * 8;
+    if (pteOff + 4 > mem8.length) return -1;
+    const pteLo = dv.getUint32(pteOff, true);
+    if (!(pteLo & 1)) return -1;
+    const phys = ((pteLo & 4294963200) | (linearAddr & 4095)) >>> 0;
+    tlbTags[idx] = tag | 0;
+    tlbPhys[idx] = phys & 4294963200;
+    return phys;
+  }
+  // Unified translate: picks 32-bit or PAE based on CR4.PAE
+  function translateLinear(linearAddr) {
+    const cr4 = rr32(R_CR4);
+    if (cr4 & 32) return translateLinearPAE(linearAddr);
+    return translateLinear32(linearAddr);
+  }
   // ═══════════════════════════════════════════════════════
   // MAIN INTERPRETER LOOP
   // ═══════════════════════════════════════════════════════
@@ -794,15 +932,22 @@ globalThis.VBoxJIT = (function() {
     let dsBase = segBase(S_DS);
     let ssBase = segBase(S_SS);
     let esBase = segBase(S_ES);
-    // CR0: bail only on paging (we handle real mode + protected mode without paging)
+    // CR0: check PE and PG
     const cr0 = rr32(R_CR0);
     const protMode = !!(cr0 & 1);
     // CR0.PE
     const pagingOn = !!(cr0 & 2147483648);
     // CR0.PG
-    if (pagingOn) return 0;
-    // bail if paging enabled
+    _pagingOn = pagingOn;
     const realMode = !protMode;
+    // Flush TLB on CR3 change
+    if (pagingOn) {
+      const currentCR3 = rr32(R_CR3);
+      if (currentCR3 !== lastCR3) {
+        tlbFlush();
+        lastCR3 = currentCR3;
+      }
+    }
     // CS descriptor D bit: determines default operand/address size in protected mode
     const csAttr = rr32(S_CS + SEG_ATTR);
     const csDefBig = protMode && !!(csAttr & X86DESCATTR_D);
@@ -833,16 +978,26 @@ globalThis.VBoxJIT = (function() {
     const ramSize = mem8.length - ramBase;
     // available RAM
     // Pre-read a chunk of code for fast access
-    let codePhys = csBase + ip;
+    let codeLinear = csBase + ip;
+    let codePhys;
     // Check if address is in accessible range.
     // VirtualBox's PGM stores ROM (0xC0000-0xFFFFF) and MMIO (0xA0000-0xBFFFF)
     // via page handlers — these addresses are NOT in the flat RAM buffer (they read as 0).
     // Only execute from flat RAM (< 0xA0000) or the ROM buffer (when initialized).
     const addrAccessible = addr => {
       if (romBufSize > 0 && addr >= romGCPhysStart && addr < romGCPhysEnd) return true;
-      return addr < 655360 && addr + 16 <= ramSize;
+      // With paging, physical addresses can be anywhere in RAM (not just < 0xA0000).
+      // Without paging, linear=physical and only flat RAM below MMIO hole is usable.
+      if (pagingOn) return addr >= 0 && addr + 16 <= ramSize && !(addr >= 655360 && addr < 786432);
+      return addr >= 0 && addr < 655360 && addr + 16 <= ramSize;
     };
     const inRomRange = addr => romBufSize > 0 && addr >= romGCPhysStart && addr < romGCPhysEnd;
+    if (pagingOn) {
+      codePhys = translateLinear(codeLinear >>> 0);
+      if (codePhys < 0) return 0;
+    } else {
+      codePhys = codeLinear;
+    }
     if (!addrAccessible(codePhys)) {
       return 0;
     }
@@ -855,9 +1010,23 @@ globalThis.VBoxJIT = (function() {
       // reset MMIO fault flag for each instruction attempt
       // Periodic bail for interrupt delivery
       if (executed > 0 && (executed & (interruptCheckInterval - 1)) === 0) break;
-      codePhys = csBase + ip;
+      codeLinear = csBase + ip;
+      if (pagingOn) {
+        codePhys = translateLinear(codeLinear >>> 0);
+        if (codePhys < 0) {
+          executed = executed || 0;
+          break;
+        }
+      } else {
+        codePhys = codeLinear;
+      }
       if (codePhys < 0 || (!addrAccessible(codePhys))) break;
       // safety
+      // Near page boundary: instruction might span two pages — bail to IEM
+      if (pagingOn && (codePhys & 4095) > 4080) {
+        executed = executed || 0;
+        break;
+      }
       // Read up to 15 bytes of instruction (ROM-aware)
       const c0 = guestRb(codePhys);
       // ── Prefix handling ──

@@ -55,6 +55,8 @@ globalThis.VBoxJIT = (function() {
   const SEG_BASE = 8, SEG_LIMIT = 16, SEG_ATTR = 20, SEG_SEL = 0;
   // CR0
   const R_CR0 = 352;
+  const X86DESCATTR_D = 16384;
+  // bit 14 of segment descriptor Attr.u
   // ── Lazy flags ──
   const OP_NONE = 0, OP_ADD = 1, OP_SUB = 2, OP_AND = 3, OP_OR = 4, OP_XOR = 5, OP_INC = 6, OP_DEC = 7, OP_SHL = 8, OP_SHR = 9, OP_SAR = 10, OP_ROL = 11, OP_ROR = 12, OP_EXPLICIT = 13;
   let lazyOp = OP_EXPLICIT, lazyRes = 0, lazyOp1 = 0, lazyOp2 = 0, lazySize = 16, lazyCF = 0;
@@ -725,28 +727,55 @@ globalThis.VBoxJIT = (function() {
     return false;
   }
   // ── Stack operations ──
+  let _ssBig = false;
+  // SS.B=1 means use ESP (32-bit), SS.B=0 means use SP (16-bit)
   function push16(v, ssBase) {
-    let sp = (gr16(4) - 2) & 65535;
-    sr16(4, sp);
-    ww(ssBase + sp, v);
+    if (_ssBig) {
+      let esp = (gr32(4) - 2) >>> 0;
+      sr32(4, esp);
+      ww(ssBase + esp, v);
+    } else {
+      let sp = (gr16(4) - 2) & 65535;
+      sr16(4, sp);
+      ww(ssBase + sp, v);
+    }
   }
   function pop16(ssBase) {
-    const sp = gr16(4);
-    const v = rw(ssBase + sp);
-    sr16(4, (sp + 2) & 65535);
-    return v;
+    if (_ssBig) {
+      const esp = gr32(4);
+      const v = rw(ssBase + esp);
+      sr32(4, (esp + 2) >>> 0);
+      return v;
+    } else {
+      const sp = gr16(4);
+      const v = rw(ssBase + sp);
+      sr16(4, (sp + 2) & 65535);
+      return v;
+    }
   }
   function push32(v, ssBase) {
-    // In real mode, SP is always 16-bit
-    let sp = (gr16(4) - 4) & 65535;
-    sr16(4, sp);
-    wd(ssBase + sp, v);
+    if (_ssBig) {
+      let esp = (gr32(4) - 4) >>> 0;
+      sr32(4, esp);
+      wd(ssBase + esp, v);
+    } else {
+      let sp = (gr16(4) - 4) & 65535;
+      sr16(4, sp);
+      wd(ssBase + sp, v);
+    }
   }
   function pop32(ssBase) {
-    const sp = gr16(4);
-    const v = rd(ssBase + sp);
-    sr16(4, (sp + 4) & 65535);
-    return v;
+    if (_ssBig) {
+      const esp = gr32(4);
+      const v = rd(ssBase + esp);
+      sr32(4, (esp + 4) >>> 0);
+      return v;
+    } else {
+      const sp = gr16(4);
+      const v = rd(ssBase + sp);
+      sr16(4, (sp + 4) & 65535);
+      return v;
+    }
   }
   // ═══════════════════════════════════════════════════════
   // MAIN INTERPRETER LOOP
@@ -760,36 +789,44 @@ globalThis.VBoxJIT = (function() {
     ramBase = ramB;
     refreshViews();
     // Load frequently-used state
-    let ip = rr16(R_IP);
-    // only low 16 bits for real mode
     let flags = rr32(R_FLAGS);
     let csBase = segBase(S_CS);
     let dsBase = segBase(S_DS);
     let ssBase = segBase(S_SS);
     let esBase = segBase(S_ES);
+    // CR0: bail only on paging (we handle real mode + protected mode without paging)
+    const cr0 = rr32(R_CR0);
+    const protMode = !!(cr0 & 1);
+    // CR0.PE
+    const pagingOn = !!(cr0 & 2147483648);
+    // CR0.PG
+    if (pagingOn) return 0;
+    // bail if paging enabled
+    const realMode = !protMode;
+    // CS descriptor D bit: determines default operand/address size in protected mode
+    const csAttr = rr32(S_CS + SEG_ATTR);
+    const csDefBig = protMode && !!(csAttr & X86DESCATTR_D);
+    const ipMask = csDefBig ? 4294967295 : 65535;
+    // SS.B for stack operations (ESP vs SP)
+    const ssAttr = rr32(S_SS + SEG_ATTR);
+    _ssBig = protMode && !!(ssAttr & X86DESCATTR_D);
+    let ip = csDefBig ? rr32(R_IP) : rr16(R_IP);
     // Initialize lazy flags from current RFLAGS
     loadFlags(flags);
-    lazySize = 2;
-    // default 16-bit
+    lazySize = csDefBig ? 4 : 2;
+    // default operand size
     // Linear PC for diagnostics and ROM checks
     const linearPC = csBase + ip;
     // Track code segment range for self-modifying code detection.
     // REP STOSB/MOVSB can overwrite the current code segment (e.g. BIOS memory
     // test). We detect this and bail to IEM rather than executing corrupted code.
     const codeSegStart = csBase;
-    const codeSegEnd = csBase + 65536;
-    // 64KB segment
-    // Check if we're in real mode — bail entirely for protected mode.
-    // This JIT is a real-mode interpreter: it assumes 16-bit default operand/address
-    // size, segment base = selector << 4, 16-bit IP masking, real-mode interrupt
-    // vectors, etc. None of that is correct once CR0.PE is set.
-    const cr0 = rr32(R_CR0);
-    if (cr0 & 1) {
-      // PE bit set = protected mode, bail to IEM
-      return 0;
+    const csLimit = rr32(S_CS + SEG_LIMIT);
+    const codeSegEnd = csDefBig ? (csBase + Math.min(csLimit + 1, 4294967296)) : (csBase + 65536);
+    // Helper to write IP back to CPUMCTX with correct width
+    function wrIP(val) {
+      if (csDefBig) wr32(R_IP, val & 4294967295); else wr16(R_IP, val & 65535);
     }
-    const realMode = true;
-    // We only reach here in real mode
     let executed = 0;
     let lastBailOp = -1;
     // track the opcode that caused early exit
@@ -891,10 +928,10 @@ globalThis.VBoxJIT = (function() {
       const effDS = segOverride >= 0 ? segBase(segOverride) : dsBase;
       const effSS = ssBase;
       // stack segment rarely overridden
-      // operand size: default 16-bit in real mode
-      const opSize = opSizeOverride ? 4 : 2;
-      // address size: default 16-bit in real mode
-      const addrSize = addrSizeOverride ? 4 : 2;
+      // operand size: inverted by 0x66 prefix
+      const opSize = csDefBig ? (opSizeOverride ? 2 : 4) : (opSizeOverride ? 4 : 2);
+      // address size: inverted by 0x67 prefix
+      const addrSize = csDefBig ? (addrSizeOverride ? 2 : 4) : (addrSizeOverride ? 4 : 2);
       // Code bytes after prefixes — use ROM buffer if in ROM range
       const inROM = (codePhys >= romGCPhysStart && codePhys < romGCPhysEnd);
       const ci = inROM ? (romBufBase + (codePhys - romGCPhysStart) + pos) : (ramBase + codePhys + pos);
@@ -1109,7 +1146,7 @@ globalThis.VBoxJIT = (function() {
           // Real mode: base = sel << 4
           const sOff = SEG_OFFS[sreg];
           if (!sOff && sreg !== 0) {
-            ip = (ip + ilen) & 65535;
+            ip = (ip + ilen) & ipMask;
             break;
           }
           // invalid sreg
@@ -1746,12 +1783,12 @@ globalThis.VBoxJIT = (function() {
         {
           let rel = mem8[ci + 1];
           if (rel > 127) rel -= 256;
-          ip = (ip + 2 + pos + rel) & 65535;
+          ip = (ip + 2 + pos + rel) & ipMask;
           ilen = 0;
           // ip already set
           executed++;
           // Store state and continue from new IP
-          wr16(R_IP, ip);
+          wrIP(ip);
           continue;
         }
 
@@ -1762,14 +1799,14 @@ globalThis.VBoxJIT = (function() {
           if (opSize === 2) {
             rel = mem8[ci + 1] | (mem8[ci + 2] << 8);
             if (rel > 32767) rel -= 65536;
-            ip = (ip + 3 + pos + rel) & 65535;
+            ip = (ip + 3 + pos + rel) & ipMask;
           } else {
             rel = mem8[ci + 1] | (mem8[ci + 2] << 8) | (mem8[ci + 3] << 16) | (mem8[ci + 4] << 24);
-            ip = (ip + 5 + pos + rel) & 65535;
+            ip = (ip + 5 + pos + rel) & ipMask;
           }
           ilen = 0;
           executed++;
-          wr16(R_IP, ip);
+          wrIP(ip);
           continue;
         }
 
@@ -1795,10 +1832,10 @@ globalThis.VBoxJIT = (function() {
           if (rel > 127) rel -= 256;
           ilen += 2;
           if (testCC(b - 112)) {
-            ip = (ip + ilen + rel) & 65535;
+            ip = (ip + ilen + rel) & ipMask;
             ilen = 0;
             executed++;
-            wr16(R_IP, ip);
+            wrIP(ip);
             continue;
           }
           break;
@@ -1820,10 +1857,10 @@ globalThis.VBoxJIT = (function() {
             sr16(1, cx);
           }
           if (cx !== 0) {
-            ip = (ip + ilen + rel) & 65535;
+            ip = (ip + ilen + rel) & ipMask;
             ilen = 0;
             executed++;
-            wr16(R_IP, ip);
+            wrIP(ip);
             continue;
           }
           break;
@@ -1844,10 +1881,10 @@ globalThis.VBoxJIT = (function() {
             sr16(1, cx);
           }
           if (cx !== 0 && getZF()) {
-            ip = (ip + ilen + rel) & 65535;
+            ip = (ip + ilen + rel) & ipMask;
             ilen = 0;
             executed++;
-            wr16(R_IP, ip);
+            wrIP(ip);
             continue;
           }
           break;
@@ -1868,10 +1905,10 @@ globalThis.VBoxJIT = (function() {
             sr16(1, cx);
           }
           if (cx !== 0 && !getZF()) {
-            ip = (ip + ilen + rel) & 65535;
+            ip = (ip + ilen + rel) & ipMask;
             ilen = 0;
             executed++;
-            wr16(R_IP, ip);
+            wrIP(ip);
             continue;
           }
           break;
@@ -1885,10 +1922,10 @@ globalThis.VBoxJIT = (function() {
           ilen += 2;
           const cx = addrSize === 2 ? gr16(1) : gr32(1);
           if (cx === 0) {
-            ip = (ip + ilen + rel) & 65535;
+            ip = (ip + ilen + rel) & ipMask;
             ilen = 0;
             executed++;
-            wr16(R_IP, ip);
+            wrIP(ip);
             continue;
           }
           break;
@@ -1906,12 +1943,20 @@ globalThis.VBoxJIT = (function() {
             break;
           }
           ilen += 4;
-          push16(gr16(5), ssBase);
-          // push BP
-          const framePtr = gr16(4);
-          // SP after push = new BP
-          sr16(5, framePtr);
-          sr16(4, (gr16(4) - frameSize) & 65535);
+          if (opSize === 2) {
+            push16(gr16(5), ssBase);
+            // push BP
+            const framePtr = _ssBig ? gr32(4) : gr16(4);
+            // SP after push = new BP
+            sr16(5, framePtr & 65535);
+            if (_ssBig) sr32(4, (gr32(4) - frameSize) >>> 0); else sr16(4, (gr16(4) - frameSize) & 65535);
+          } else {
+            push32(gr32(5), ssBase);
+            // push EBP
+            const framePtr = _ssBig ? gr32(4) : gr16(4);
+            sr32(5, framePtr);
+            if (_ssBig) sr32(4, (gr32(4) - frameSize) >>> 0); else sr16(4, (gr16(4) - frameSize) & 65535);
+          }
           break;
         }
 
@@ -1924,25 +1969,25 @@ globalThis.VBoxJIT = (function() {
             if (rel > 32767) rel -= 65536;
             ilen += 3;
             push16((ip + ilen) & 65535, ssBase);
-            ip = (ip + ilen + rel) & 65535;
+            ip = (ip + ilen + rel) & ipMask;
           } else {
             rel = mem8[ci + 1] | (mem8[ci + 2] << 8) | (mem8[ci + 3] << 16) | (mem8[ci + 4] << 24);
             ilen += 5;
             push32((ip + ilen) & 4294967295, ssBase);
-            ip = (ip + ilen + rel) & 65535;
+            ip = (ip + ilen + rel) & ipMask;
           }
           ilen = 0;
           executed++;
-          wr16(R_IP, ip);
+          wrIP(ip);
           continue;
         }
 
        // ──── RET near (0xC3) ────
         case 195:
-        if (opSize === 2) ip = pop16(ssBase); else ip = pop32(ssBase) & 65535;
+        if (opSize === 2) ip = pop16(ssBase); else ip = pop32(ssBase) & ipMask;
         ilen = 0;
         executed++;
-        wr16(R_IP, ip);
+        wrIP(ip);
         continue;
 
        // ──── RET near imm16 (0xC2) ────
@@ -1951,14 +1996,14 @@ globalThis.VBoxJIT = (function() {
           const imm = mem8[ci + 1] | (mem8[ci + 2] << 8);
           if (opSize === 2) {
             ip = pop16(ssBase);
-            sr16(4, (gr16(4) + imm) & 65535);
+            if (_ssBig) sr32(4, (gr32(4) + imm) >>> 0); else sr16(4, (gr16(4) + imm) & 65535);
           } else {
-            ip = pop32(ssBase) & 65535;
-            sr32(4, (gr32(4) + imm) >>> 0);
+            ip = pop32(ssBase) & ipMask;
+            if (_ssBig) sr32(4, (gr32(4) + imm) >>> 0); else sr16(4, (gr16(4) + imm) & 65535);
           }
           ilen = 0;
           executed++;
-          wr16(R_IP, ip);
+          wrIP(ip);
           continue;
         }
 
@@ -1981,9 +2026,9 @@ globalThis.VBoxJIT = (function() {
             // after STI" logic.  Without this bail the JIT can spin through
             // thousands of CLI/STI polling loops (e.g. BIOS INT 16h keyboard
             // wait) without ever letting the EM deliver pending IRQs.
-            ip = (ip + ilen) & 65535;
+            ip = (ip + ilen) & ipMask;
             executed++;
-            wr16(R_IP, ip);
+            wrIP(ip);
             ilen = 0;
             iter = maxInsn;
           }
@@ -2130,20 +2175,34 @@ globalThis.VBoxJIT = (function() {
        case 110:
        case 111:
         {
-          // String operations
+          // String operations — address size selects SI/DI/CX width
           const dir = (flags & 1024) ? -1 : 1;
           // DF flag
           ilen += 1;
+          const a32 = addrSize === 4;
+          const aMask = a32 ? 4294967295 : 65535;
+          const grDI = () => a32 ? gr32(7) : gr16(7);
+          const grSI = () => a32 ? gr32(6) : gr16(6);
+          const grCX = () => a32 ? gr32(1) : gr16(1);
+          const srDI = v => {
+            if (a32) sr32(7, v >>> 0); else sr16(7, v & 65535);
+          };
+          const srSI = v => {
+            if (a32) sr32(6, v >>> 0); else sr16(6, v & 65535);
+          };
+          const srCX = v => {
+            if (a32) sr32(1, v >>> 0); else sr16(1, v & 65535);
+          };
           if (repPrefix && (b === 164 || b === 165 || b === 170 || b === 171 || b === 172 || b === 173 || b === 108 || b === 109 || b === 110 || b === 111)) {
-            // REP prefix — repeat CX times (ECX with 0x67 in 32-bit mode, not implemented)
-            let cx = gr16(1);
+            // REP prefix — repeat CX/ECX times
+            let cx = grCX();
             if (cx === 0) break;
             const srcSeg = segOverride >= 0 ? segBase(segOverride) : dsBase;
             switch (b) {
              case 170:
               {
                 // STOSB — optimized bulk fill
-                let di = gr16(7);
+                let di = grDI();
                 const val = gr8(0);
                 const addr = esBase + di;
                 const byteCount = cx;
@@ -2158,7 +2217,7 @@ globalThis.VBoxJIT = (function() {
                     break;
                   }
                   mem8.fill(val, ramBase + addrLo, ramBase + addrHi);
-                  di = (di + dir * byteCount) & 65535;
+                  di = (di + dir * byteCount) & aMask;
                   cx = 0;
                 } else {
                   // Slow path — bail to IEM for MMIO-touching REP STOS
@@ -2167,15 +2226,15 @@ globalThis.VBoxJIT = (function() {
                   iter = maxInsn;
                   break;
                 }
-                sr16(7, di);
-                sr16(1, 0);
+                srDI(di);
+                srCX(0);
                 break;
               }
 
              case 171:
               {
                 // STOSW/STOSD — optimized bulk fill
-                let di = gr16(7);
+                let di = grDI();
                 const sz = opSize;
                 // 2 or 4
                 const v = sz === 2 ? gr16(0) : gr32(0);
@@ -2208,7 +2267,7 @@ globalThis.VBoxJIT = (function() {
                       filled += chunk;
                     }
                   }
-                  di = (di + dir * totalBytes) & 65535;
+                  di = (di + dir * totalBytes) & aMask;
                   cx = 0;
                 } else {
                   // Slow path — bail to IEM for MMIO-touching REP STOS
@@ -2216,15 +2275,15 @@ globalThis.VBoxJIT = (function() {
                   iter = maxInsn;
                   break;
                 }
-                sr16(7, di);
-                sr16(1, 0);
+                srDI(di);
+                srCX(0);
                 break;
               }
 
              case 164:
               {
                 // MOVSB — optimized bulk copy
-                let si = gr16(6), di = gr16(7);
+                let si = grSI(), di = grDI();
                 const srcAddr = srcSeg + si;
                 const dstAddr = esBase + di;
                 const byteCount = cx;
@@ -2244,8 +2303,8 @@ globalThis.VBoxJIT = (function() {
                   }
                   // copyWithin handles overlapping regions correctly
                   mem8.copyWithin(ramBase + dstLo, ramBase + srcLo, ramBase + srcHi);
-                  si = (si + dir * byteCount) & 65535;
-                  di = (di + dir * byteCount) & 65535;
+                  si = (si + dir * byteCount) & aMask;
+                  di = (di + dir * byteCount) & aMask;
                   cx = 0;
                 } else {
                   // Slow path — bail to IEM for MMIO-touching REP MOVS
@@ -2253,16 +2312,16 @@ globalThis.VBoxJIT = (function() {
                   iter = maxInsn;
                   break;
                 }
-                sr16(6, si);
-                sr16(7, di);
-                sr16(1, 0);
+                srSI(si);
+                srDI(di);
+                srCX(0);
                 break;
               }
 
              case 165:
               {
                 // MOVSW/MOVSD — optimized bulk copy
-                let si = gr16(6), di = gr16(7);
+                let si = grSI(), di = grDI();
                 const sz5 = opSize;
                 // 2 or 4
                 const totalBytes5 = cx * sz5;
@@ -2281,8 +2340,8 @@ globalThis.VBoxJIT = (function() {
                     break;
                   }
                   mem8.copyWithin(ramBase + dstLo5, ramBase + srcLo5, ramBase + srcHi5);
-                  si = (si + dir * totalBytes5) & 65535;
-                  di = (di + dir * totalBytes5) & 65535;
+                  si = (si + dir * totalBytes5) & aMask;
+                  di = (di + dir * totalBytes5) & aMask;
                   cx = 0;
                 } else {
                   // Slow path — bail to IEM for MMIO-touching REP MOVS
@@ -2290,37 +2349,37 @@ globalThis.VBoxJIT = (function() {
                   iter = maxInsn;
                   break;
                 }
-                sr16(6, si);
-                sr16(7, di);
-                sr16(1, 0);
+                srSI(si);
+                srDI(di);
+                srCX(0);
                 break;
               }
 
              case 172:
               {
                 // LODSB
-                let si = gr16(6);
+                let si = grSI();
                 while (cx > 0) {
                   sr8(0, rb(srcSeg + si));
-                  si = (si + dir) & 65535;
+                  si = (si + dir) & aMask;
                   cx--;
                 }
-                sr16(6, si);
-                sr16(1, 0);
+                srSI(si);
+                srCX(0);
                 break;
               }
 
              case 173:
               {
                 // LODSW/LODSD
-                let si = gr16(6);
+                let si = grSI();
                 while (cx > 0) {
                   if (opSize === 2) sr16(0, rw(srcSeg + si)); else sr32(0, rd(srcSeg + si));
-                  si = (si + dir * opSize) & 65535;
+                  si = (si + dir * opSize) & aMask;
                   cx--;
                 }
-                sr16(6, si);
-                sr16(1, 0);
+                srSI(si);
+                srCX(0);
                 break;
               }
 
@@ -2333,14 +2392,14 @@ globalThis.VBoxJIT = (function() {
             }
           } else if (repPrefix && (b === 174 || b === 175)) {
             // REPE/REPNE SCAS
-            let cx = gr16(1), di = gr16(7);
+            let cx = grCX(), di = grDI();
             const isRepNE = (repPrefix === 242);
             if (b === 174) {
               // SCASB
               const al = gr8(0);
               while (cx > 0) {
                 const v = rb(esBase + di);
-                di = (di + dir) & 65535;
+                di = (di + dir) & aMask;
                 cx--;
                 alu8(7, al, v);
                 // CMP
@@ -2352,7 +2411,7 @@ globalThis.VBoxJIT = (function() {
                 const ax = gr16(0);
                 while (cx > 0) {
                   const v = rw(esBase + di);
-                  di = (di + dir * 2) & 65535;
+                  di = (di + dir * 2) & aMask;
                   cx--;
                   alu16(7, ax, v);
                   if (isRepNE ? getZF() : !getZF()) break;
@@ -2361,26 +2420,26 @@ globalThis.VBoxJIT = (function() {
                 const eax = gr32(0);
                 while (cx > 0) {
                   const v = rd(esBase + di);
-                  di = (di + dir * 4) & 65535;
+                  di = (di + dir * 4) & aMask;
                   cx--;
                   alu32(7, eax, v);
                   if (isRepNE ? getZF() : !getZF()) break;
                 }
               }
             }
-            sr16(7, di);
-            sr16(1, cx);
+            srDI(di);
+            srCX(cx);
           } else if (repPrefix && (b === 166 || b === 167)) {
             // REPE/REPNE CMPS
-            let cx = gr16(1), si = gr16(6), di = gr16(7);
+            let cx = grCX(), si = grSI(), di = grDI();
             const isRepNE = (repPrefix === 242);
             const srcSeg = segOverride >= 0 ? segBase(segOverride) : dsBase;
             if (b === 166) {
               // CMPSB
               while (cx > 0) {
                 const a = rb(srcSeg + si), bv = rb(esBase + di);
-                si = (si + dir) & 65535;
-                di = (di + dir) & 65535;
+                si = (si + dir) & aMask;
+                di = (di + dir) & aMask;
                 cx--;
                 alu8(7, a, bv);
                 if (isRepNE ? getZF() : !getZF()) break;
@@ -2391,43 +2450,50 @@ globalThis.VBoxJIT = (function() {
               while (cx > 0) {
                 const a = sz === 2 ? rw(srcSeg + si) : rd(srcSeg + si);
                 const bv = sz === 2 ? rw(esBase + di) : rd(esBase + di);
-                si = (si + dir * sz) & 65535;
-                di = (di + dir * sz) & 65535;
+                si = (si + dir * sz) & aMask;
+                di = (di + dir * sz) & aMask;
                 cx--;
                 if (sz === 2) alu16(7, a, bv); else alu32(7, a, bv);
                 if (isRepNE ? getZF() : !getZF()) break;
               }
             }
-            sr16(6, si);
-            sr16(7, di);
-            sr16(1, cx);
+            srSI(si);
+            srDI(di);
+            srCX(cx);
           } else {
             // Single string op (no REP prefix)
             // IMPORTANT: Do NOT modify DI/SI/CX if the memory write triggered an
             // MMIO fault — IEM will re-execute the entire instruction from scratch.
             switch (b) {
              case 170:
-              wb(esBase + gr16(7), gr8(0));
-              if (!mmioFault) sr16(7, (gr16(7) + dir) & 65535);
-              break;
+              {
+                const di = grDI();
+                wb(esBase + di, gr8(0));
+                if (!mmioFault) srDI((di + dir) & aMask);
+                break;
+              }
 
              case 171:
-              if (opSize === 2) {
-                ww(esBase + gr16(7), gr16(0));
-                if (!mmioFault) sr16(7, (gr16(7) + dir * 2) & 65535);
-              } else {
-                wd(esBase + gr16(7), gr32(0));
-                if (!mmioFault) sr16(7, (gr16(7) + dir * 4) & 65535);
+              {
+                const di = grDI();
+                if (opSize === 2) {
+                  ww(esBase + di, gr16(0));
+                  if (!mmioFault) srDI((di + dir * 2) & aMask);
+                } else {
+                  wd(esBase + di, gr32(0));
+                  if (!mmioFault) srDI((di + dir * 4) & aMask);
+                }
+                break;
               }
-              break;
 
              case 164:
               {
                 const srcSeg2 = segOverride >= 0 ? segBase(segOverride) : dsBase;
-                wb(esBase + gr16(7), rb(srcSeg2 + gr16(6)));
+                const si = grSI(), di = grDI();
+                wb(esBase + di, rb(srcSeg2 + si));
                 if (!mmioFault) {
-                  sr16(6, (gr16(6) + dir) & 65535);
-                  sr16(7, (gr16(7) + dir) & 65535);
+                  srSI((si + dir) & aMask);
+                  srDI((di + dir) & aMask);
                 }
                 break;
               }
@@ -2435,10 +2501,11 @@ globalThis.VBoxJIT = (function() {
              case 165:
               {
                 const srcSeg2 = segOverride >= 0 ? segBase(segOverride) : dsBase;
-                if (opSize === 2) ww(esBase + gr16(7), rw(srcSeg2 + gr16(6))); else wd(esBase + gr16(7), rd(srcSeg2 + gr16(6)));
+                const si = grSI(), di = grDI();
+                if (opSize === 2) ww(esBase + di, rw(srcSeg2 + si)); else wd(esBase + di, rd(srcSeg2 + si));
                 if (!mmioFault) {
-                  sr16(6, (gr16(6) + dir * opSize) & 65535);
-                  sr16(7, (gr16(7) + dir * opSize) & 65535);
+                  srSI((si + dir * opSize) & aMask);
+                  srDI((di + dir * opSize) & aMask);
                 }
                 break;
               }
@@ -2446,28 +2513,36 @@ globalThis.VBoxJIT = (function() {
              case 172:
               {
                 const srcSeg2 = segOverride >= 0 ? segBase(segOverride) : dsBase;
-                sr8(0, rb(srcSeg2 + gr16(6)));
-                sr16(6, (gr16(6) + dir) & 65535);
+                const si = grSI();
+                sr8(0, rb(srcSeg2 + si));
+                srSI((si + dir) & aMask);
                 break;
               }
 
              case 173:
               {
                 const srcSeg2 = segOverride >= 0 ? segBase(segOverride) : dsBase;
-                if (opSize === 2) sr16(0, rw(srcSeg2 + gr16(6))); else sr32(0, rd(srcSeg2 + gr16(6)));
-                sr16(6, (gr16(6) + dir * opSize) & 65535);
+                const si = grSI();
+                if (opSize === 2) sr16(0, rw(srcSeg2 + si)); else sr32(0, rd(srcSeg2 + si));
+                srSI((si + dir * opSize) & aMask);
                 break;
               }
 
              case 174:
-              alu8(7, gr8(0), rb(esBase + gr16(7)));
-              sr16(7, (gr16(7) + dir) & 65535);
-              break;
+              {
+                const di = grDI();
+                alu8(7, gr8(0), rb(esBase + di));
+                srDI((di + dir) & aMask);
+                break;
+              }
 
              case 175:
-              if (opSize === 2) alu16(7, gr16(0), rw(esBase + gr16(7))); else alu32(7, gr32(0), rd(esBase + gr16(7)));
-              sr16(7, (gr16(7) + dir * opSize) & 65535);
-              break;
+              {
+                const di = grDI();
+                if (opSize === 2) alu16(7, gr16(0), rw(esBase + di)); else alu32(7, gr32(0), rd(esBase + di));
+                srDI((di + dir * opSize) & aMask);
+                break;
+              }
 
              default:
               lastBailOp = b;
@@ -3106,10 +3181,10 @@ globalThis.VBoxJIT = (function() {
               target = opSize === 2 ? rw(m.ea) : rd(m.ea);
             }
             if (opSize === 2) push16((ip + ilen) & 65535, ssBase); else push32((ip + ilen) & 4294967295, ssBase);
-            ip = target & 65535;
+            ip = target & ipMask;
             ilen = 0;
             executed++;
-            wr16(R_IP, ip);
+            wrIP(ip);
             continue;
           } else if (op === 4) {
             // JMP r/m16/32 (indirect)
@@ -3121,10 +3196,10 @@ globalThis.VBoxJIT = (function() {
               ilen += m.len;
               target = opSize === 2 ? rw(m.ea) : rd(m.ea);
             }
-            ip = target & 65535;
+            ip = target & ipMask;
             ilen = 0;
             executed++;
-            wr16(R_IP, ip);
+            wrIP(ip);
             continue;
           } else if (op === 6) {
             // PUSH r/m16/32
@@ -3160,13 +3235,13 @@ globalThis.VBoxJIT = (function() {
               push16(csBase >>> 4, ssBase);
               push16((ip + ilen) & 65535, ssBase);
             }
-            ip = newIP2 & 65535;
+            ip = newIP2 & ipMask;
             csBase = newCS2 << 4;
             wr16(S_CS + SEG_SEL, newCS2);
             wr64(S_CS + SEG_BASE, csBase);
             ilen = 0;
             executed++;
-            wr16(R_IP, ip);
+            wrIP(ip);
             continue;
           } else {
             // Undefined /7 — fallback
@@ -3252,10 +3327,10 @@ globalThis.VBoxJIT = (function() {
                 ilen += 4;
               }
               if (testCC(b2 - 128)) {
-                ip = (ip + ilen + rel) & 65535;
+                ip = (ip + ilen + rel) & ipMask;
                 ilen = 0;
                 executed++;
-                wr16(R_IP, ip);
+                wrIP(ip);
                 continue;
               }
               break;
@@ -3622,9 +3697,14 @@ globalThis.VBoxJIT = (function() {
 
            case 161:
             {
+              if (!realMode) {
+                lastBailOp = 3840 | b2;
+                iter = maxInsn;
+                break;
+              }
               const s = pop16(ssBase);
               wr16(S_FS + SEG_SEL, s);
-              if (realMode) wr64(S_FS + SEG_BASE, s << 4);
+              wr64(S_FS + SEG_BASE, s << 4);
               break;
             }
 
@@ -3634,9 +3714,14 @@ globalThis.VBoxJIT = (function() {
 
            case 169:
             {
+              if (!realMode) {
+                lastBailOp = 3840 | b2;
+                iter = maxInsn;
+                break;
+              }
               const s = pop16(ssBase);
               wr16(S_GS + SEG_SEL, s);
-              if (realMode) wr64(S_GS + SEG_BASE, s << 4);
+              wr64(S_GS + SEG_BASE, s << 4);
               break;
             }
 
@@ -3652,19 +3737,23 @@ globalThis.VBoxJIT = (function() {
        // ──── JMP far (0xEA) ────
         case 234:
         {
+          if (!realMode) {
+            lastBailOp = b;
+            iter = maxInsn;
+            break;
+          }
+          // protected mode needs GDT lookup
           if (opSize === 2) {
             const newIP = mem8[ci + 1] | (mem8[ci + 2] << 8);
             const newCS = mem8[ci + 3] | (mem8[ci + 4] << 8);
             ilen += 5;
             wr16(S_CS + SEG_SEL, newCS);
-            if (realMode) {
-              csBase = newCS << 4;
-              wr64(S_CS + SEG_BASE, csBase);
-            }
+            csBase = newCS << 4;
+            wr64(S_CS + SEG_BASE, csBase);
             ip = newIP;
             ilen = 0;
             executed++;
-            wr16(R_IP, ip);
+            wrIP(ip);
             continue;
           } else {
             lastBailOp = b;
@@ -3676,6 +3765,12 @@ globalThis.VBoxJIT = (function() {
        // ──── CALL far (0x9A) ────
         case 154:
         {
+          if (!realMode) {
+            lastBailOp = b;
+            iter = maxInsn;
+            break;
+          }
+          // protected mode needs GDT lookup
           if (opSize === 2) {
             const newIP = mem8[ci + 1] | (mem8[ci + 2] << 8);
             const newCS = mem8[ci + 3] | (mem8[ci + 4] << 8);
@@ -3685,14 +3780,12 @@ globalThis.VBoxJIT = (function() {
             push16((ip + ilen) & 65535, ssBase);
             // push IP
             wr16(S_CS + SEG_SEL, newCS);
-            if (realMode) {
-              csBase = newCS << 4;
-              wr64(S_CS + SEG_BASE, csBase);
-            }
+            csBase = newCS << 4;
+            wr64(S_CS + SEG_BASE, csBase);
             ip = newIP;
             ilen = 0;
             executed++;
-            wr16(R_IP, ip);
+            wrIP(ip);
             continue;
           } else {
             lastBailOp = b;
@@ -3721,7 +3814,7 @@ globalThis.VBoxJIT = (function() {
           ip = retfIP;
           ilen = 0;
           executed++;
-          wr16(R_IP, ip);
+          wrIP(ip);
           continue;
         }
 
@@ -3743,7 +3836,7 @@ globalThis.VBoxJIT = (function() {
             ip = newIP;
             ilen = 0;
             executed++;
-            wr16(R_IP, ip);
+            wrIP(ip);
             continue;
           } else {
             lastBailOp = b;
@@ -3935,7 +4028,7 @@ globalThis.VBoxJIT = (function() {
 
        // ──── LEAVE (0xC9) ────
         case 201:
-        sr16(4, gr16(5));
+        if (_ssBig) sr32(4, gr32(5)); else sr16(4, gr16(5));
         // SP = BP
         if (opSize === 2) sr16(5, pop16(ssBase)); else sr32(5, pop32(ssBase));
         ilen += 1;
@@ -3944,7 +4037,9 @@ globalThis.VBoxJIT = (function() {
        // ──── XLAT (0xD7) — AL = [DS:BX+AL] ────
         case 215:
         {
-          const addr = ((segOverride >= 0 ? segBase(segOverride) : dsBase) + ((gr16(3) + gr8(0)) & 65535)) & 1048575;
+          const seg = segOverride >= 0 ? segBase(segOverride) : dsBase;
+          const base = addrSize === 4 ? gr32(3) : gr16(3);
+          const addr = (seg + ((base + gr8(0)) & (addrSize === 4 ? 4294967295 : 65535)));
           sr8(0, rb(addr));
           ilen += 1;
           break;
@@ -4116,7 +4211,7 @@ globalThis.VBoxJIT = (function() {
           ip = newIP;
           ilen = 0;
           executed++;
-          wr16(R_IP, ip);
+          wrIP(ip);
           wr32(R_FLAGS, flags);
           continue;
         }
@@ -4145,7 +4240,7 @@ globalThis.VBoxJIT = (function() {
           ip = newIP3;
           ilen = 0;
           executed++;
-          wr16(R_IP, ip);
+          wrIP(ip);
           wr32(R_FLAGS, flags);
           continue;
         }
@@ -4171,7 +4266,7 @@ globalThis.VBoxJIT = (function() {
           loadFlags(flags);
           ilen = 0;
           executed++;
-          wr16(R_IP, ip);
+          wrIP(ip);
           wr32(R_FLAGS, flags);
           continue;
         }
@@ -4214,13 +4309,13 @@ globalThis.VBoxJIT = (function() {
       // remain pointing at the START of that instruction (including prefixes)
       // so IEM decodes the full encoding correctly.
       if (ilen > 0 && lastBailOp < 0) {
-        ip = (ip + ilen) & 65535;
+        ip = (ip + ilen) & ipMask;
         executed++;
       }
     }
     // end for
     // ── Store state back ──
-    wr16(R_IP, ip);
+    wrIP(ip);
     // Reconstruct RFLAGS
     const newFlags = (flags & 4294964992) | flagsToWord();
     // preserve TF/IF/DF (bits 8-10)
@@ -4277,7 +4372,7 @@ globalThis.VBoxJIT = (function() {
     }
     // Stuck-detection: if we stay in the same 32-byte IP range for >50000 calls, dump full state
     {
-      const curIP = rr16(R_IP);
+      const curIP = rr32(R_IP);
       const curIPBlock = curIP >>> 5;
       // 32-byte blocks
       if (curIPBlock === stuckLastIP) {

@@ -14,6 +14,7 @@ const S_ES=0x80,S_CS=0x98,S_SS=0xB0,S_DS=0xC8,S_FS=0xE0,S_GS=0xF8;
 const SEG_BASE=8, SEG_LIMIT=16, SEG_ATTR=20, SEG_SEL=0;
 // CR0
 const R_CR0=0x160;
+const X86DESCATTR_D = 0x4000; // bit 14 of segment descriptor Attr.u
 
 // ── Lazy flags ──
 const OP_NONE=0,OP_ADD=1,OP_SUB=2,OP_AND=3,OP_OR=4,OP_XOR=5,OP_INC=6,OP_DEC=7,OP_SHL=8,OP_SHR=9,OP_SAR=10,OP_ROL=11,OP_ROR=12,OP_EXPLICIT=13;
@@ -417,28 +418,55 @@ function testCC(cc) {
 }
 
 // ── Stack operations ──
+let _ssBig = false; // SS.B=1 means use ESP (32-bit), SS.B=0 means use SP (16-bit)
+
 function push16(v, ssBase) {
-  let sp = (gr16(4) - 2) & 0xFFFF;
-  sr16(4, sp);
-  ww(ssBase + sp, v);
+  if (_ssBig) {
+    let esp = (gr32(4) - 2) >>> 0;
+    sr32(4, esp);
+    ww(ssBase + esp, v);
+  } else {
+    let sp = (gr16(4) - 2) & 0xFFFF;
+    sr16(4, sp);
+    ww(ssBase + sp, v);
+  }
 }
 function pop16(ssBase) {
-  const sp = gr16(4);
-  const v = rw(ssBase + sp);
-  sr16(4, (sp + 2) & 0xFFFF);
-  return v;
+  if (_ssBig) {
+    const esp = gr32(4);
+    const v = rw(ssBase + esp);
+    sr32(4, (esp + 2) >>> 0);
+    return v;
+  } else {
+    const sp = gr16(4);
+    const v = rw(ssBase + sp);
+    sr16(4, (sp + 2) & 0xFFFF);
+    return v;
+  }
 }
 function push32(v, ssBase) {
-  // In real mode, SP is always 16-bit
-  let sp = (gr16(4) - 4) & 0xFFFF;
-  sr16(4, sp);
-  wd(ssBase + sp, v);
+  if (_ssBig) {
+    let esp = (gr32(4) - 4) >>> 0;
+    sr32(4, esp);
+    wd(ssBase + esp, v);
+  } else {
+    let sp = (gr16(4) - 4) & 0xFFFF;
+    sr16(4, sp);
+    wd(ssBase + sp, v);
+  }
 }
 function pop32(ssBase) {
-  const sp = gr16(4);
-  const v = rd(ssBase + sp);
-  sr16(4, (sp + 4) & 0xFFFF);
-  return v;
+  if (_ssBig) {
+    const esp = gr32(4);
+    const v = rd(ssBase + esp);
+    sr32(4, (esp + 4) >>> 0);
+    return v;
+  } else {
+    const sp = gr16(4);
+    const v = rd(ssBase + sp);
+    sr16(4, (sp + 4) & 0xFFFF);
+    return v;
+  }
 }
 
 // ═══════════════════════════════════════════════════════
@@ -457,16 +485,33 @@ function execBlock(cpuP, ramB, maxInsn) {
   refreshViews();
 
   // Load frequently-used state
-  let ip = rr16(R_IP);  // only low 16 bits for real mode
   let flags = rr32(R_FLAGS);
   let csBase = segBase(S_CS);
   let dsBase = segBase(S_DS);
   let ssBase = segBase(S_SS);
   let esBase = segBase(S_ES);
 
+  // CR0: bail only on paging (we handle real mode + protected mode without paging)
+  const cr0 = rr32(R_CR0);
+  const protMode = !!(cr0 & 1);        // CR0.PE
+  const pagingOn = !!(cr0 & 0x80000000); // CR0.PG
+  if (pagingOn) return 0;  // bail if paging enabled
+  const realMode = !protMode;
+
+  // CS descriptor D bit: determines default operand/address size in protected mode
+  const csAttr = rr32(S_CS + SEG_ATTR);
+  const csDefBig = protMode && !!(csAttr & X86DESCATTR_D);
+  const ipMask = csDefBig ? 0xFFFFFFFF : 0xFFFF;
+
+  // SS.B for stack operations (ESP vs SP)
+  const ssAttr = rr32(S_SS + SEG_ATTR);
+  _ssBig = protMode && !!(ssAttr & X86DESCATTR_D);
+
+  let ip = csDefBig ? rr32(R_IP) : rr16(R_IP);
+
   // Initialize lazy flags from current RFLAGS
   loadFlags(flags);
-  lazySize = 2; // default 16-bit
+  lazySize = csDefBig ? 4 : 2; // default operand size
 
   // Linear PC for diagnostics and ROM checks
   const linearPC = csBase + ip;
@@ -475,18 +520,14 @@ function execBlock(cpuP, ramB, maxInsn) {
   // REP STOSB/MOVSB can overwrite the current code segment (e.g. BIOS memory
   // test). We detect this and bail to IEM rather than executing corrupted code.
   const codeSegStart = csBase;
-  const codeSegEnd = csBase + 0x10000; // 64KB segment
+  const csLimit = rr32(S_CS + SEG_LIMIT);
+  const codeSegEnd = csDefBig ? (csBase + Math.min(csLimit + 1, 0x100000000)) : (csBase + 0x10000);
 
-  // Check if we're in real mode — bail entirely for protected mode.
-  // This JIT is a real-mode interpreter: it assumes 16-bit default operand/address
-  // size, segment base = selector << 4, 16-bit IP masking, real-mode interrupt
-  // vectors, etc. None of that is correct once CR0.PE is set.
-  const cr0 = rr32(R_CR0);
-  if (cr0 & 1) {
-    // PE bit set = protected mode, bail to IEM
-    return 0;
+  // Helper to write IP back to CPUMCTX with correct width
+  function wrIP(val) {
+    if (csDefBig) wr32(R_IP, val & 0xFFFFFFFF);
+    else wr16(R_IP, val & 0xFFFF);
   }
-  const realMode = true; // We only reach here in real mode
 
   let executed = 0;
   let lastBailOp = -1; // track the opcode that caused early exit
@@ -554,10 +595,10 @@ function execBlock(cpuP, ramB, maxInsn) {
     // Effective segment bases
     const effDS = segOverride >= 0 ? segBase(segOverride) : dsBase;
     const effSS = ssBase; // stack segment rarely overridden
-    // operand size: default 16-bit in real mode
-    const opSize = opSizeOverride ? 4 : 2;
-    // address size: default 16-bit in real mode
-    const addrSize = addrSizeOverride ? 4 : 2;
+    // operand size: inverted by 0x66 prefix
+    const opSize = csDefBig ? (opSizeOverride ? 2 : 4) : (opSizeOverride ? 4 : 2);
+    // address size: inverted by 0x67 prefix
+    const addrSize = csDefBig ? (addrSizeOverride ? 2 : 4) : (addrSizeOverride ? 4 : 2);
 
     // Code bytes after prefixes — use ROM buffer if in ROM range
     const inROM = (codePhys >= romGCPhysStart && codePhys < romGCPhysEnd);
@@ -739,7 +780,7 @@ function execBlock(cpuP, ramB, maxInsn) {
       if (!realMode) { lastBailOp = 0x8E; iter = maxInsn; break; }
       // Real mode: base = sel << 4
       const sOff = SEG_OFFS[sreg];
-      if (!sOff && sreg !== 0) { ip = (ip + ilen) & 0xFFFF; break; } // invalid sreg
+      if (!sOff && sreg !== 0) { ip = (ip + ilen) & ipMask; break; } // invalid sreg
       wr16(sOff + SEG_SEL, val);
       wr64(sOff + SEG_BASE, val << 4);
       if (sreg === 3) dsBase = val << 4;
@@ -1229,11 +1270,11 @@ function execBlock(cpuP, ramB, maxInsn) {
     case 0xEB: {
       let rel = mem8[ci+1];
       if (rel > 127) rel -= 256;
-      ip = (ip + 2 + pos + rel) & 0xFFFF;
+      ip = (ip + 2 + pos + rel) & ipMask;
       ilen = 0; // ip already set
       executed++;
       // Store state and continue from new IP
-      wr16(R_IP, ip);
+      wrIP(ip);
       continue; // skip ip update at bottom
     }
 
@@ -1243,14 +1284,14 @@ function execBlock(cpuP, ramB, maxInsn) {
       if (opSize === 2) {
         rel = mem8[ci+1] | (mem8[ci+2] << 8);
         if (rel > 0x7FFF) rel -= 0x10000;
-        ip = (ip + 3 + pos + rel) & 0xFFFF;
+        ip = (ip + 3 + pos + rel) & ipMask;
       } else {
         rel = mem8[ci+1]|(mem8[ci+2]<<8)|(mem8[ci+3]<<16)|(mem8[ci+4]<<24);
-        ip = (ip + 5 + pos + rel) & 0xFFFF; // still 16-bit wrap in real mode
+        ip = (ip + 5 + pos + rel) & ipMask;
       }
       ilen = 0;
       executed++;
-      wr16(R_IP, ip);
+      wrIP(ip);
       continue;
     }
 
@@ -1261,10 +1302,10 @@ function execBlock(cpuP, ramB, maxInsn) {
       if (rel > 127) rel -= 256;
       ilen += 2;
       if (testCC(b - 0x70)) {
-        ip = (ip + ilen + rel) & 0xFFFF;
+        ip = (ip + ilen + rel) & ipMask;
         ilen = 0;
         executed++;
-        wr16(R_IP, ip);
+        wrIP(ip);
         continue;
       }
       break;
@@ -1277,8 +1318,8 @@ function execBlock(cpuP, ramB, maxInsn) {
       let cx;
       if (addrSize === 4) { cx = (gr32(1) - 1) >>> 0; sr32(1, cx); } else { cx = (gr16(1) - 1) & 0xFFFF; sr16(1, cx); }
       if (cx !== 0) {
-        ip = (ip + ilen + rel) & 0xFFFF;
-        ilen = 0; executed++; wr16(R_IP, ip); continue;
+        ip = (ip + ilen + rel) & ipMask;
+        ilen = 0; executed++; wrIP(ip); continue;
       }
       break;
     }
@@ -1288,8 +1329,8 @@ function execBlock(cpuP, ramB, maxInsn) {
       let cx;
       if (addrSize === 4) { cx = (gr32(1) - 1) >>> 0; sr32(1, cx); } else { cx = (gr16(1) - 1) & 0xFFFF; sr16(1, cx); }
       if (cx !== 0 && getZF()) {
-        ip = (ip + ilen + rel) & 0xFFFF;
-        ilen = 0; executed++; wr16(R_IP, ip); continue;
+        ip = (ip + ilen + rel) & ipMask;
+        ilen = 0; executed++; wrIP(ip); continue;
       }
       break;
     }
@@ -1299,8 +1340,8 @@ function execBlock(cpuP, ramB, maxInsn) {
       let cx;
       if (addrSize === 4) { cx = (gr32(1) - 1) >>> 0; sr32(1, cx); } else { cx = (gr16(1) - 1) & 0xFFFF; sr16(1, cx); }
       if (cx !== 0 && !getZF()) {
-        ip = (ip + ilen + rel) & 0xFFFF;
-        ilen = 0; executed++; wr16(R_IP, ip); continue;
+        ip = (ip + ilen + rel) & ipMask;
+        ilen = 0; executed++; wrIP(ip); continue;
       }
       break;
     }
@@ -1311,8 +1352,8 @@ function execBlock(cpuP, ramB, maxInsn) {
       ilen += 2;
       const cx = addrSize === 2 ? gr16(1) : gr32(1);
       if (cx === 0) {
-        ip = (ip + ilen + rel) & 0xFFFF;
-        ilen = 0; executed++; wr16(R_IP, ip); continue;
+        ip = (ip + ilen + rel) & ipMask;
+        ilen = 0; executed++; wrIP(ip); continue;
       }
       break;
     }
@@ -1324,10 +1365,19 @@ function execBlock(cpuP, ramB, maxInsn) {
       // Level > 0: copy outer frames (rare in BIOS, bail before touching state)
       if (level > 0) { lastBailOp = b; iter = maxInsn; break; }
       ilen += 4;
-      push16(gr16(5), ssBase); // push BP
-      const framePtr = gr16(4); // SP after push = new BP
-      sr16(5, framePtr);
-      sr16(4, (gr16(4) - frameSize) & 0xFFFF);
+      if (opSize === 2) {
+        push16(gr16(5), ssBase); // push BP
+        const framePtr = _ssBig ? gr32(4) : gr16(4); // SP after push = new BP
+        sr16(5, framePtr & 0xFFFF);
+        if (_ssBig) sr32(4, (gr32(4) - frameSize) >>> 0);
+        else sr16(4, (gr16(4) - frameSize) & 0xFFFF);
+      } else {
+        push32(gr32(5), ssBase); // push EBP
+        const framePtr = _ssBig ? gr32(4) : gr16(4);
+        sr32(5, framePtr);
+        if (_ssBig) sr32(4, (gr32(4) - frameSize) >>> 0);
+        else sr16(4, (gr16(4) - frameSize) & 0xFFFF);
+      }
       break;
     }
 
@@ -1339,33 +1389,35 @@ function execBlock(cpuP, ramB, maxInsn) {
         if (rel > 0x7FFF) rel -= 0x10000;
         ilen += 3;
         push16((ip + ilen) & 0xFFFF, ssBase);
-        ip = (ip + ilen + rel) & 0xFFFF;
+        ip = (ip + ilen + rel) & ipMask;
       } else {
         rel = mem8[ci+1]|(mem8[ci+2]<<8)|(mem8[ci+3]<<16)|(mem8[ci+4]<<24);
         ilen += 5;
         push32((ip + ilen) & 0xFFFFFFFF, ssBase);
-        ip = (ip + ilen + rel) & 0xFFFF;
+        ip = (ip + ilen + rel) & ipMask;
       }
-      ilen = 0; executed++; wr16(R_IP, ip); continue;
+      ilen = 0; executed++; wrIP(ip); continue;
     }
 
     // ──── RET near (0xC3) ────
     case 0xC3:
       if (opSize === 2) ip = pop16(ssBase);
-      else ip = pop32(ssBase) & 0xFFFF;
-      ilen = 0; executed++; wr16(R_IP, ip); continue;
+      else ip = pop32(ssBase) & ipMask;
+      ilen = 0; executed++; wrIP(ip); continue;
 
     // ──── RET near imm16 (0xC2) ────
     case 0xC2: {
       const imm = mem8[ci+1] | (mem8[ci+2] << 8);
       if (opSize === 2) {
         ip = pop16(ssBase);
-        sr16(4, (gr16(4) + imm) & 0xFFFF);
+        if (_ssBig) sr32(4, (gr32(4) + imm) >>> 0);
+        else sr16(4, (gr16(4) + imm) & 0xFFFF);
       } else {
-        ip = pop32(ssBase) & 0xFFFF;
-        sr32(4, (gr32(4) + imm) >>> 0);
+        ip = pop32(ssBase) & ipMask;
+        if (_ssBig) sr32(4, (gr32(4) + imm) >>> 0);
+        else sr16(4, (gr16(4) + imm) & 0xFFFF);
       }
-      ilen = 0; executed++; wr16(R_IP, ip); continue;
+      ilen = 0; executed++; wrIP(ip); continue;
     }
 
     // ──── CLI (0xFA), STI (0xFB) ────
@@ -1382,9 +1434,9 @@ function execBlock(cpuP, ramB, maxInsn) {
         // after STI" logic.  Without this bail the JIT can spin through
         // thousands of CLI/STI polling loops (e.g. BIOS INT 16h keyboard
         // wait) without ever letting the EM deliver pending IRQs.
-        ip = (ip + ilen) & 0xFFFF;
+        ip = (ip + ilen) & ipMask;
         executed++;
-        wr16(R_IP, ip);
+        wrIP(ip);
         ilen = 0;
         iter = maxInsn; // force exit from main loop
       }
@@ -1498,22 +1550,30 @@ function execBlock(cpuP, ramB, maxInsn) {
     case 0xAE: case 0xAF: case 0xA4: case 0xA5:
     case 0xA6: case 0xA7: case 0x6C: case 0x6D:
     case 0x6E: case 0x6F: {
-      // String operations
+      // String operations — address size selects SI/DI/CX width
       const dir = (flags & 0x400) ? -1 : 1; // DF flag
       ilen += 1;
+      const a32 = addrSize === 4;
+      const aMask = a32 ? 0xFFFFFFFF : 0xFFFF;
+      const grDI = () => a32 ? gr32(7) : gr16(7);
+      const grSI = () => a32 ? gr32(6) : gr16(6);
+      const grCX = () => a32 ? gr32(1) : gr16(1);
+      const srDI = (v) => { if (a32) sr32(7, v >>> 0); else sr16(7, v & 0xFFFF); };
+      const srSI = (v) => { if (a32) sr32(6, v >>> 0); else sr16(6, v & 0xFFFF); };
+      const srCX = (v) => { if (a32) sr32(1, v >>> 0); else sr16(1, v & 0xFFFF); };
 
       if (repPrefix && (b === 0xA4 || b === 0xA5 || b === 0xAA || b === 0xAB ||
                          b === 0xAC || b === 0xAD || b === 0x6C || b === 0x6D ||
                          b === 0x6E || b === 0x6F)) {
-        // REP prefix — repeat CX times (ECX with 0x67 in 32-bit mode, not implemented)
-        let cx = gr16(1);
+        // REP prefix — repeat CX/ECX times
+        let cx = grCX();
         if (cx === 0) break;
 
         const srcSeg = segOverride >= 0 ? segBase(segOverride) : dsBase;
 
         switch (b) {
           case 0xAA: { // STOSB — optimized bulk fill
-            let di = gr16(7);
+            let di = grDI();
             const val = gr8(0);
             const addr = esBase + di;
             const byteCount = cx;
@@ -1526,18 +1586,18 @@ function execBlock(cpuP, ramB, maxInsn) {
                 ilen = 0; iter = maxInsn; break;
               }
               mem8.fill(val, ramBase + addrLo, ramBase + addrHi);
-              di = (di + dir * byteCount) & 0xFFFF;
+              di = (di + dir * byteCount) & aMask;
               cx = 0;
             } else {
               // Slow path — bail to IEM for MMIO-touching REP STOS
               // (letting the loop run corrupts DI/CX when wb sets mmioFault)
               lastBailOp = b; iter = maxInsn; break;
             }
-            sr16(7, di); sr16(1, 0);
+            srDI(di); srCX(0);
             break;
           }
           case 0xAB: { // STOSW/STOSD — optimized bulk fill
-            let di = gr16(7);
+            let di = grDI();
             const sz = opSize; // 2 or 4
             const v = sz === 2 ? gr16(0) : gr32(0);
             const totalBytes = cx * sz;
@@ -1565,17 +1625,17 @@ function execBlock(cpuP, ramB, maxInsn) {
                   filled += chunk;
                 }
               }
-              di = (di + dir * totalBytes) & 0xFFFF;
+              di = (di + dir * totalBytes) & aMask;
               cx = 0;
             } else {
               // Slow path — bail to IEM for MMIO-touching REP STOS
               lastBailOp = b; iter = maxInsn; break;
             }
-            sr16(7, di); sr16(1, 0);
+            srDI(di); srCX(0);
             break;
           }
           case 0xA4: { // MOVSB — optimized bulk copy
-            let si = gr16(6), di = gr16(7);
+            let si = grSI(), di = grDI();
             const srcAddr = srcSeg + si;
             const dstAddr = esBase + di;
             const byteCount = cx;
@@ -1593,18 +1653,18 @@ function execBlock(cpuP, ramB, maxInsn) {
               }
               // copyWithin handles overlapping regions correctly
               mem8.copyWithin(ramBase + dstLo, ramBase + srcLo, ramBase + srcHi);
-              si = (si + dir * byteCount) & 0xFFFF;
-              di = (di + dir * byteCount) & 0xFFFF;
+              si = (si + dir * byteCount) & aMask;
+              di = (di + dir * byteCount) & aMask;
               cx = 0;
             } else {
               // Slow path — bail to IEM for MMIO-touching REP MOVS
               lastBailOp = b; iter = maxInsn; break;
             }
-            sr16(6, si); sr16(7, di); sr16(1, 0);
+            srSI(si); srDI(di); srCX(0);
             break;
           }
           case 0xA5: { // MOVSW/MOVSD — optimized bulk copy
-            let si = gr16(6), di = gr16(7);
+            let si = grSI(), di = grDI();
             const sz5 = opSize; // 2 or 4
             const totalBytes5 = cx * sz5;
             const srcAddr5 = srcSeg + si;
@@ -1620,33 +1680,33 @@ function execBlock(cpuP, ramB, maxInsn) {
                 ilen = 0; iter = maxInsn; break;
               }
               mem8.copyWithin(ramBase + dstLo5, ramBase + srcLo5, ramBase + srcHi5);
-              si = (si + dir * totalBytes5) & 0xFFFF;
-              di = (di + dir * totalBytes5) & 0xFFFF;
+              si = (si + dir * totalBytes5) & aMask;
+              di = (di + dir * totalBytes5) & aMask;
               cx = 0;
             } else {
               // Slow path — bail to IEM for MMIO-touching REP MOVS
               lastBailOp = b; iter = maxInsn; break;
             }
-            sr16(6, si); sr16(7, di); sr16(1, 0);
+            srSI(si); srDI(di); srCX(0);
             break;
           }
           case 0xAC: { // LODSB
-            let si = gr16(6);
+            let si = grSI();
             while (cx > 0) {
               sr8(0, rb(srcSeg + si));
-              si = (si + dir) & 0xFFFF; cx--;
+              si = (si + dir) & aMask; cx--;
             }
-            sr16(6, si); sr16(1, 0);
+            srSI(si); srCX(0);
             break;
           }
           case 0xAD: { // LODSW/LODSD
-            let si = gr16(6);
+            let si = grSI();
             while (cx > 0) {
               if (opSize === 2) sr16(0, rw(srcSeg + si));
               else sr32(0, rd(srcSeg + si));
-              si = (si + dir * opSize) & 0xFFFF; cx--;
+              si = (si + dir * opSize) & aMask; cx--;
             }
-            sr16(6, si); sr16(1, 0);
+            srSI(si); srCX(0);
             break;
           }
           default:
@@ -1656,13 +1716,13 @@ function execBlock(cpuP, ramB, maxInsn) {
         }
       } else if (repPrefix && (b === 0xAE || b === 0xAF)) {
         // REPE/REPNE SCAS
-        let cx = gr16(1), di = gr16(7);
+        let cx = grCX(), di = grDI();
         const isRepNE = (repPrefix === 0xF2);
         if (b === 0xAE) { // SCASB
           const al = gr8(0);
           while (cx > 0) {
             const v = rb(esBase + di);
-            di = (di + dir) & 0xFFFF; cx--;
+            di = (di + dir) & aMask; cx--;
             alu8(7, al, v); // CMP
             if (isRepNE ? getZF() : !getZF()) break;
           }
@@ -1671,7 +1731,7 @@ function execBlock(cpuP, ramB, maxInsn) {
             const ax = gr16(0);
             while (cx > 0) {
               const v = rw(esBase + di);
-              di = (di + dir * 2) & 0xFFFF; cx--;
+              di = (di + dir * 2) & aMask; cx--;
               alu16(7, ax, v);
               if (isRepNE ? getZF() : !getZF()) break;
             }
@@ -1679,22 +1739,22 @@ function execBlock(cpuP, ramB, maxInsn) {
             const eax = gr32(0);
             while (cx > 0) {
               const v = rd(esBase + di);
-              di = (di + dir * 4) & 0xFFFF; cx--;
+              di = (di + dir * 4) & aMask; cx--;
               alu32(7, eax, v);
               if (isRepNE ? getZF() : !getZF()) break;
             }
           }
         }
-        sr16(7, di); sr16(1, cx);
+        srDI(di); srCX(cx);
       } else if (repPrefix && (b === 0xA6 || b === 0xA7)) {
         // REPE/REPNE CMPS
-        let cx = gr16(1), si = gr16(6), di = gr16(7);
+        let cx = grCX(), si = grSI(), di = grDI();
         const isRepNE = (repPrefix === 0xF2);
         const srcSeg = segOverride >= 0 ? segBase(segOverride) : dsBase;
         if (b === 0xA6) { // CMPSB
           while (cx > 0) {
             const a = rb(srcSeg + si), bv = rb(esBase + di);
-            si = (si + dir) & 0xFFFF; di = (di + dir) & 0xFFFF; cx--;
+            si = (si + dir) & aMask; di = (di + dir) & aMask; cx--;
             alu8(7, a, bv);
             if (isRepNE ? getZF() : !getZF()) break;
           }
@@ -1703,50 +1763,58 @@ function execBlock(cpuP, ramB, maxInsn) {
           while (cx > 0) {
             const a = sz === 2 ? rw(srcSeg + si) : rd(srcSeg + si);
             const bv = sz === 2 ? rw(esBase + di) : rd(esBase + di);
-            si = (si + dir * sz) & 0xFFFF; di = (di + dir * sz) & 0xFFFF; cx--;
+            si = (si + dir * sz) & aMask; di = (di + dir * sz) & aMask; cx--;
             if (sz === 2) alu16(7, a, bv); else alu32(7, a, bv);
             if (isRepNE ? getZF() : !getZF()) break;
           }
         }
-        sr16(6, si); sr16(7, di); sr16(1, cx);
+        srSI(si); srDI(di); srCX(cx);
       } else {
         // Single string op (no REP prefix)
         // IMPORTANT: Do NOT modify DI/SI/CX if the memory write triggered an
         // MMIO fault — IEM will re-execute the entire instruction from scratch.
         switch (b) {
-          case 0xAA: wb(esBase + gr16(7), gr8(0)); if (!mmioFault) sr16(7, (gr16(7)+dir)&0xFFFF); break;
-          case 0xAB:
-            if (opSize===2) { ww(esBase+gr16(7), gr16(0)); if (!mmioFault) sr16(7,(gr16(7)+dir*2)&0xFFFF); }
-            else { wd(esBase+gr16(7), gr32(0)); if (!mmioFault) sr16(7,(gr16(7)+dir*4)&0xFFFF); }
+          case 0xAA: { const di = grDI(); wb(esBase + di, gr8(0)); if (!mmioFault) srDI((di+dir)&aMask); break; }
+          case 0xAB: {
+            const di = grDI();
+            if (opSize===2) { ww(esBase+di, gr16(0)); if (!mmioFault) srDI((di+dir*2)&aMask); }
+            else { wd(esBase+di, gr32(0)); if (!mmioFault) srDI((di+dir*4)&aMask); }
             break;
+          }
           case 0xA4: {
             const srcSeg2 = segOverride >= 0 ? segBase(segOverride) : dsBase;
-            wb(esBase+gr16(7), rb(srcSeg2+gr16(6)));
-            if (!mmioFault) { sr16(6,(gr16(6)+dir)&0xFFFF); sr16(7,(gr16(7)+dir)&0xFFFF); }
+            const si = grSI(), di = grDI();
+            wb(esBase+di, rb(srcSeg2+si));
+            if (!mmioFault) { srSI((si+dir)&aMask); srDI((di+dir)&aMask); }
             break;
           }
           case 0xA5: {
             const srcSeg2 = segOverride >= 0 ? segBase(segOverride) : dsBase;
-            if (opSize===2) ww(esBase+gr16(7), rw(srcSeg2+gr16(6)));
-            else wd(esBase+gr16(7), rd(srcSeg2+gr16(6)));
-            if (!mmioFault) { sr16(6,(gr16(6)+dir*opSize)&0xFFFF); sr16(7,(gr16(7)+dir*opSize)&0xFFFF); }
+            const si = grSI(), di = grDI();
+            if (opSize===2) ww(esBase+di, rw(srcSeg2+si));
+            else wd(esBase+di, rd(srcSeg2+si));
+            if (!mmioFault) { srSI((si+dir*opSize)&aMask); srDI((di+dir*opSize)&aMask); }
             break;
           }
           case 0xAC: {
             const srcSeg2 = segOverride >= 0 ? segBase(segOverride) : dsBase;
-            sr8(0, rb(srcSeg2+gr16(6))); sr16(6,(gr16(6)+dir)&0xFFFF); break;
+            const si = grSI();
+            sr8(0, rb(srcSeg2+si)); srSI((si+dir)&aMask); break;
           }
           case 0xAD: {
             const srcSeg2 = segOverride >= 0 ? segBase(segOverride) : dsBase;
-            if (opSize===2) sr16(0, rw(srcSeg2+gr16(6)));
-            else sr32(0, rd(srcSeg2+gr16(6)));
-            sr16(6,(gr16(6)+dir*opSize)&0xFFFF); break;
+            const si = grSI();
+            if (opSize===2) sr16(0, rw(srcSeg2+si));
+            else sr32(0, rd(srcSeg2+si));
+            srSI((si+dir*opSize)&aMask); break;
           }
-          case 0xAE: alu8(7, gr8(0), rb(esBase+gr16(7))); sr16(7,(gr16(7)+dir)&0xFFFF); break;
-          case 0xAF:
-            if (opSize===2) alu16(7, gr16(0), rw(esBase+gr16(7)));
-            else alu32(7, gr32(0), rd(esBase+gr16(7)));
-            sr16(7,(gr16(7)+dir*opSize)&0xFFFF); break;
+          case 0xAE: { const di = grDI(); alu8(7, gr8(0), rb(esBase+di)); srDI((di+dir)&aMask); break; }
+          case 0xAF: {
+            const di = grDI();
+            if (opSize===2) alu16(7, gr16(0), rw(esBase+di));
+            else alu32(7, gr32(0), rd(esBase+di));
+            srDI((di+dir*opSize)&aMask); break;
+          }
           default:
             lastBailOp = b; iter = maxInsn; break;
         }
@@ -2181,8 +2249,8 @@ function execBlock(cpuP, ramB, maxInsn) {
         }
         if (opSize === 2) push16((ip + ilen) & 0xFFFF, ssBase);
         else push32((ip + ilen) & 0xFFFFFFFF, ssBase);
-        ip = target & 0xFFFF;
-        ilen = 0; executed++; wr16(R_IP, ip); continue;
+        ip = target & ipMask;
+        ilen = 0; executed++; wrIP(ip); continue;
       } else if (op === 4) { // JMP r/m16/32 (indirect)
         let target;
         if ((modrm >> 6) === 3) {
@@ -2193,8 +2261,8 @@ function execBlock(cpuP, ramB, maxInsn) {
           ilen += m.len;
           target = opSize === 2 ? rw(m.ea) : rd(m.ea);
         }
-        ip = target & 0xFFFF;
-        ilen = 0; executed++; wr16(R_IP, ip); continue;
+        ip = target & ipMask;
+        ilen = 0; executed++; wrIP(ip); continue;
       } else if (op === 6) { // PUSH r/m16/32
         let val;
         if ((modrm >> 6) === 3) {
@@ -2221,11 +2289,11 @@ function execBlock(cpuP, ramB, maxInsn) {
           push16(csBase >>> 4, ssBase);
           push16((ip + ilen) & 0xFFFF, ssBase);
         }
-        ip = newIP2 & 0xFFFF;
+        ip = newIP2 & ipMask;
         csBase = newCS2 << 4;
         wr16(S_CS + SEG_SEL, newCS2);
         wr64(S_CS + SEG_BASE, csBase);
-        ilen = 0; executed++; wr16(R_IP, ip); continue;
+        ilen = 0; executed++; wrIP(ip); continue;
       } else {
         // Undefined /7 — fallback
         lastBailOp = 0xFF00 | op; iter = maxInsn; break;
@@ -2276,8 +2344,8 @@ function execBlock(cpuP, ramB, maxInsn) {
             ilen += 4;
           }
           if (testCC(b2 - 0x80)) {
-            ip = (ip + ilen + rel) & 0xFFFF;
-            ilen = 0; executed++; wr16(R_IP, ip); continue;
+            ip = (ip + ilen + rel) & ipMask;
+            ilen = 0; executed++; wrIP(ip); continue;
           }
           break;
         }
@@ -2548,9 +2616,15 @@ function execBlock(cpuP, ramB, maxInsn) {
 
         // PUSH FS (0x0F 0xA0) / POP FS (0x0F 0xA1) / PUSH GS (0x0F 0xA8) / POP GS (0x0F 0xA9)
         case 0xA0: push16(rr16(S_FS + SEG_SEL), ssBase); break;
-        case 0xA1: { const s = pop16(ssBase); wr16(S_FS + SEG_SEL, s); if (realMode) wr64(S_FS + SEG_BASE, s << 4); break; }
+        case 0xA1: {
+          if (!realMode) { lastBailOp = 0x0F00 | b2; iter = maxInsn; break; }
+          const s = pop16(ssBase); wr16(S_FS + SEG_SEL, s); wr64(S_FS + SEG_BASE, s << 4); break;
+        }
         case 0xA8: push16(rr16(S_GS + SEG_SEL), ssBase); break;
-        case 0xA9: { const s = pop16(ssBase); wr16(S_GS + SEG_SEL, s); if (realMode) wr64(S_GS + SEG_BASE, s << 4); break; }
+        case 0xA9: {
+          if (!realMode) { lastBailOp = 0x0F00 | b2; iter = maxInsn; break; }
+          const s = pop16(ssBase); wr16(S_GS + SEG_SEL, s); wr64(S_GS + SEG_BASE, s << 4); break;
+        }
 
         default:
           // Unsupported 0x0F opcode — fallback
@@ -2562,14 +2636,15 @@ function execBlock(cpuP, ramB, maxInsn) {
 
     // ──── JMP far (0xEA) ────
     case 0xEA: {
+      if (!realMode) { lastBailOp = b; iter = maxInsn; break; } // protected mode needs GDT lookup
       if (opSize === 2) {
         const newIP = mem8[ci+1] | (mem8[ci+2] << 8);
         const newCS = mem8[ci+3] | (mem8[ci+4] << 8);
         ilen += 5;
         wr16(S_CS + SEG_SEL, newCS);
-        if (realMode) { csBase = newCS << 4; wr64(S_CS + SEG_BASE, csBase); }
+        csBase = newCS << 4; wr64(S_CS + SEG_BASE, csBase);
         ip = newIP;
-        ilen = 0; executed++; wr16(R_IP, ip); continue;
+        ilen = 0; executed++; wrIP(ip); continue;
       } else {
         lastBailOp = b; iter = maxInsn; break; // 32-bit far jump — complex
       }
@@ -2577,6 +2652,7 @@ function execBlock(cpuP, ramB, maxInsn) {
 
     // ──── CALL far (0x9A) ────
     case 0x9A: {
+      if (!realMode) { lastBailOp = b; iter = maxInsn; break; } // protected mode needs GDT lookup
       if (opSize === 2) {
         const newIP = mem8[ci+1] | (mem8[ci+2] << 8);
         const newCS = mem8[ci+3] | (mem8[ci+4] << 8);
@@ -2584,9 +2660,9 @@ function execBlock(cpuP, ramB, maxInsn) {
         push16(rr16(S_CS + SEG_SEL), ssBase); // push CS
         push16((ip + ilen) & 0xFFFF, ssBase); // push IP
         wr16(S_CS + SEG_SEL, newCS);
-        if (realMode) { csBase = newCS << 4; wr64(S_CS + SEG_BASE, csBase); }
+        csBase = newCS << 4; wr64(S_CS + SEG_BASE, csBase);
         ip = newIP;
-        ilen = 0; executed++; wr16(R_IP, ip); continue;
+        ilen = 0; executed++; wrIP(ip); continue;
       } else {
         lastBailOp = b; iter = maxInsn; break;
       }
@@ -2604,7 +2680,7 @@ function execBlock(cpuP, ramB, maxInsn) {
       const sp = gr16(4);
       sr16(4, (sp + retfImm) & 0xFFFF);
       ip = retfIP;
-      ilen = 0; executed++; wr16(R_IP, ip); continue;
+      ilen = 0; executed++; wrIP(ip); continue;
     }
 
     // ──── RETF (0xCB) ────
@@ -2617,7 +2693,7 @@ function execBlock(cpuP, ramB, maxInsn) {
         csBase = newCS << 4;
         wr16(S_CS + SEG_SEL, newCS); wr64(S_CS + SEG_BASE, csBase);
         ip = newIP;
-        ilen = 0; executed++; wr16(R_IP, ip); continue;
+        ilen = 0; executed++; wrIP(ip); continue;
       } else {
         lastBailOp = b; iter = maxInsn; break;
       }
@@ -2711,7 +2787,8 @@ function execBlock(cpuP, ramB, maxInsn) {
 
     // ──── LEAVE (0xC9) ────
     case 0xC9:
-      sr16(4, gr16(5)); // SP = BP
+      if (_ssBig) sr32(4, gr32(5)); // ESP = EBP
+      else sr16(4, gr16(5)); // SP = BP
       if (opSize === 2) sr16(5, pop16(ssBase)); // BP = pop
       else sr32(5, pop32(ssBase));
       ilen += 1;
@@ -2719,7 +2796,9 @@ function execBlock(cpuP, ramB, maxInsn) {
 
     // ──── XLAT (0xD7) — AL = [DS:BX+AL] ────
     case 0xD7: {
-      const addr = ((segOverride >= 0 ? segBase(segOverride) : dsBase) + ((gr16(3) + gr8(0)) & 0xFFFF)) & 0xFFFFF;
+      const seg = segOverride >= 0 ? segBase(segOverride) : dsBase;
+      const base = addrSize === 4 ? gr32(3) : gr16(3);
+      const addr = (seg + ((base + gr8(0)) & (addrSize === 4 ? 0xFFFFFFFF : 0xFFFF)));
       sr8(0, rb(addr));
       ilen += 1;
       break;
@@ -2823,7 +2902,7 @@ function execBlock(cpuP, ramB, maxInsn) {
       wr64(S_CS + SEG_BASE, csBase);
       ip = newIP;
       ilen = 0; executed++;
-      wr16(R_IP, ip);
+      wrIP(ip);
       wr32(R_FLAGS, flags);
       continue;
     }
@@ -2846,7 +2925,7 @@ function execBlock(cpuP, ramB, maxInsn) {
       wr64(S_CS + SEG_BASE, csBase);
       ip = newIP3;
       ilen = 0; executed++;
-      wr16(R_IP, ip);
+      wrIP(ip);
       wr32(R_FLAGS, flags);
       continue;
     }
@@ -2865,7 +2944,7 @@ function execBlock(cpuP, ramB, maxInsn) {
       flags = (iretFlags & 0xFFFF) | 2; // bit 1 always set
       loadFlags(flags);
       ilen = 0; executed++;
-      wr16(R_IP, ip);
+      wrIP(ip);
       wr32(R_FLAGS, flags);
       continue;
     }
@@ -2906,13 +2985,13 @@ function execBlock(cpuP, ramB, maxInsn) {
     // remain pointing at the START of that instruction (including prefixes)
     // so IEM decodes the full encoding correctly.
     if (ilen > 0 && lastBailOp < 0) {
-      ip = (ip + ilen) & 0xFFFF;
+      ip = (ip + ilen) & ipMask;
       executed++;
     }
   } // end for
 
   // ── Store state back ──
-  wr16(R_IP, ip);
+  wrIP(ip);
   // Reconstruct RFLAGS
   const newFlags = (flags & 0xFFFFF700) | flagsToWord(); // preserve TF/IF/DF (bits 8-10)
   wr32(R_FLAGS, newFlags);
@@ -2977,7 +3056,7 @@ function execBlockWrapped(cpuP, ramB, maxInsn) {
 
   // Stuck-detection: if we stay in the same 32-byte IP range for >50000 calls, dump full state
   {
-    const curIP = rr16(R_IP);
+    const curIP = rr32(R_IP);
     const curIPBlock = curIP >>> 5; // 32-byte blocks
     if (curIPBlock === stuckLastIP) {
       stuckCount++;

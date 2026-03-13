@@ -1150,11 +1150,10 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                  * IN instructions, saving significant overhead during ATA BSY polling. */
                 static uint32_t s_cIemAfterJitBail = 0;
                 iemJitEnsureInit(pVM);
-                /* Skip JIT entirely in protected mode — the JIT is a real-mode-only
-                   interpreter and returns 0 immediately when CR0.PE is set.  Checking
-                   here avoids the JS→Wasm call overhead on every instruction. */
-                bool const fRealMode = !(pVCpu->cpum.GstCtx.cr0 & X86_CR0_PE);
-                if (s_pvJitRAM && s_cIemAfterJitBail == 0 && fRealMode)
+                /* Skip JIT when paging is enabled — the JIT handles real mode and
+                   protected mode without paging, but bails on paging (CR0.PG). */
+                bool const fPaging = !!(pVCpu->cpum.GstCtx.cr0 & X86_CR0_PG);
+                if (s_pvJitRAM && s_cIemAfterJitBail == 0 && !fPaging)
                 {
                     uint32_t cBatch = RT_MIN(cMaxInstructionsGccStupidity, 4096);
                     int cJitInsns = wasmJitExecBlock(&pVCpu->cpum.GstCtx, s_pvJitRAM, cBatch);

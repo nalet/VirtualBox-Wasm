@@ -1158,13 +1158,13 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                  * This avoids calling the JIT just for 2-3 instructions between consecutive
                  * IN instructions, saving significant overhead during ATA BSY polling. */
                 static uint32_t s_cIemAfterJitBail = 0;
-                /* Periodic CPU state diagnostic — visible on main thread via RTPrintf */
+                /* Periodic CPU state diagnostic — counter-based (RTTimeNanoTS
+                   doesn't advance during synchronous JS execution in Wasm workers) */
                 {
-                    static uint64_t s_nsLastDiag = 0;
-                    uint64_t nsNow = RTTimeNanoTS();
-                    if (nsNow - s_nsLastDiag > RT_NS_10SEC)
+                    static uint32_t s_cDiagCounter = 0;
+                    if (++s_cDiagCounter >= 5000)
                     {
-                        s_nsLastDiag = nsNow;
+                        s_cDiagCounter = 0;
                         uint16_t cs = pVCpu->cpum.GstCtx.cs.Sel;
                         uint64_t rip = pVCpu->cpum.GstCtx.rip;
                         uint32_t cr0 = pVCpu->cpum.GstCtx.cr0;
@@ -1174,6 +1174,7 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                         RTPrintf("[CPU-DIAG] CS=%04x IP=%08llx CR0=%08x FL=%08x EAX=%08x EDX=%08x insns=%llu jitBail=%u\n",
                                  cs, (unsigned long long)rip, cr0, efl, eax, edx,
                                  (unsigned long long)pVCpu->iem.s.cInstructions, s_cIemAfterJitBail);
+                        RTStrmFlush(g_pStdOut);
                     }
                 }
                 iemJitEnsureInit(pVM);

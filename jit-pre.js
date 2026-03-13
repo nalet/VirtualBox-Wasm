@@ -1741,8 +1741,12 @@ function execBlock(cpuP, ramB, maxInsn) {
           case 0xAA: { // STOSB — optimized bulk fill
             let di = grDI();
             const val = gr8(0);
-            const addr = esBase + di;
+            // Chunk limit: process at most 4096 iterations to allow timer interrupts
+            const maxChunk = 4096;
+            const origCx = cx;
+            if (cx > maxChunk) cx = maxChunk;
             const byteCount = cx;
+            const addr = esBase + di;
             // Compute range for both forward and backward
             const addrLo = dir === 1 ? addr : addr - byteCount + 1;
             const addrHi = dir === 1 ? addr + byteCount : addr + 1;
@@ -1753,19 +1757,24 @@ function execBlock(cpuP, ramB, maxInsn) {
               }
               mem8.fill(val, ramBase + addrLo, ramBase + addrHi);
               di = (di + dir * byteCount) & aMask;
-              cx = 0;
+              cx = origCx - byteCount;
             } else {
               // Slow path — bail to IEM for MMIO-touching REP STOS
               // (letting the loop run corrupts DI/CX when wb sets mmioFault)
               lastBailOp = b; iter = maxInsn; break;
             }
-            srDI(di); srCX(0);
+            srDI(di); srCX(cx);
+            if (cx > 0) { ilen = 0; iter = maxInsn; } // more to do — yield for timers
             break;
           }
           case 0xAB: { // STOSW/STOSD — optimized bulk fill
             let di = grDI();
             const sz = opSize; // 2 or 4
             const v = sz === 2 ? gr16(0) : gr32(0);
+            // Chunk limit: process at most 4096 iterations to allow timer interrupts
+            const maxChunkAB = 4096;
+            const origCxAB = cx;
+            if (cx > maxChunkAB) cx = maxChunkAB;
             const totalBytes = cx * sz;
             const addr = esBase + di;
             const addrLo = dir === 1 ? addr : addr - totalBytes + sz;
@@ -1792,18 +1801,23 @@ function execBlock(cpuP, ramB, maxInsn) {
                 }
               }
               di = (di + dir * totalBytes) & aMask;
-              cx = 0;
+              cx = origCxAB - cx;
             } else {
               // Slow path — bail to IEM for MMIO-touching REP STOS
               lastBailOp = b; iter = maxInsn; break;
             }
-            srDI(di); srCX(0);
+            srDI(di); srCX(cx);
+            if (cx > 0) { ilen = 0; iter = maxInsn; } // more to do — yield for timers
             break;
           }
           case 0xA4: { // MOVSB — optimized bulk copy
             let si = grSI(), di = grDI();
             const srcAddr = srcSeg + si;
             const dstAddr = esBase + di;
+            // Chunk limit: process at most 4096 iterations to allow timer interrupts
+            const maxChunkA4 = 4096;
+            const origCxA4 = cx;
+            if (cx > maxChunkA4) cx = maxChunkA4;
             const byteCount = cx;
             // Compute address ranges for both forward and backward
             const srcLo = dir === 1 ? srcAddr : srcAddr - byteCount + 1;
@@ -1821,17 +1835,22 @@ function execBlock(cpuP, ramB, maxInsn) {
               mem8.copyWithin(ramBase + dstLo, ramBase + srcLo, ramBase + srcHi);
               si = (si + dir * byteCount) & aMask;
               di = (di + dir * byteCount) & aMask;
-              cx = 0;
+              cx = origCxA4 - byteCount;
             } else {
               // Slow path — bail to IEM for MMIO-touching REP MOVS
               lastBailOp = b; iter = maxInsn; break;
             }
-            srSI(si); srDI(di); srCX(0);
+            srSI(si); srDI(di); srCX(cx);
+            if (cx > 0) { ilen = 0; iter = maxInsn; } // more to do — yield for timers
             break;
           }
           case 0xA5: { // MOVSW/MOVSD — optimized bulk copy
             let si = grSI(), di = grDI();
             const sz5 = opSize; // 2 or 4
+            // Chunk limit: process at most 4096 iterations to allow timer interrupts
+            const maxChunkA5 = 4096;
+            const origCxA5 = cx;
+            if (cx > maxChunkA5) cx = maxChunkA5;
             const totalBytes5 = cx * sz5;
             const srcAddr5 = srcSeg + si;
             const dstAddr5 = esBase + di;
@@ -1848,12 +1867,13 @@ function execBlock(cpuP, ramB, maxInsn) {
               mem8.copyWithin(ramBase + dstLo5, ramBase + srcLo5, ramBase + srcHi5);
               si = (si + dir * totalBytes5) & aMask;
               di = (di + dir * totalBytes5) & aMask;
-              cx = 0;
+              cx = origCxA5 - cx;
             } else {
               // Slow path — bail to IEM for MMIO-touching REP MOVS
               lastBailOp = b; iter = maxInsn; break;
             }
-            srSI(si); srDI(di); srCX(0);
+            srSI(si); srDI(di); srCX(cx);
+            if (cx > 0) { ilen = 0; iter = maxInsn; } // more to do — yield for timers
             break;
           }
           case 0xAC: { // LODSB

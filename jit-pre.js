@@ -3332,20 +3332,25 @@ function execBlock(cpuP, ramB, maxInsn) {
     cb += guestRb(diagAddr + i).toString(16).padStart(2, '0');
   statLastCodeBytes = cb;
 
-  // Log JIT calls at CS=0003 (ISOLINUX) to trace execution before crash
+  // Log JIT calls from ISOLINUX (CS=3) and the transition to CS=0 zero-execution
   {
     const curCS = rr16(S_CS + SEG_SEL);
-    if (curCS <= 0x10) {
-      if (!Module._isolLog) Module._isolLog = { count: 0 };
-      const cnt = ++Module._isolLog.count;
-      if (cnt <= 300)
-        console.log('[JIT-ISOL] #' + cnt + ' CS=' + curCS.toString(16) +
-          ' IP=' + ip.toString(16).padStart(4, '0') +
-          ' exec=' + executed +
-          ' bail=' + (lastBailOp >= 0 ? '0x' + lastBailOp.toString(16) : 'none') +
-          ' code=' + cb +
-          ' AX=0x' + gr16(0).toString(16).padStart(4, '0') +
-          ' DX=0x' + gr16(2).toString(16).padStart(4, '0'));
+    if (!Module._isolLog) Module._isolLog = { count: 0, sawCS3: false, phase: 'wait' };
+    const il = Module._isolLog;
+    // Start logging when we first see CS=3 (ISOLINUX relocated)
+    if (curCS === 3) il.sawCS3 = true;
+    if (il.sawCS3 && il.count < 500) {
+      il.count++;
+      const sp16 = rr16(R_SP);
+      const ss16 = rr16(S_SS + SEG_SEL);
+      console.log('[JIT-ISOL] #' + il.count + ' CS=' + curCS.toString(16) +
+        ' IP=' + ip.toString(16).padStart(4, '0') +
+        ' exec=' + executed +
+        ' bail=' + (lastBailOp >= 0 ? '0x' + lastBailOp.toString(16) : 'none') +
+        ' code=' + cb +
+        ' AX=0x' + gr16(0).toString(16).padStart(4, '0') +
+        ' DX=0x' + gr16(2).toString(16).padStart(4, '0') +
+        ' SS:SP=' + ss16.toString(16) + ':' + sp16.toString(16).padStart(4, '0'));
     }
   }
 

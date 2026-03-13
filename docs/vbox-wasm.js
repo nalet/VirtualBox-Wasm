@@ -2373,8 +2373,8 @@ globalThis.VBoxJIT = (function() {
                 // STOSB — optimized bulk fill
                 let di = grDI();
                 const val = gr8(0);
-                // Chunk limit: process at most 4096 iterations to allow timer interrupts
-                const maxChunk = 4096;
+                // Chunk limit: process at most 65536 iterations to allow timer interrupts
+                const maxChunk = 65536;
                 const origCx = cx;
                 if (cx > maxChunk) cx = maxChunk;
                 const byteCount = cx;
@@ -2416,8 +2416,8 @@ globalThis.VBoxJIT = (function() {
                 const sz = opSize;
                 // 2 or 4
                 const v = sz === 2 ? gr16(0) : gr32(0);
-                // Chunk limit: process at most 4096 iterations to allow timer interrupts
-                const maxChunkAB = 4096;
+                // Chunk limit: process at most 65536 iterations to allow timer interrupts
+                const maxChunkAB = 65536;
                 const origCxAB = cx;
                 if (cx > maxChunkAB) cx = maxChunkAB;
                 const totalBytes = cx * sz;
@@ -2473,8 +2473,8 @@ globalThis.VBoxJIT = (function() {
                 let si = grSI(), di = grDI();
                 const srcAddr = srcSeg + si;
                 const dstAddr = esBase + di;
-                // Chunk limit: process at most 4096 iterations to allow timer interrupts
-                const maxChunkA4 = 4096;
+                // Chunk limit: process at most 65536 iterations to allow timer interrupts
+                const maxChunkA4 = 65536;
                 const origCxA4 = cx;
                 if (cx > maxChunkA4) cx = maxChunkA4;
                 const byteCount = cx;
@@ -2520,8 +2520,8 @@ globalThis.VBoxJIT = (function() {
                 let si = grSI(), di = grDI();
                 const sz5 = opSize;
                 // 2 or 4
-                // Chunk limit: process at most 4096 iterations to allow timer interrupts
-                const maxChunkA5 = 4096;
+                // Chunk limit: process at most 65536 iterations to allow timer interrupts
+                const maxChunkA5 = 65536;
                 const origCxA5 = cx;
                 if (cx > maxChunkA5) cx = maxChunkA5;
                 const totalBytes5 = cx * sz5;

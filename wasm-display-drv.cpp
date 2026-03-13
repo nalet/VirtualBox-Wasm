@@ -163,13 +163,31 @@ static DECLCALLBACK(void) wasmDispRefresh(PPDMIDISPLAYCONNECTOR pInterface)
     PDRVWASMDISPLAY pThis = CON2THIS(pInterface);
     pThis->cRefreshCalls++;
 
-    /* Log progress every 500 refresh calls (~25s at 20fps) */
-    if (pThis->cRefreshCalls % 500 == 0)
-        RTPrintf("[WasmDisplay] refresh #%u, updateRect #%u\n",
-                 pThis->cRefreshCalls, pThis->cUpdateRectCalls);
-
     if (pThis->pPort)
         pThis->pPort->pfnUpdateDisplay(pThis->pPort);
+
+    /* Log progress + framebuffer content diagnostics every 500 refreshes */
+    if (pThis->cRefreshCalls % 500 == 0)
+    {
+        uint32_t cNonZero = 0;
+        int32_t  iFirstNZ = -1;
+        if (pThis->pbFramebuffer && pThis->cbFramebuffer > 0)
+        {
+            for (uint32_t i = 0; i < pThis->cbFramebuffer; i++)
+            {
+                if (pThis->pbFramebuffer[i] != 0)
+                {
+                    cNonZero++;
+                    if (iFirstNZ < 0)
+                        iFirstNZ = (int32_t)i;
+                }
+            }
+        }
+        RTPrintf("[WasmDisplay] refresh #%u, updateRect #%u, fbNonZero=%u/%u firstNZ@%d cBits=%u cx=%u cy=%u\n",
+                 pThis->cRefreshCalls, pThis->cUpdateRectCalls,
+                 cNonZero, pThis->cbFramebuffer, iFirstNZ,
+                 pThis->cBitsPerPixel, pThis->cxWidth, pThis->cyHeight);
+    }
 }
 
 static DECLCALLBACK(void) wasmDispReset(PPDMIDISPLAYCONNECTOR pInterface)

@@ -193,7 +193,7 @@ globalThis.VBoxJIT = (function() {
   // A20 gate mask: when A20 is disabled, bit 20 of physical addresses is masked
   // to zero (addresses wrap at 1 MB). When A20 is enabled, all bits pass through.
   // This must match PGM's A20 masking to avoid the JIT seeing different memory
-  // contents than IEM.  Set by execBlock from C++ PGMPhysIsA20Enabled().
+  // contents than IEM.  Set via globalThis.VBoxJIT._a20 (from wasmJitSetA20).
   let a20Mask = 4294967295;
   // default: A20 enabled (all bits pass)
   // Read byte from guest physical address, ROM-aware
@@ -936,11 +936,14 @@ globalThis.VBoxJIT = (function() {
   // cpuP:    pointer to CPUMCTX in Wasm linear memory
   // ramB:    pointer to guest RAM base in Wasm linear memory
   // maxInsn: max instructions to execute before returning
-  // fA20:    1 if A20 gate enabled, 0 if disabled (from PGMPhysIsA20Enabled)
-  function execBlock(cpuP, ramB, maxInsn, fA20) {
+  // A20 state is read from globalThis.VBoxJIT._a20 (set by wasmJitSetA20 EM_JS
+  // before each call).  This avoids adding a 4th parameter to the EM_JS
+  // signature, which caused an invoke_ijiij trampoline mismatch in Wasm64.
+  function execBlock(cpuP, ramB, maxInsn) {
     cpuPtr = cpuP;
     ramBase = ramB;
     // Set A20 mask: when disabled, bit 20 is forced to 0 (address wrap at 1 MB)
+    const fA20 = globalThis.VBoxJIT._a20;
     a20Mask = fA20 ? 4294967295 : ~(1 << 20);
     refreshViews();
     // Load frequently-used state
@@ -4603,7 +4606,8 @@ globalThis.VBoxJIT = (function() {
   // idtr at 0x01D6: cbIdt(u16) at +0, pIdt(u64) at +2
   const R_GDTR = 454;
   const R_IDTR = 470;
-  function execBlockWrapped(cpuP, ramB, maxInsn, fA20) {
+  function execBlockWrapped(cpuP, ramB, maxInsn) {
+    const fA20 = globalThis.VBoxJIT._a20;
     statTotalCalls++;
     // Per-call diagnostics for first 20 calls, then every 100000
     if (statTotalCalls <= 20 || (statTotalCalls % 1e5) === 0) {
@@ -4724,7 +4728,7 @@ globalThis.VBoxJIT = (function() {
         console.log("[JIT-PROT] === END PROTECTED MODE DIAGNOSTIC ===");
       }
     }
-    const n = execBlock(cpuP, ramB, maxInsn, fA20);
+    const n = execBlock(cpuP, ramB, maxInsn);
     if (n > 0) {
       statTotalInsns += n;
     } else {
@@ -4795,6 +4799,8 @@ globalThis.VBoxJIT = (function() {
   }
   // ── Public API ──
   return {
+    _a20: 1,
+    // default: A20 enabled; updated by wasmJitSetA20 EM_JS before each call
     execBlock: execBlockWrapped,
     init,
     setRomBuffer,
@@ -10868,13 +10874,17 @@ function wasmCallFuncPtrTrampoline(pfn, cArgs, pArgs) {
   return -1;
 }
 
-function wasmJitExecBlock(pCpumCtx, pvRAM, maxInsn, fA20Enabled) {
+function wasmJitExecBlock(pCpumCtx, pvRAM, maxInsn) {
   if (typeof globalThis.VBoxJIT === "undefined") return 0;
   if (!globalThis.VBoxJIT._initialized) {
     globalThis.VBoxJIT.init(wasmMemory);
     globalThis.VBoxJIT._initialized = true;
   }
-  return globalThis.VBoxJIT.execBlock(Number(pCpumCtx), Number(pvRAM), maxInsn, fA20Enabled);
+  return globalThis.VBoxJIT.execBlock(Number(pCpumCtx), Number(pvRAM), maxInsn);
+}
+
+function wasmJitSetA20(fA20) {
+  if (typeof globalThis.VBoxJIT !== "undefined") globalThis.VBoxJIT._a20 = fA20;
 }
 
 function wasmJitLog(pszMsg) {
@@ -11064,6 +11074,7 @@ function assignWasmImports() {
     /** @export */ wasmCallFuncPtrTrampoline,
     /** @export */ wasmJitExecBlock,
     /** @export */ wasmJitLog,
+    /** @export */ wasmJitSetA20,
     /** @export */ wasmJitSetRomBuffer
   };
 }

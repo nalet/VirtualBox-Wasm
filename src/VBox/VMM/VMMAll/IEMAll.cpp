@@ -173,13 +173,18 @@
 # include <emscripten.h>
 # include <iprt/mem.h>
 
-EM_JS(int, wasmJitExecBlock, (void *pCpumCtx, void *pvRAM, int maxInsn, int fA20Enabled), {
+EM_JS(int, wasmJitExecBlock, (void *pCpumCtx, void *pvRAM, int maxInsn), {
     if (typeof globalThis.VBoxJIT === 'undefined') return 0;
     if (!globalThis.VBoxJIT._initialized) {
         globalThis.VBoxJIT.init(wasmMemory);
         globalThis.VBoxJIT._initialized = true;
     }
-    return globalThis.VBoxJIT.execBlock(Number(pCpumCtx), Number(pvRAM), maxInsn, fA20Enabled);
+    return globalThis.VBoxJIT.execBlock(Number(pCpumCtx), Number(pvRAM), maxInsn);
+});
+
+EM_JS(void, wasmJitSetA20, (int fA20), {
+    if (typeof globalThis.VBoxJIT !== 'undefined')
+        globalThis.VBoxJIT._a20 = fA20;
 });
 
 EM_JS(void, wasmJitLog, (const char *pszMsg), {
@@ -1153,8 +1158,8 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                 if (s_pvJitRAM && s_cIemAfterJitBail == 0)
                 {
                     uint32_t cBatch = RT_MIN(cMaxInstructionsGccStupidity, 4096);
-                    int fA20 = PGMPhysIsA20Enabled(pVCpu) ? 1 : 0;
-                    int cJitInsns = wasmJitExecBlock(&pVCpu->cpum.GstCtx, s_pvJitRAM, cBatch, fA20);
+                    wasmJitSetA20(PGMPhysIsA20Enabled(pVCpu) ? 1 : 0);
+                    int cJitInsns = wasmJitExecBlock(&pVCpu->cpum.GstCtx, s_pvJitRAM, cBatch);
                     if (cJitInsns > 0)
                     {
                         pVCpu->iem.s.cInstructions += cJitInsns;

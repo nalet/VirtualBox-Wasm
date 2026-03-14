@@ -692,6 +692,10 @@ function execBlock(cpuP, ramB, maxInsn) {
   // Bail immediately if Trap Flag is set — IEM must handle #DB exceptions
   if (flags & 0x100) return 0;
 
+  // Bail for protected mode — let IEM handle all PM execution
+  // (diagnostic: isolate JIT vs IEM as source of PM triple fault)
+  if (protMode) return 0;
+
   // Initialize lazy flags from current RFLAGS
   loadFlags(flags);
   lazySize = csDefBig ? 4 : 2; // default operand size

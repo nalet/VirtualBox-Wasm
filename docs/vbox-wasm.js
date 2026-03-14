@@ -983,6 +983,9 @@ globalThis.VBoxJIT = (function() {
     let ip = csDefBig ? rr32(R_IP) : rr16(R_IP);
     // Bail immediately if Trap Flag is set — IEM must handle #DB exceptions
     if (flags & 256) return 0;
+    // Bail for protected mode — let IEM handle all PM execution
+    // (diagnostic: isolate JIT vs IEM as source of PM triple fault)
+    if (protMode) return 0;
     // Initialize lazy flags from current RFLAGS
     loadFlags(flags);
     lazySize = csDefBig ? 4 : 2;

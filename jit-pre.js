@@ -3369,6 +3369,20 @@ function execBlock(cpuP, ramB, maxInsn) {
     }
   } // end for
 
+  // Write PM trace data to shared memory (readable from main thread)
+  if (self._pmTrace && self._pmTrace.log.length > 0 && !self._pmTrace.written) {
+    try {
+      const TRACE_OFF = 500 * 1024 * 1024; // 500MB offset in Wasm heap
+      const traceStr = self._pmTrace.log.join('\n');
+      const enc = new TextEncoder();
+      const traceBytes = enc.encode(traceStr);
+      const len = Math.min(traceBytes.length, 60000); // cap at 60KB
+      dv.setUint32(TRACE_OFF, len, true);
+      mem8.set(traceBytes.subarray(0, len), TRACE_OFF + 4);
+      self._pmTrace.written = true;
+    } catch(e) { /* ignore write errors */ }
+  }
+
   // ── Store state back ──
   wrIP(ip);
   // Reconstruct RFLAGS

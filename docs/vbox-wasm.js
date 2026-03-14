@@ -983,12 +983,20 @@ globalThis.VBoxJIT = (function() {
     let ip = csDefBig ? rr32(R_IP) : rr16(R_IP);
     // Bail immediately if Trap Flag is set — IEM must handle #DB exceptions
     if (flags & 256) return 0;
-    // Bail for PM with IF=1 — IEM must handle interrupt injection.
-    // The JIT's forced timer polling causes hardware interrupts to fire
-    // during PM execution. If the guest IDT doesn't handle them correctly
-    // (e.g., ISOLINUX PM with incomplete IDT), this causes triple faults.
-    // PM code with IF=0 is safe since no interrupts will be injected.
-    if (protMode && (flags & 512)) return 0;
+    // PM execution tracer: log first N PM instructions to find the bug
+    if (protMode) {
+      if (!execBlock._pmTrace) execBlock._pmTrace = {
+        count: 0,
+        logged: 0,
+        maxLog: 500,
+        batches: 0,
+        bailed: false
+      };
+      const pmt = execBlock._pmTrace;
+      pmt.batches++;
+      // After logging enough, bail permanently to prevent triple fault
+      if (pmt.bailed) return 0;
+    }
     // Initialize lazy flags from current RFLAGS
     loadFlags(flags);
     lazySize = csDefBig ? 4 : 2;
@@ -1152,6 +1160,29 @@ globalThis.VBoxJIT = (function() {
       const ci = inROM ? (romBufBase + (codePhys - romGCPhysStart) + pos) : (ramBase + codePhys + pos);
       let ilen = pos;
       // instruction length accumulator
+      // PM execution tracer: log opcode + state before execution
+      let _pmSnapBefore = null;
+      if (protMode && execBlock._pmTrace && !execBlock._pmTrace.bailed) {
+        const pmt = execBlock._pmTrace;
+        if (pmt.logged < pmt.maxLog) {
+          _pmSnapBefore = {
+            ip,
+            op: b,
+            pos,
+            eax: gr32(0),
+            ecx: gr32(1),
+            edx: gr32(2),
+            ebx: gr32(3),
+            esp: gr32(4),
+            ebp: gr32(5),
+            esi: gr32(6),
+            edi: gr32(7),
+            fl: flags,
+            codeBytes: ""
+          };
+          for (let _i = 0; _i < 8; _i++) _pmSnapBefore.codeBytes += mem8[ci + _i].toString(16).padStart(2, "0");
+        }
+      }
       // ── Opcode dispatch ──
       switch (b) {
        // ──── NOP ────
@@ -4660,6 +4691,23 @@ globalThis.VBoxJIT = (function() {
       if (ilen > 0 && lastBailOp < 0) {
         ip = (ip + ilen) & ipMask;
         executed++;
+      }
+      // PM tracer: log the instruction that just executed
+      if (_pmSnapBefore && protMode && execBlock._pmTrace && !execBlock._pmTrace.bailed) {
+        const pmt = execBlock._pmTrace;
+        pmt.count++;
+        if (pmt.logged < pmt.maxLog) {
+          const s = _pmSnapBefore;
+          const bail = lastBailOp >= 0 ? " BAIL" : (mmioFault ? " MMIO" : "");
+          console.log("[JIT-PM] #" + pmt.count + " IP=" + s.ip.toString(16).padStart(8, "0") + " op=" + s.op.toString(16).padStart(2, "0") + (s.pos > 0 ? " pfx=" + s.pos : "") + " [" + s.codeBytes + "]" + " EAX=" + s.eax.toString(16).padStart(8, "0") + " ECX=" + s.ecx.toString(16).padStart(8, "0") + " ESP=" + s.esp.toString(16).padStart(8, "0") + " ESI=" + s.esi.toString(16).padStart(8, "0") + " EDI=" + s.edi.toString(16).padStart(8, "0") + " FL=" + s.fl.toString(16) + bail);
+          pmt.logged++;
+          if (pmt.logged >= pmt.maxLog) {
+            console.log("[JIT-PM] === Trace limit reached (" + pmt.maxLog + "), bailing all future PM ===");
+            pmt.bailed = true;
+            // Force exit this batch
+            break;
+          }
+        }
       }
     }
     // end for

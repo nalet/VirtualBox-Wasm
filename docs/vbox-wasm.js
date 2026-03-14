@@ -4546,6 +4546,16 @@ globalThis.VBoxJIT = (function() {
           }
           // protected mode INT needs IDT
           const intNum = mem8[ci + 1];
+          // Log all INT calls to trace ISOLINUX boot sequence
+          if (!execBlock._intLog) execBlock._intLog = {
+            count: 0
+          };
+          const cntInt = ++execBlock._intLog.count;
+          if (cntInt <= 500) {
+            const ahInt = (gr16(0) >> 8) & 255;
+            const alInt = gr16(0) & 255;
+            console.log("[INT] INT 0x" + intNum.toString(16).padStart(2, "0") + " AH=0x" + ahInt.toString(16).padStart(2, "0") + " AL=0x" + alInt.toString(16).padStart(2, "0") + " @" + (csBase >>> 4).toString(16) + ":" + ip.toString(16) + " #" + cntInt);
+          }
           // Bail to IEM for video BIOS (INT 10h) — needs MMIO for VGA memory writes
           if (intNum === 16) {
             if (!execBlock._int10Log) execBlock._int10Log = {
@@ -4685,7 +4695,24 @@ globalThis.VBoxJIT = (function() {
         {
           const hltCS = rr16(S_CS + SEG_SEL);
           const hltIF = !!(flags & 512);
-          /* [JIT-HLT] suppressed to reduce console flood during debugging */ // Dump VGA text buffer to see error message on screen
+          // Log first few HLTs with stack trace to diagnose stuck loops
+          if (!execBlock._hltLog) execBlock._hltLog = {
+            count: 0
+          };
+          const hltCnt = ++execBlock._hltLog.count;
+          if (hltCnt <= 5 || (hltCnt % 1e4 === 0)) {
+            // Read return addresses from stack
+            const sp = gr16(4);
+            // SP
+            const ssBase2 = Number(rr64(S_SS + SEG_BASE));
+            let stackDump = "";
+            for (let si = 0; si < 12; si += 2) {
+              const w = rw(ssBase2 + ((sp + si) & 65535));
+              stackDump += w.toString(16).padStart(4, "0") + " ";
+            }
+            console.log("[HLT] CS:IP=" + hltCS.toString(16) + ":" + ip.toString(16) + " IF=" + (hltIF ? 1 : 0) + " SP=0x" + sp.toString(16) + " stack=[" + stackDump.trim() + "] #" + hltCnt);
+          }
+          // Dump VGA text buffer to see error message on screen
           if (hltCS <= 16 && !hltIF) {
             try {
               // VGA text buffer at 0xB8000, 80x25, 2 bytes per char (char+attr)

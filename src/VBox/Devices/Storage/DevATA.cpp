@@ -56,6 +56,9 @@
 
 #include "ATAPIPassthrough.h"
 #include "VBoxDD.h"
+#ifdef __EMSCRIPTEN__
+# include <stdio.h>
+#endif
 
 
 /*********************************************************************************************************************************
@@ -934,6 +937,12 @@ static void ataHCAsyncIOPutRequest(PPDMDEVINS pDevIns, PATACONTROLLER pCtl, cons
     rc = PDMDevHlpCritSectLeave(pDevIns, &pCtl->AsyncIORequestLock);
     AssertRC(rc);
 
+#ifdef __EMSCRIPTEN__
+    /* Emscripten: Always signal directly — deferred critsect-exit signals are
+     * unreliable across Web Worker boundaries. */
+    rc = PDMDevHlpSUPSemEventSignal(pDevIns, pCtl->hAsyncIOSem);
+    AssertRC(rc);
+#else
     rc = PDMDevHlpCritSectScheduleExitEvent(pDevIns, &pCtl->lock, pCtl->hAsyncIOSem);
     if (RT_FAILURE(rc))
     {
@@ -945,6 +954,7 @@ static void ataHCAsyncIOPutRequest(PPDMDEVINS pDevIns, PATACONTROLLER pCtl, cons
     {
         Log(("PIIX3 ATA: Ctl#%d: ScheduleExitEvent OK, signal deferred to critsect leave\n", pCtl->iCtl));
     }
+#endif
 }
 
 # ifdef IN_RING3
@@ -4949,6 +4959,46 @@ static VBOXSTRICTRC ataIOPortReadU8(PPDMDEVINS pDevIns, PATACONTROLLER pCtl, uin
             {
 #ifdef IN_RING3
 #ifdef __EMSCRIPTEN__
+                /* Emscripten: The I/O thread cannot acquire the controller lock
+                   while EMT holds it for BSY polling.  This creates a deadlock:
+                   - EMT holds lock, polls BSY, waits for I/O thread to clear BSY
+                   - I/O thread waits for lock to process reset (which clears BSY)
+                   Emscripten's Atomics-based futex doesn't let the I/O thread win
+                   the lock during the short release-and-reacquire window.
+                   Fix: process the reset inline on EMT when BSY during fReset.
+                   The state changes are all idempotent, so even if the I/O thread
+                   later processes the same requests, no harm is done. */
+                if (pCtl->fReset)
+                {
+                    /* Do what RESET_ASSERTED does: stop PIO transfers. */
+                    ataHCPIOTransferStop(pDevIns, pCtl, &pCtl->aIfs[0]);
+                    ataHCPIOTransferStop(pDevIns, pCtl, &pCtl->aIfs[1]);
+
+                    /* Do what RESET_CLEARED does: finalize reset. */
+                    pCtl->uAsyncIOState = ATA_AIO_NEW;
+                    pCtl->fReset = false;
+                    pCtl->fRedo = false;
+                    pCtl->fRedoDMALastDesc = false;
+                    for (uint32_t j = 0; j < RT_ELEMENTS(pCtl->aIfs); j++)
+                    {
+                        ataR3SetSignature(&pCtl->aIfs[j]);
+                        if (pCtl->aIfs[j].fATAPI)
+                            ataSetStatusValue(pCtl, &pCtl->aIfs[j], 0); /* ATAPI: READY not set */
+                        else
+                            ataSetStatusValue(pCtl, &pCtl->aIfs[j], ATA_STAT_READY | ATA_STAT_SEEK);
+                    }
+
+                    /* Do NOT consume the queue — let the I/O thread process
+                       RESET_ASSERTED + RESET_CLEARED normally when it eventually
+                       gets the lock (after EMT stops BSY-polling).  All the state
+                       changes above are idempotent, so double-processing is safe.
+                       This avoids a race where the I/O thread already dequeued the
+                       request and would leave uAsyncIOState inconsistent. */
+
+                    /* Re-read status -- BSY should now be clear. */
+                    val = s->uATARegStatus;
+                    break; /* skip the yield path, return immediately */
+                }
                 {
                     static uint32_t s_cBsyPolls = 0;
                     s_cBsyPolls++;
@@ -4960,12 +5010,8 @@ static VBOXSTRICTRC ataIOPortReadU8(PPDMDEVINS pDevIns, PATACONTROLLER pCtl, uin
 #endif
                 /* @bugref{1960}: Don't yield all the time, unless it's a reset (can be tricky). */
 #ifdef __EMSCRIPTEN__
-                /* Wasm: sched_yield() is a no-op in Emscripten, and ASMNopPause()
-                   is a no-op on Wasm.  Non-yielding poll iterations are pure waste —
-                   the EMT just releases and re-acquires the lock without giving the
-                   async I/O thread any opportunity to run.  Force yield on EVERY
-                   BSY poll so the 1 ms sleep always fires.  This turns ~50 % wasted
-                   polls into useful yield windows and cuts ATAPI I/O latency in half. */
+                /* Wasm: non-reset BSY polling. Use sleep instead of sched_yield
+                   (which is a no-op in Emscripten). */
                 bool fYield = true;
                 s->cBusyStatusHackR3++;
 #else
@@ -5009,9 +5055,9 @@ static VBOXSTRICTRC ataIOPortReadU8(PPDMDEVINS pDevIns, PATACONTROLLER pCtl, uin
 #ifdef __EMSCRIPTEN__
                     /* Wasm: sched_yield() is a no-op in Emscripten — it returns
                        immediately without letting other Web Worker threads run.
-                       Use a 1ms sleep instead so the async I/O thread can make
-                       progress (especially important during SRST processing). */
-                    RTThreadSleep(1);
+                       Use a short sleep so the async I/O thread's Web Worker
+                       gets a chance to be scheduled by the browser. */
+                    RTThreadSleep(10);
 #else
                     RTThreadYield();
 #endif
@@ -5979,7 +6025,14 @@ static DECLCALLBACK(int) ataR3AsyncIOThread(RTTHREAD hThreadSelf, void *pvUser)
                 ataR3AsyncSignalIdle(pDevIns, pCtl, pCtlR3);
             Log(("PIIX3 ATA: Ctl#%d: async I/O thread waiting on semaphore (head=%u tail=%u)\n",
                     pCtl->iCtl, pCtl->AsyncIOReqHead, pCtl->AsyncIOReqTail));
+#ifdef __EMSCRIPTEN__
+            /* Emscripten pthreads (Web Workers) may drop semaphore signals across
+             * worker boundaries.  Use a short timeout so the I/O thread polls the
+             * request queue even if a signal from the EMT is lost. */
+            rc = PDMDevHlpSUPSemEventWaitNoResume(pDevIns, pCtl->hAsyncIOSem, 10 /*ms*/);
+#else
             rc = PDMDevHlpSUPSemEventWaitNoResume(pDevIns, pCtl->hAsyncIOSem, RT_INDEFINITE_WAIT);
+#endif
             Log(("PIIX3 ATA: Ctl#%d: async I/O semaphore wait returned rc=%d (head=%u tail=%u)\n",
                     pCtl->iCtl, rc, pCtl->AsyncIOReqHead, pCtl->AsyncIOReqTail));
             /* Continue if we got a signal by RTThreadPoke().
@@ -5987,6 +6040,19 @@ static DECLCALLBACK(int) ataR3AsyncIOThread(RTTHREAD hThreadSelf, void *pvUser)
              */
             if (RT_UNLIKELY(rc == VERR_INTERRUPTED))
                 continue;
+#ifdef __EMSCRIPTEN__
+            /* Emscripten: semaphore wait uses a short timeout (5s) because signal
+               delivery across Web Workers is unreliable.  On timeout, poll the
+               request queue directly.  If a request is found, clear rc so the
+               outer loop does not treat VERR_TIMEOUT as a fatal error. */
+            if (rc == VERR_TIMEOUT)
+            {
+                pReq = ataR3AsyncIOGetCurrentRequest(pDevIns, pCtl);
+                if (pReq)
+                    rc = VINF_SUCCESS;
+                continue;
+            }
+#endif
             if (RT_FAILURE(rc) || RT_UNLIKELY(pCtlR3->fShutdown))
                 break;
 

@@ -3441,7 +3441,15 @@ let protModeDiagDone = false;
 const R_GDTR = 0x01C6;
 const R_IDTR = 0x01D6;
 
-function execBlockWrapped(cpuP, ramB, maxInsn) {
+function execBlockWrapped(cpuP, ramB, maxInsn, highRamP, highRamSz) {
+  // Set high RAM pointer directly from execBlock params (avoids EM_JS threading issues)
+  if (highRamP && !highRamPtr) {
+    highRamPtr = highRamP;
+    highRamSize = highRamSz;
+    highRamEnd = 0x100000 + highRamSz;
+    console.log('[JIT] High RAM set: ptr=0x' + highRamP.toString(16) +
+      ' size=' + (highRamSz >> 20) + 'MB range=0x100000-0x' + highRamEnd.toString(16));
+  }
   const fA20 = globalThis.VBoxJIT._a20;
   statTotalCalls++;
   // Per-call diagnostics for first 20 calls, then every 100000
@@ -3450,6 +3458,7 @@ function execBlockWrapped(cpuP, ramB, maxInsn) {
     console.log('[JIT-DBG] call#' + statTotalCalls +
       ' cpuPtr=0x' + cpuN.toString(16) +
       ' ramBase=0x' + ramN.toString(16) +
+      ' highRAM=0x' + highRamPtr.toString(16) + ':' + highRamSize +
       ' romBufSize=' + romBufSize +
       ' maxInsn=' + maxInsn +
       ' A20=' + (fA20 ? 'on' : 'OFF'));

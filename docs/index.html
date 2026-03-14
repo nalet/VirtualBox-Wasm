@@ -801,11 +801,18 @@
         statusEl.className = 'success';
         statusEl.textContent = 'VM initializing (IEM x86 emulation)';
 
-        // Start VGA framebuffer rendering loop
+        // Start VGA framebuffer rendering loop + keyboard input
         let lastUpdateRectCount = 0;
         function renderLoop() {
           if (!vmRunning) return;
           try {
+            // Drain keyboard queue → VM's i8042 controller
+            if (Module._wasmKbdPutScancode) {
+              while (Keyboard.hasData()) {
+                const scan = Keyboard.dequeue();
+                if (scan >= 0) Module._wasmKbdPutScancode(scan);
+              }
+            }
             VGA.renderFromWasm();
           } catch(e) {
             console.error('[VGA] renderError:', e.message);

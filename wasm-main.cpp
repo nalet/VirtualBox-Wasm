@@ -169,6 +169,17 @@ static DECLCALLBACK(int) vboxWasmCfgmConstructor(PUVM pUVM, PVM pVM, PCVMMR3VTAB
     INSERT_INTEGER(pInst, "Trusted", 1);
     INSERT_NODE(pInst, "Config", &pCfg);
 
+    /* Keyboard LUN#0 — KeyboardQueue → WasmKeyboard */
+    {
+        PCFGMNODE pLunKbd, pLunKbdCfg, pAttDrv, pAttDrvCfg;
+        INSERT_NODE(pInst, "LUN#0", &pLunKbd);
+        INSERT_STRING(pLunKbd, "Driver", "KeyboardQueue");
+        INSERT_NODE(pLunKbd, "Config", &pLunKbdCfg);
+        INSERT_NODE(pLunKbd, "AttachedDriver", &pAttDrv);
+        INSERT_STRING(pAttDrv, "Driver", "WasmKeyboard");
+        INSERT_NODE(pAttDrv, "Config", &pAttDrvCfg);
+    }
+
     /* ── i8254 Programmable Interval Timer ── */
     INSERT_NODE(pDevices, "i8254", &pDev);
     INSERT_NODE(pDev, "0", &pInst);
@@ -289,6 +300,7 @@ static DECLCALLBACK(void) vboxWasmVMAtError(PUVM pUVM, void *pvUser,
  * Uses --allow-multiple-definition to override the version in VBoxDD.so.
  *************************************************************************/
 extern const PDMDRVREG g_DrvWasmDisplay;
+extern const PDMDRVREG g_DrvWasmKeyboard;
 extern const PDMDRVREG g_DrvMouseQueue;
 extern const PDMDRVREG g_DrvKeyboardQueue;
 extern const PDMDRVREG g_DrvVD;
@@ -305,6 +317,7 @@ extern "C" DECLEXPORT(int) VBoxDriversRegister(PCPDMDRVREGCB pCallbacks, uint32_
 
     REGISTER_DRIVER(g_DrvMouseQueue);
     REGISTER_DRIVER(g_DrvKeyboardQueue);
+    REGISTER_DRIVER(g_DrvWasmKeyboard);
     REGISTER_DRIVER(g_DrvVD);
     REGISTER_DRIVER(g_DrvACPI);
     REGISTER_DRIVER(g_DrvAcpiCpu);

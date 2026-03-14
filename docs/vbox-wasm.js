@@ -4761,13 +4761,20 @@ globalThis.VBoxJIT = (function() {
   // idtr at 0x01D6: cbIdt(u16) at +0, pIdt(u64) at +2
   const R_GDTR = 454;
   const R_IDTR = 470;
-  function execBlockWrapped(cpuP, ramB, maxInsn) {
+  function execBlockWrapped(cpuP, ramB, maxInsn, highRamP, highRamSz) {
+    // Set high RAM pointer directly from execBlock params (avoids EM_JS threading issues)
+    if (highRamP && !highRamPtr) {
+      highRamPtr = highRamP;
+      highRamSize = highRamSz;
+      highRamEnd = 1048576 + highRamSz;
+      console.log("[JIT] High RAM set: ptr=0x" + highRamP.toString(16) + " size=" + (highRamSz >> 20) + "MB range=0x100000-0x" + highRamEnd.toString(16));
+    }
     const fA20 = globalThis.VBoxJIT._a20;
     statTotalCalls++;
     // Per-call diagnostics for first 20 calls, then every 100000
     if (statTotalCalls <= 20 || (statTotalCalls % 1e5) === 0) {
       const cpuN = Number(cpuP), ramN = Number(ramB);
-      console.log("[JIT-DBG] call#" + statTotalCalls + " cpuPtr=0x" + cpuN.toString(16) + " ramBase=0x" + ramN.toString(16) + " romBufSize=" + romBufSize + " maxInsn=" + maxInsn + " A20=" + (fA20 ? "on" : "OFF"));
+      console.log("[JIT-DBG] call#" + statTotalCalls + " cpuPtr=0x" + cpuN.toString(16) + " ramBase=0x" + ramN.toString(16) + " highRAM=0x" + highRamPtr.toString(16) + ":" + highRamSize + " romBufSize=" + romBufSize + " maxInsn=" + maxInsn + " A20=" + (fA20 ? "on" : "OFF"));
     }
     // One-time: verify ROM content is readable from flat RAM
     if (statTotalCalls === 1) {
@@ -11037,13 +11044,13 @@ function wasmCallFuncPtrTrampoline(pfn, cArgs, pArgs) {
   return -1;
 }
 
-function wasmJitExecBlock(pCpumCtx, pvRAM, maxInsn) {
+function wasmJitExecBlock(pCpumCtx, pvRAM, maxInsn, pvHighRAM, cbHighRAM) {
   if (typeof globalThis.VBoxJIT === "undefined") return 0;
   if (!globalThis.VBoxJIT._initialized) {
     globalThis.VBoxJIT.init(wasmMemory);
     globalThis.VBoxJIT._initialized = true;
   }
-  return globalThis.VBoxJIT.execBlock(Number(pCpumCtx), Number(pvRAM), maxInsn);
+  return globalThis.VBoxJIT.execBlock(Number(pCpumCtx), Number(pvRAM), maxInsn, Number(pvHighRAM), cbHighRAM);
 }
 
 function wasmJitSetA20(fA20) {
@@ -11059,13 +11066,8 @@ function wasmJitSetRomBuffer(pvROM, cbROM, uGCPhysStart) {
   if (typeof globalThis.VBoxJIT !== "undefined" && globalThis.VBoxJIT.setRomBuffer) globalThis.VBoxJIT.setRomBuffer(Number(pvROM), cbROM, uGCPhysStart);
 }
 
-function wasmJitSetHighRAM(pvBase, cbSize) {
-  console.log("[JIT] setHighRAM: base=0x" + Number(pvBase).toString(16) + " size=" + cbSize);
-  if (typeof globalThis.VBoxJIT !== "undefined" && globalThis.VBoxJIT.setHighRAM) globalThis.VBoxJIT.setHighRAM(Number(pvBase), cbSize);
-}
-
 // Imports from the Wasm binary.
-var _main, _wasmJitSetGuestRAM, _wasmJitGetGuestRAM, _pthread_self, _wasmDisplayGetFB, _wasmDisplayGetWidth, _wasmDisplayGetHeight, _wasmDisplayCheckDirty, _wasmDisplayGetFBSize, _wasmDisplayRefresh, _wasmDisplayGetRefreshCount, _wasmDisplayGetUpdateRectCount, _malloc, __emscripten_tls_init, __emscripten_proxy_main, __emscripten_thread_init, __emscripten_thread_crashed, _htonl, _htons, _ntohs, __emscripten_run_js_on_main_thread_done, __emscripten_run_js_on_main_thread, __emscripten_thread_free_data, __emscripten_thread_exit, __emscripten_check_mailbox, _setThrew, _emscripten_stack_set_limits, __emscripten_stack_restore, __emscripten_stack_alloc, _emscripten_stack_get_current, __indirect_function_table, wasmTable;
+var _main, _wasmJitSetGuestRAM, _wasmJitGetGuestRAM, _pthread_self, _wasmDisplayGetFB, _wasmDisplayGetWidth, _wasmDisplayGetHeight, _wasmDisplayCheckDirty, _wasmDisplayGetFBSize, _wasmDisplayRefresh, _wasmDisplayGetRefreshCount, _wasmDisplayGetUpdateRectCount, _wasmKbdPutScancode, _wasmKbdDrainQueue, _malloc, __emscripten_tls_init, __emscripten_proxy_main, __emscripten_thread_init, __emscripten_thread_crashed, _htonl, _htons, _ntohs, __emscripten_run_js_on_main_thread_done, __emscripten_run_js_on_main_thread, __emscripten_thread_free_data, __emscripten_thread_exit, __emscripten_check_mailbox, _setThrew, _emscripten_stack_set_limits, __emscripten_stack_restore, __emscripten_stack_alloc, _emscripten_stack_get_current, __indirect_function_table, wasmTable;
 
 function assignWasmExports(wasmExports) {
   _main = Module["_main"] = wasmExports["__main_argc_argv"];
@@ -11080,6 +11082,8 @@ function assignWasmExports(wasmExports) {
   _wasmDisplayRefresh = Module["_wasmDisplayRefresh"] = wasmExports["wasmDisplayRefresh"];
   _wasmDisplayGetRefreshCount = Module["_wasmDisplayGetRefreshCount"] = wasmExports["wasmDisplayGetRefreshCount"];
   _wasmDisplayGetUpdateRectCount = Module["_wasmDisplayGetUpdateRectCount"] = wasmExports["wasmDisplayGetUpdateRectCount"];
+  _wasmKbdPutScancode = Module["_wasmKbdPutScancode"] = wasmExports["wasmKbdPutScancode"];
+  _wasmKbdDrainQueue = Module["_wasmKbdDrainQueue"] = wasmExports["wasmKbdDrainQueue"];
   _malloc = wasmExports["malloc"];
   __emscripten_tls_init = wasmExports["_emscripten_tls_init"];
   __emscripten_proxy_main = Module["__emscripten_proxy_main"] = wasmExports["_emscripten_proxy_main"];
@@ -11243,7 +11247,6 @@ function assignWasmImports() {
     /** @export */ wasmJitExecBlock,
     /** @export */ wasmJitLog,
     /** @export */ wasmJitSetA20,
-    /** @export */ wasmJitSetHighRAM,
     /** @export */ wasmJitSetRomBuffer
   };
 }

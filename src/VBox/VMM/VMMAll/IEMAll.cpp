@@ -177,13 +177,13 @@
 # include <emscripten.h>
 # include <iprt/mem.h>
 
-EM_JS(int, wasmJitExecBlock, (void *pCpumCtx, void *pvRAM, int maxInsn), {
+EM_JS(int, wasmJitExecBlock, (void *pCpumCtx, void *pvRAM, int maxInsn, void *pvHighRAM, int cbHighRAM), {
     if (typeof globalThis.VBoxJIT === 'undefined') return 0;
     if (!globalThis.VBoxJIT._initialized) {
         globalThis.VBoxJIT.init(wasmMemory);
         globalThis.VBoxJIT._initialized = true;
     }
-    return globalThis.VBoxJIT.execBlock(Number(pCpumCtx), Number(pvRAM), maxInsn);
+    return globalThis.VBoxJIT.execBlock(Number(pCpumCtx), Number(pvRAM), maxInsn, Number(pvHighRAM), cbHighRAM);
 });
 
 EM_JS(void, wasmJitSetA20, (int fA20), {
@@ -201,14 +201,9 @@ EM_JS(void, wasmJitSetRomBuffer, (void *pvROM, int cbROM, int uGCPhysStart), {
         globalThis.VBoxJIT.setRomBuffer(Number(pvROM), cbROM, uGCPhysStart);
 });
 
-EM_JS(void, wasmJitSetHighRAM, (void *pvBase, int cbSize), {
-    console.log('[JIT] setHighRAM: base=0x' + Number(pvBase).toString(16) + ' size=' + cbSize);
-    if (typeof globalThis.VBoxJIT !== 'undefined' && globalThis.VBoxJIT.setHighRAM)
-        globalThis.VBoxJIT.setHighRAM(Number(pvBase), cbSize);
-});
-
 static void    *s_pvJitRAM      = NULL;  /* NULL until PGMPhysGCPhys2CCPtr succeeds */
 static void    *s_pvJitHighRAM  = NULL;  /* NULL until high RAM init succeeds */
+static uint32_t s_cbJitHighRAM  = 0;     /* high RAM size in bytes */
 static bool     s_fHighRAMTried = false; /* true once high RAM init has been attempted */
 static bool     s_fJitRomDone   = false; /* true once ROM copy succeeded */
 static uint32_t s_cJitRetries   = 0;     /* throttle counter for RAM init retries */
@@ -216,6 +211,9 @@ static uint32_t s_cRomRetries   = 0;     /* throttle counter for ROM copy retrie
 
 /* Defined in wasm-main.cpp — stores RAM base in shared Wasm memory for JS display */
 extern "C" void wasmJitSetGuestRAM(void *pv);
+
+/* Defined in wasm-kbd-drv.cpp — drain keyboard ring buffer on EMT thread */
+extern "C" int wasmKbdDrainQueue(void);
 
 static void iemJitEnsureInit(PVMCC pVM)
 {
@@ -281,20 +279,7 @@ static void iemJitEnsureInit(PVMCC pVM)
         if (RT_SUCCESS(rc) && pv)
         {
             s_pvJitHighRAM = pv;
-            /* Guest has 32MB RAM → high RAM = 0x100000 to 0x1FFFFFF (31MB) */
-            uint32_t cbHighRAM = (32U * _1M) - 0x100000;
-            wasmJitSetHighRAM(pv, (int)cbHighRAM);
-            char szMsg[128];
-            RTStrPrintf(szMsg, sizeof(szMsg),
-                        "High RAM init OK: pv=%p size=0x%x (%uMB)",
-                        pv, cbHighRAM, cbHighRAM >> 20);
-            wasmJitLog(szMsg);
-        }
-        else
-        {
-            char szMsg[80];
-            RTStrPrintf(szMsg, sizeof(szMsg), "High RAM init fail: rc=%d", rc);
-            wasmJitLog(szMsg);
+            s_cbJitHighRAM = (32U * _1M) - 0x100000;
         }
     }
 
@@ -1218,11 +1203,14 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                     }
                 }
                 iemJitEnsureInit(pVM);
+                /* Drain keyboard scancodes from JS ring buffer on EMT thread */
+                wasmKbdDrainQueue();
                 if (s_pvJitRAM && s_cIemAfterJitBail == 0)
                 {
                     uint32_t cBatch = RT_MIN(cMaxInstructionsGccStupidity, 4096);
                     wasmJitSetA20(PGMPhysIsA20Enabled(pVCpu) ? 1 : 0);
-                    int cJitInsns = wasmJitExecBlock(&pVCpu->cpum.GstCtx, s_pvJitRAM, cBatch);
+                    int cJitInsns = wasmJitExecBlock(&pVCpu->cpum.GstCtx, s_pvJitRAM, cBatch,
+                                                     s_pvJitHighRAM, (int)s_cbJitHighRAM);
                     if (cJitInsns > 0)
                     {
                         pVCpu->iem.s.cInstructions += cJitInsns;

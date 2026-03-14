@@ -223,7 +223,7 @@ RUN . /opt/emsdk/emsdk_env.sh 2>/dev/null \
 RUN . /opt/emsdk/emsdk_env.sh 2>/dev/null \
     && echo "=== Phase 5: Linking vbox-wasm.js (full VM harness) ==" \
     && mkdir -p docs \
-    && em++ -O1 --emit-symbol-map -o docs/vbox-wasm.js wasm-main.cpp wasm-stubs.cpp wasm-display-drv.cpp \
+    && em++ -O1 --emit-symbol-map -o docs/vbox-wasm.js wasm-main.cpp wasm-stubs.cpp wasm-display-drv.cpp wasm-kbd-drv.cpp \
         /tmp/extra-o/*.o \
         -I include -I out/linux.amd64/release \
         -I src/VBox/Runtime/include \
@@ -254,7 +254,7 @@ RUN . /opt/emsdk/emsdk_env.sh 2>/dev/null \
         -sENVIRONMENT=web,worker \
         -sEXPORTED_RUNTIME_METHODS='["callMain","FS"]' \
         --pre-js jit-pre.js \
-        -sEXPORTED_FUNCTIONS='["_main","_wasmDisplayGetFB","_wasmDisplayGetWidth","_wasmDisplayGetHeight","_wasmDisplayCheckDirty","_wasmDisplayGetFBSize","_wasmDisplayRefresh","_wasmDisplayGetRefreshCount","_wasmDisplayGetUpdateRectCount","_wasmJitGetGuestRAM","_wasmJitSetGuestRAM"]' \
+        -sEXPORTED_FUNCTIONS='["_main","_wasmDisplayGetFB","_wasmDisplayGetWidth","_wasmDisplayGetHeight","_wasmDisplayCheckDirty","_wasmDisplayGetFBSize","_wasmDisplayRefresh","_wasmDisplayGetRefreshCount","_wasmDisplayGetUpdateRectCount","_wasmJitGetGuestRAM","_wasmJitSetGuestRAM","_wasmKbdPutScancode"]' \
         -sINVOKE_RUN=0 \
         -sMODULARIZE=0 \
         -pthread \

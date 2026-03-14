@@ -981,6 +981,8 @@ globalThis.VBoxJIT = (function() {
     const ssAttr = rr32(S_SS + SEG_ATTR);
     _ssBig = protMode && !!(ssAttr & X86DESCATTR_D);
     let ip = csDefBig ? rr32(R_IP) : rr16(R_IP);
+    // Bail immediately if Trap Flag is set — IEM must handle #DB exceptions
+    if (flags & 256) return 0;
     // Initialize lazy flags from current RFLAGS
     loadFlags(flags);
     lazySize = csDefBig ? 4 : 2;
@@ -1888,6 +1890,16 @@ globalThis.VBoxJIT = (function() {
           flags = f;
           loadFlags(f);
           ilen += 1;
+          // Bail if TF was set by POPF — IEM must handle #DB on next instruction
+          if (flags & 256) {
+            ip = (ip + ilen) & ipMask;
+            wrIP(ip);
+            wr32(R_FLAGS, (flags & 4294964992) | flagsToWord());
+            executed++;
+            iter = maxInsn;
+            ilen = 0;
+            continue;
+          }
           break;
         }
 
@@ -4543,6 +4555,15 @@ globalThis.VBoxJIT = (function() {
           flags = (iretFlags & 65535) | 2;
           // bit 1 always set
           loadFlags(flags);
+          // Bail if TF was set by IRET — IEM must handle #DB on next instruction
+          if (flags & 256) {
+            wrIP(ip);
+            wr32(R_FLAGS, (flags & 4294964992) | flagsToWord());
+            executed++;
+            iter = maxInsn;
+            ilen = 0;
+            continue;
+          }
           // Log IRET returns to ISOLINUX segment (CS=0003) to trace INT 13h results
           if (iretCS === 3) {
             if (!execBlock._iretLog) execBlock._iretLog = {

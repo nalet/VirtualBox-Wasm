@@ -11111,7 +11111,7 @@ function wasmJitSetRomBuffer(pvROM, cbROM, uGCPhysStart) {
 }
 
 // Imports from the Wasm binary.
-var _main, _wasmJitSetGuestRAM, _wasmJitGetGuestRAM, _pthread_self, _wasmDisplayGetFB, _wasmDisplayGetWidth, _wasmDisplayGetHeight, _wasmDisplayCheckDirty, _wasmDisplayGetFBSize, _wasmDisplayRefresh, _wasmDisplayGetRefreshCount, _wasmDisplayGetUpdateRectCount, _wasmKbdPutScancode, _wasmKbdDrainQueue, _malloc, __emscripten_tls_init, __emscripten_proxy_main, __emscripten_thread_init, __emscripten_thread_crashed, _htonl, _htons, _ntohs, __emscripten_run_js_on_main_thread_done, __emscripten_run_js_on_main_thread, __emscripten_thread_free_data, __emscripten_thread_exit, __emscripten_check_mailbox, _setThrew, _emscripten_stack_set_limits, __emscripten_stack_restore, __emscripten_stack_alloc, _emscripten_stack_get_current, __indirect_function_table, wasmTable;
+var _main, _wasmJitSetGuestRAM, _wasmJitGetGuestRAM, _pthread_self, _wasmDisplayGetFB, _wasmDisplayGetWidth, _wasmDisplayGetHeight, _wasmDisplayCheckDirty, _wasmDisplayGetFBSize, _wasmDisplayRefresh, _wasmDisplayGetRefreshCount, _wasmDisplayGetUpdateRectCount, _wasmKbdPutScancode, _wasmKbdDrainQueue, _wasmKbdGetWritePtr, _wasmKbdGetReadPtr, _wasmKbdGetBufPtr, _wasmKbdGetBufSize, _malloc, __emscripten_tls_init, __emscripten_proxy_main, __emscripten_thread_init, __emscripten_thread_crashed, _htonl, _htons, _ntohs, __emscripten_run_js_on_main_thread_done, __emscripten_run_js_on_main_thread, __emscripten_thread_free_data, __emscripten_thread_exit, __emscripten_check_mailbox, _setThrew, _emscripten_stack_set_limits, __emscripten_stack_restore, __emscripten_stack_alloc, _emscripten_stack_get_current, __indirect_function_table, wasmTable;
 
 function assignWasmExports(wasmExports) {
   _main = Module["_main"] = wasmExports["__main_argc_argv"];
@@ -11128,6 +11128,10 @@ function assignWasmExports(wasmExports) {
   _wasmDisplayGetUpdateRectCount = Module["_wasmDisplayGetUpdateRectCount"] = wasmExports["wasmDisplayGetUpdateRectCount"];
   _wasmKbdPutScancode = Module["_wasmKbdPutScancode"] = wasmExports["wasmKbdPutScancode"];
   _wasmKbdDrainQueue = Module["_wasmKbdDrainQueue"] = wasmExports["wasmKbdDrainQueue"];
+  _wasmKbdGetWritePtr = Module["_wasmKbdGetWritePtr"] = wasmExports["wasmKbdGetWritePtr"];
+  _wasmKbdGetReadPtr = Module["_wasmKbdGetReadPtr"] = wasmExports["wasmKbdGetReadPtr"];
+  _wasmKbdGetBufPtr = Module["_wasmKbdGetBufPtr"] = wasmExports["wasmKbdGetBufPtr"];
+  _wasmKbdGetBufSize = Module["_wasmKbdGetBufSize"] = wasmExports["wasmKbdGetBufSize"];
   _malloc = wasmExports["malloc"];
   __emscripten_tls_init = wasmExports["_emscripten_tls_init"];
   __emscripten_proxy_main = Module["__emscripten_proxy_main"] = wasmExports["_emscripten_proxy_main"];

@@ -231,4 +231,22 @@ int wasmKbdDrainQueue(void)
     return cDrained;
 }
 
+/*
+ * Export ring buffer pointers for direct SharedArrayBuffer access from
+ * the main thread.  Module._wasmKbdPutScancode is proxied to the pthread
+ * which deadlocks when the EMT is in VMR3WaitHalted (HALT state).
+ * By writing directly to shared memory, the main thread avoids the proxy.
+ */
+EMSCRIPTEN_KEEPALIVE
+uint32_t wasmKbdGetWritePtr(void) { return (uint32_t)(uintptr_t)&s_iKbdWrite; }
+
+EMSCRIPTEN_KEEPALIVE
+uint32_t wasmKbdGetReadPtr(void)  { return (uint32_t)(uintptr_t)&s_iKbdRead; }
+
+EMSCRIPTEN_KEEPALIVE
+uint32_t wasmKbdGetBufPtr(void)   { return (uint32_t)(uintptr_t)s_aKbdBuf; }
+
+EMSCRIPTEN_KEEPALIVE
+uint32_t wasmKbdGetBufSize(void)  { return WASM_KBD_BUF_SIZE; }
+
 } /* extern "C" */

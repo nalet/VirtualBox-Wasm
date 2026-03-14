@@ -801,16 +801,56 @@
         statusEl.className = 'success';
         statusEl.textContent = 'VM initializing (IEM x86 emulation)';
 
+        // Direct keyboard ring buffer access — bypasses Emscripten proxy
+        // which deadlocks when EMT is blocked in VMR3WaitHalted (HLT state).
+        let kbdBufOff = 0, kbdWriteOff = 0, kbdReadOff = 0, kbdBufSize = 0;
+        let kbdDirectReady = false;
+
+        function initKbdDirect() {
+          if (kbdDirectReady) return;
+          try {
+            if (!Module._wasmKbdGetBufPtr) return;
+            kbdBufOff = Number(Module._wasmKbdGetBufPtr());
+            kbdWriteOff = Number(Module._wasmKbdGetWritePtr());
+            kbdReadOff = Number(Module._wasmKbdGetReadPtr());
+            kbdBufSize = Number(Module._wasmKbdGetBufSize());
+            if (kbdBufOff && kbdWriteOff && kbdReadOff && kbdBufSize) {
+              kbdDirectReady = true;
+              console.log('[KBD] Direct ring buffer: buf=0x' + kbdBufOff.toString(16) +
+                ' write=0x' + kbdWriteOff.toString(16) +
+                ' read=0x' + kbdReadOff.toString(16) +
+                ' size=' + kbdBufSize);
+              appendLine('Keyboard: direct SharedArrayBuffer input active', 'info');
+            }
+          } catch(e) { /* not ready yet */ }
+        }
+
+        function kbdPutScancodeDirect(scancode) {
+          const mem32 = new Uint32Array(wasmMemory.buffer);
+          const mem8 = new Uint8Array(wasmMemory.buffer);
+          const iWrite = Atomics.load(mem32, kbdWriteOff >> 2);
+          const iNext = (iWrite + 1) % kbdBufSize;
+          const iRead = Atomics.load(mem32, kbdReadOff >> 2);
+          if (iNext === iRead) return -1; // buffer full
+          mem8[kbdBufOff + iWrite] = scancode & 0xFF;
+          Atomics.store(mem32, kbdWriteOff >> 2, iNext);
+          return 0;
+        }
+
         // Start VGA framebuffer rendering loop + keyboard input
         let lastUpdateRectCount = 0;
         function renderLoop() {
           if (!vmRunning) return;
           try {
-            // Drain keyboard queue → VM's i8042 controller
-            if (Module._wasmKbdPutScancode) {
-              while (Keyboard.hasData()) {
-                const scan = Keyboard.dequeue();
-                if (scan >= 0) {
+            // Initialize direct keyboard access if not ready
+            if (!kbdDirectReady) initKbdDirect();
+            // Drain keyboard queue → VM's ring buffer (direct SharedArrayBuffer)
+            while (Keyboard.hasData()) {
+              const scan = Keyboard.dequeue();
+              if (scan >= 0) {
+                if (kbdDirectReady) {
+                  kbdPutScancodeDirect(scan);
+                } else if (Module._wasmKbdPutScancode) {
                   Module._wasmKbdPutScancode(scan);
                 }
               }

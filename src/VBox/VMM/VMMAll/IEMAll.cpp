@@ -1231,21 +1231,18 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                 }
                 /* Drain keyboard scancodes from JS ring buffer on EMT thread.
                    wasmKbdDrainQueue puts scancodes into DrvKeyboardQueue's PDM
-                   queue which sets VM_FF_PDM_QUEUES.  The EM main loop flushes
-                   the queue → PS2K → IRQ1 → VMCPU_FF_INTERRUPT_PIC.  We must
-                   skip the JIT when (a) scancodes were just drained, so the EM
-                   loop gets to flush the PDM queue promptly, or (b) hardware
-                   interrupts are pending, so IEM's per-instruction force-flag
-                   check can hand control back at the first STI window.  Without
-                   this, the JIT batches 4096 iterations of the BIOS INT 16h
-                   CLI/STI busy-wait and always returns with IF=0, creating a
-                   deadlock where the keyboard IRQ can never be injected. */
+                   queue which sets VM_FF_PDM_QUEUES.  Skip the JIT for this
+                   iteration when scancodes were drained so the EM main loop
+                   gets to flush the PDM queue promptly and deliver IRQ1.
+                   The JIT's own STI bail (jit-pre.js case 0xFB) handles the
+                   INT 16h CLI/STI busy-wait: when IF transitions 0→1 the JIT
+                   exits, letting the EM loop inject pending interrupts at the
+                   correct STI window.  We must NOT skip the JIT on every
+                   VMCPU_FF_INTERRUPT_PIC — the PIT timer sets that flag at
+                   18.2 Hz which would kill JIT throughput entirely. */
                 int cKbdDrained = wasmKbdDrainQueue();
                 if (s_pvJitRAM && s_cIemAfterJitBail == 0
-                    && cKbdDrained == 0
-                    && !VMCPU_FF_IS_ANY_SET(pVCpu, VMCPU_FF_INTERRUPT_APIC
-                                                 | VMCPU_FF_INTERRUPT_PIC
-                                                 | VMCPU_FF_INTERRUPT_NMI))
+                    && cKbdDrained == 0)
                 {
                     uint32_t cBatch = RT_MIN(cMaxInstructionsGccStupidity, 4096);
                     wasmJitSetA20(PGMPhysIsA20Enabled(pVCpu) ? 1 : 0);

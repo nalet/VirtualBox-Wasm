@@ -735,21 +735,21 @@ function execBlock(cpuP, ramB, maxInsn) {
   // Bail immediately if Trap Flag is set — IEM must handle #DB exceptions
   if (flags & 0x100) return 0;
 
-  // Protected mode: bail entirely during early PM transitions (ISOLINUX
-  // unreal-mode setup, chain.c32 loading, etc.) where segment descriptors
-  // may not be fully loaded yet.  The IEMAll.cpp bail cooldown (500 for PM)
-  // ensures IEM handles the complete PM trampoline before the JIT re-enters.
-  // Once paging is enabled (CR0.PG), the kernel is running and we allow
-  // JIT PM execution for flat-model code.
-  if (protMode && !pagingOn) {
+  // Protected mode without paging: bail only during PM transitions where
+  // segments aren't fully set up yet (non-zero bases = not flat model).
+  // The IEMAll.cpp bail cooldown (500 for PM) ensures IEM handles the
+  // complete PM trampoline (LGDT, segment loads, far JMPs) before the JIT
+  // re-enters.  Once segments are flat (base=0), PM code like chain.c32
+  // and grub4dos can run in the JIT at full speed.
+  if (protMode && !pagingOn && (csBase !== 0 || dsBase !== 0 || ssBase !== 0)) {
     if (!execBlock._pmBailCount) execBlock._pmBailCount = 0;
     if (execBlock._pmBailCount++ < 5)
-      console.log('[JIT-PM-BAIL] Bailing in PM (no paging): CS=' +
+      console.log('[JIT-PM-BAIL] Bailing in PM (non-flat segments): CS=' +
         rr16(S_CS + SEG_SEL).toString(16).padStart(4,'0') +
         ' EIP=0x' + ip.toString(16).padStart(8,'0') +
         ' csBase=0x' + csBase.toString(16) +
-        ' EBP=0x' + rr32(R_BP).toString(16).padStart(8,'0') +
-        ' ESP=0x' + rr32(R_SP).toString(16).padStart(8,'0') +
+        ' dsBase=0x' + dsBase.toString(16) +
+        ' ssBase=0x' + ssBase.toString(16) +
         ' CR0=0x' + cr0.toString(16).padStart(8,'0'));
     return 0;
   }

@@ -985,14 +985,15 @@ globalThis.VBoxJIT = (function() {
     if (flags & 256) return 0;
     // PM execution tracer: log first N PM instructions to find the bug
     if (protMode) {
-      if (!execBlock._pmTrace) execBlock._pmTrace = {
+      if (!self._pmTrace) self._pmTrace = {
         count: 0,
         logged: 0,
         maxLog: 500,
         batches: 0,
-        bailed: false
+        bailed: false,
+        log: []
       };
-      const pmt = execBlock._pmTrace;
+      const pmt = self._pmTrace;
       pmt.batches++;
       // After logging enough, bail permanently to prevent triple fault
       if (pmt.bailed) return 0;
@@ -1162,8 +1163,8 @@ globalThis.VBoxJIT = (function() {
       // instruction length accumulator
       // PM execution tracer: log opcode + state before execution
       let _pmSnapBefore = null;
-      if (protMode && execBlock._pmTrace && !execBlock._pmTrace.bailed) {
-        const pmt = execBlock._pmTrace;
+      if (protMode && self._pmTrace && !self._pmTrace.bailed) {
+        const pmt = self._pmTrace;
         if (pmt.logged < pmt.maxLog) {
           _pmSnapBefore = {
             ip,
@@ -4693,18 +4694,18 @@ globalThis.VBoxJIT = (function() {
         executed++;
       }
       // PM tracer: log the instruction that just executed
-      if (_pmSnapBefore && protMode && execBlock._pmTrace && !execBlock._pmTrace.bailed) {
-        const pmt = execBlock._pmTrace;
+      if (_pmSnapBefore && protMode && self._pmTrace && !self._pmTrace.bailed) {
+        const pmt = self._pmTrace;
         pmt.count++;
         if (pmt.logged < pmt.maxLog) {
           const s = _pmSnapBefore;
           const bail = lastBailOp >= 0 ? " BAIL" : (mmioFault ? " MMIO" : "");
-          console.log("[JIT-PM] #" + pmt.count + " IP=" + s.ip.toString(16).padStart(8, "0") + " op=" + s.op.toString(16).padStart(2, "0") + (s.pos > 0 ? " pfx=" + s.pos : "") + " [" + s.codeBytes + "]" + " EAX=" + s.eax.toString(16).padStart(8, "0") + " ECX=" + s.ecx.toString(16).padStart(8, "0") + " ESP=" + s.esp.toString(16).padStart(8, "0") + " ESI=" + s.esi.toString(16).padStart(8, "0") + " EDI=" + s.edi.toString(16).padStart(8, "0") + " FL=" + s.fl.toString(16) + bail);
+          const line = "#" + pmt.count + " IP=" + s.ip.toString(16).padStart(8, "0") + " op=" + s.op.toString(16).padStart(2, "0") + (s.pos > 0 ? " pfx=" + s.pos : "") + " [" + s.codeBytes + "]" + " EAX=" + s.eax.toString(16).padStart(8, "0") + " ECX=" + s.ecx.toString(16).padStart(8, "0") + " ESP=" + s.esp.toString(16).padStart(8, "0") + " ESI=" + s.esi.toString(16).padStart(8, "0") + " EDI=" + s.edi.toString(16).padStart(8, "0") + " FL=" + s.fl.toString(16) + bail;
+          pmt.log.push(line);
           pmt.logged++;
           if (pmt.logged >= pmt.maxLog) {
-            console.log("[JIT-PM] === Trace limit reached (" + pmt.maxLog + "), bailing all future PM ===");
+            pmt.log.push("=== Trace limit reached (" + pmt.maxLog + ") ===");
             pmt.bailed = true;
-            // Force exit this batch
             break;
           }
         }

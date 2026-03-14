@@ -78,6 +78,10 @@
 
 #include "EMInline.h"
 
+#ifdef __EMSCRIPTEN__
+extern "C" int wasmKbdDrainQueue(void);
+#endif
+
 
 /*********************************************************************************************************************************
 *   Internal Functions                                                                                                           *
@@ -2698,20 +2702,6 @@ VMMR3_INT_DECL(int) EMR3ExecuteVM(PVM pVM, PVMCPU pVCpu)
                  */
                 case EMSTATE_HALTED:
                 {
-#ifdef __EMSCRIPTEN__
-                    {
-                        static uint32_t s_cHaltCount = 0;
-                        uint16_t cs = pVCpu->cpum.GstCtx.cs.Sel;
-                        uint64_t rip = pVCpu->cpum.GstCtx.rip;
-                        uint32_t efl = pVCpu->cpum.GstCtx.eflags.u;
-                        uint32_t vmff = pVM->fGlobalForcedActions;
-                        uint32_t cpuff = pVCpu->fLocalForcedActions;
-                        RTPrintf("[EM-HALT] #%u CS=%04x IP=%08llx EFL=%08x IF=%d vmFF=%08x cpuFF=%08x\n",
-                                 ++s_cHaltCount, cs, (unsigned long long)rip, efl,
-                                 !!(efl & 0x200), vmff, cpuff);
-                        RTStrmFlush(g_pStdOut);
-                    }
-#endif
                     STAM_REL_PROFILE_START(&pVCpu->em.s.StatHalted, y);
                     /* If HM (or someone else) store a pending interrupt in
                        TRPM, it must be dispatched ASAP without any halting.
@@ -2749,15 +2739,13 @@ VMMR3_INT_DECL(int) EMR3ExecuteVM(PVM pVM, PVMCPU pVCpu)
 #elif defined(VBOX_VMM_TARGET_X86)
                         const uint32_t fWaitHalted = (CPUMGetGuestEFlags(pVCpu) & X86_EFL_IF) ? 0 : VMWAITHALTED_F_IGNORE_IRQS;
 #endif
-                        rc = VMR3WaitHalted(pVM, pVCpu, fWaitHalted);
+                        /* Drain keyboard scancodes before waiting — otherwise
+                           keyboard input (typed while CPU is halted) never reaches
+                           the i8042 controller and no IRQ1 fires to wake HLT. */
 #ifdef __EMSCRIPTEN__
-                        {
-                            uint32_t cpuff = pVCpu->fLocalForcedActions;
-                            RTPrintf("[EM-WAKE] rc=%d fWaitHalted=%u cpuFF=%08x\n",
-                                     rc, fWaitHalted, cpuff);
-                            RTStrmFlush(g_pStdOut);
-                        }
+                        wasmKbdDrainQueue();
 #endif
+                        rc = VMR3WaitHalted(pVM, pVCpu, fWaitHalted);
 
                         /* We're only interested in NMI/SMIs here which have their own FFs, so we don't need to
                            check VMCPU_FF_UPDATE_APIC here. */

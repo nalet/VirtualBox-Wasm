@@ -810,7 +810,9 @@
             if (Module._wasmKbdPutScancode) {
               while (Keyboard.hasData()) {
                 const scan = Keyboard.dequeue();
-                if (scan >= 0) Module._wasmKbdPutScancode(scan);
+                if (scan >= 0) {
+                  Module._wasmKbdPutScancode(scan);
+                }
               }
             }
             VGA.renderFromWasm();

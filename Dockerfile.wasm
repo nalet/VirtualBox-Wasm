@@ -157,7 +157,7 @@ RUN echo "=== Wasm fixup: patching VMR3ReqCall dispatch targets ===" \
 RUN . /opt/emsdk/emsdk_env.sh 2>/dev/null \
     && export PATH="/build/vbox/kBuild/bin/linux.amd64:${PATH}" \
     && echo "=== Phase 3c: Building VBoxVMM ==" \
-    && bash -o pipefail -c 'kmk -C src/VBox/VMM VBoxVMM 2>&1 | tail -80'
+    && kmk -C src/VBox/VMM VBoxVMM 2>&1
 
 # Phase 4a: StorageLib (VBoxDD dependency)
 RUN . /opt/emsdk/emsdk_env.sh 2>/dev/null \
@@ -188,7 +188,7 @@ RUN . /opt/emsdk/emsdk_env.sh 2>/dev/null \
     && export PATH="/build/vbox/kBuild/bin/linux.amd64:${PATH}" \
     && echo "=== Phase 4d: Building VBoxDD ==" \
     && (find out/linux.amd64/release/obj/VBoxDD -name '*.o' -delete 2>/dev/null; true) \
-    && bash -o pipefail -c 'kmk -C src/VBox/Devices VBoxDD 2>&1 | tail -80'
+    && kmk -C src/VBox/Devices VBoxDD 2>&1
 
 
 # Phase 4e: Compile extra IPRT .o files not in RuntimeR3.a

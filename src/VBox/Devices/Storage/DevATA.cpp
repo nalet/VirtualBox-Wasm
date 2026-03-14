@@ -58,6 +58,7 @@
 #include "VBoxDD.h"
 #ifdef __EMSCRIPTEN__
 # include <stdio.h>
+# include <iprt/stream.h>
 #endif
 
 
@@ -1216,6 +1217,10 @@ static void ataHCSetIRQ(PPDMDEVINS pDevIns, PATACONTROLLER pCtl, PATADEVSTATE s)
     {
         if (!(s->uATARegDevCtl & ATA_DEVCTL_DISABLE_IRQ))
         {
+#ifdef __EMSCRIPTEN__
+            RTPrintf("[ATA-IRQ] LUN#%d assert IRQ=%d\n", s->iLUN, pCtl->irq);
+            RTStrmFlush(g_pStdOut);
+#endif
             Log2(("%s: LUN#%d asserting IRQ\n", __FUNCTION__, s->iLUN));
             /* The BMDMA unit unconditionally sets BM_STATUS_INT if the interrupt
              * line is asserted. It monitors the line for a rising edge. */
@@ -4059,8 +4064,11 @@ static void atapiR3ParseCmdPassthrough(PPDMDEVINS pDevIns, PATACONTROLLER pCtl, 
 
 static void atapiR3ParseCmd(PPDMDEVINS pDevIns, PATACONTROLLER pCtl, PATADEVSTATE s, PATADEVSTATER3 pDevR3)
 {
-#ifdef LOG_ENABLED
     const uint8_t *pbPacket = s->abATAPICmd;
+
+#ifdef __EMSCRIPTEN__
+    RTPrintf("[ATAPI] LUN#%d CMD=%#04x DMA=%d\n", s->iLUN, pbPacket[0], s->fDMA);
+    RTStrmFlush(g_pStdOut);
 #endif
 
 # ifdef DEBUG
@@ -6066,6 +6074,11 @@ static DECLCALLBACK(int) ataR3AsyncIOThread(RTTHREAD hThreadSelf, void *pvUser)
             continue;
 
         ATAAIO ReqType = pReq->ReqType;
+#ifdef __EMSCRIPTEN__
+        RTPrintf("[ATA-IO] Ctl#%u req=%d state=%d\n",
+                pCtl->iCtl, ReqType, pCtl->uAsyncIOState);
+        RTStrmFlush(g_pStdOut);
+#endif
 
         Log(("PIIX3 ATA: Ctl#%d: async I/O thread processing request type=%d (state=%d)\n",
                 pCtl->iCtl, ReqType, pCtl->uAsyncIOState));

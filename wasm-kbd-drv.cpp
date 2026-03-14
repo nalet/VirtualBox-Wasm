@@ -56,9 +56,9 @@ static PPDMIKEYBOARDPORT g_pKbdPort = NULL;
  * Main thread writes (wasmKbdPutScancode), EMT reads (wasmKbdDrainQueue).
  *************************************************************************/
 #define WASM_KBD_BUF_SIZE 128
-static volatile uint8_t  s_aKbdBuf[WASM_KBD_BUF_SIZE];
-static volatile uint32_t s_iKbdWrite = 0;
-static volatile uint32_t s_iKbdRead  = 0;
+static uint8_t  s_aKbdBuf[WASM_KBD_BUF_SIZE];
+static uint32_t s_iKbdWrite = 0;
+static uint32_t s_iKbdRead  = 0;
 
 
 /*************************************************************************
@@ -198,12 +198,12 @@ extern "C" {
 EMSCRIPTEN_KEEPALIVE
 int wasmKbdPutScancode(int scancode)
 {
-    uint32_t iWrite = s_iKbdWrite;
+    uint32_t iWrite = __atomic_load_n(&s_iKbdWrite, __ATOMIC_ACQUIRE);
     uint32_t iNext  = (iWrite + 1) % WASM_KBD_BUF_SIZE;
-    if (iNext == s_iKbdRead)
+    if (iNext == __atomic_load_n(&s_iKbdRead, __ATOMIC_ACQUIRE))
         return -1; /* buffer full */
     s_aKbdBuf[iWrite] = (uint8_t)scancode;
-    s_iKbdWrite = iNext;
+    __atomic_store_n(&s_iKbdWrite, iNext, __ATOMIC_RELEASE);
     return 0;
 }
 
@@ -217,12 +217,16 @@ int wasmKbdDrainQueue(void)
     if (!g_pKbdPort)
         return 0;
     int cDrained = 0;
-    while (s_iKbdRead != s_iKbdWrite)
+    uint32_t iRead = __atomic_load_n(&s_iKbdRead, __ATOMIC_ACQUIRE);
+    uint32_t iWrite = __atomic_load_n(&s_iKbdWrite, __ATOMIC_ACQUIRE);
+    while (iRead != iWrite)
     {
-        uint8_t sc = s_aKbdBuf[s_iKbdRead];
-        s_iKbdRead = (s_iKbdRead + 1) % WASM_KBD_BUF_SIZE;
+        uint8_t sc = s_aKbdBuf[iRead];
+        iRead = (iRead + 1) % WASM_KBD_BUF_SIZE;
+        __atomic_store_n(&s_iKbdRead, iRead, __ATOMIC_RELEASE);
         g_pKbdPort->pfnPutEventScan(g_pKbdPort, sc);
         cDrained++;
+        iWrite = __atomic_load_n(&s_iKbdWrite, __ATOMIC_ACQUIRE);
     }
     return cDrained;
 }

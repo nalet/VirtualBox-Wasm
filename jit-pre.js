@@ -698,17 +698,22 @@ function execBlock(cpuP, ramB, maxInsn) {
 
   // Load frequently-used state
   let flags = rr32(R_FLAGS);
-  let csBase = segBase(S_CS);
-  let dsBase = segBase(S_DS);
-  let ssBase = segBase(S_SS);
-  let esBase = segBase(S_ES);
 
-  // CR0: check PE and PG
+  // CR0: check PE and PG (read before segment bases so we can fix up real-mode CS)
   const cr0 = rr32(R_CR0);
   const protMode = !!(cr0 & 1);        // CR0.PE
   const pagingOn = !!(cr0 & 0x80000000); // CR0.PG
   _pagingOn = pagingOn;
   const realMode = !protMode;
+
+  // In real mode, CS base is ALWAYS selector<<4. The hidden base in CPUMCTX may
+  // retain a stale value from a prior protected-mode session (e.g. ISOLINUX
+  // enters PM briefly for A20/unreal-mode, then returns to RM via far JMP;
+  // IEM may not have executed the far JMP yet when the JIT resumes).
+  let csBase = realMode ? (rr16(S_CS) << 4) : segBase(S_CS);
+  let dsBase = segBase(S_DS);
+  let ssBase = segBase(S_SS);
+  let esBase = segBase(S_ES);
 
   // Flush TLB on CR3 change
   if (pagingOn) {
@@ -803,6 +808,9 @@ function execBlock(cpuP, ramB, maxInsn) {
     if (execBlock._addrDiagCount++ < 10)
       console.log('[JIT-BAIL] addrAccessible failed: codePhys=0x' +
         codePhys.toString(16) + ' codeLinear=0x' + (codeLinear>>>0).toString(16) +
+        ' csBase=0x' + csBase.toString(16) + ' ip=0x' + ip.toString(16) +
+        ' CS=' + rr16(S_CS).toString(16).padStart(4,'0') +
+        ' CR0=0x' + rr32(R_CR0).toString(16) +
         ' pagingOn=' + pagingOn + ' romBufSize=' + romBufSize +
         ' ramSize=' + ramSize + ' a20=' + (fA20?'on':'off'));
     return 0;
@@ -828,7 +836,9 @@ function execBlock(cpuP, ramB, maxInsn) {
     // ROM is above the A20 gate on the chipset bus — skip A20 masking for ROM range
     if (!inRomRange(codePhys))
       codePhys = (codePhys & a20Mask) >>> 0;
-    if (codePhys < 0 || (!addrAccessible(codePhys))) break; // safety
+    if (codePhys < 0 || (!addrAccessible(codePhys))) {
+      break;
+    }
 
     // Update self-modifying code range for flat PM (track current 4KB page)
     if (codeSegIsFlat) {
@@ -3312,10 +3322,7 @@ function execBlock(cpuP, ramB, maxInsn) {
       {
         const hltCS = rr16(S_CS + SEG_SEL);
         const hltIF = !!(flags & 0x200);
-        console.log('[JIT-HLT] CS:IP=' + hltCS.toString(16) + ':' + ip.toString(16).padStart(4,'0') +
-          ' IF=' + (hltIF?1:0) +
-          ' AX=0x' + gr16(0).toString(16).padStart(4,'0') +
-          ' flags=0x' + flagsToWord().toString(16).padStart(4,'0'));
+        /* [JIT-HLT] suppressed to reduce console flood during debugging */
         // Dump VGA text buffer to see error message on screen
         if (hltCS <= 0x10 && !hltIF) {
           try {

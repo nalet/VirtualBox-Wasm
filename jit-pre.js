@@ -692,9 +692,12 @@ function execBlock(cpuP, ramB, maxInsn) {
   // Bail immediately if Trap Flag is set — IEM must handle #DB exceptions
   if (flags & 0x100) return 0;
 
-  // Bail for protected mode — let IEM handle all PM execution
-  // (diagnostic: isolate JIT vs IEM as source of PM triple fault)
-  if (protMode) return 0;
+  // Bail for PM with IF=1 — IEM must handle interrupt injection.
+  // The JIT's forced timer polling causes hardware interrupts to fire
+  // during PM execution. If the guest IDT doesn't handle them correctly
+  // (e.g., ISOLINUX PM with incomplete IDT), this causes triple faults.
+  // PM code with IF=0 is safe since no interrupts will be injected.
+  if (protMode && (flags & 0x200)) return 0;
 
   // Initialize lazy flags from current RFLAGS
   loadFlags(flags);

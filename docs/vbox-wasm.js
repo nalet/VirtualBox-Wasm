@@ -197,13 +197,16 @@ globalThis.VBoxJIT = (function() {
   let a20Mask = 4294967295;
   // default: A20 enabled (all bits pass)
   // Read byte from guest physical address, ROM-aware
+  // IMPORTANT: ramBase only covers low RAM (0-0x9FFFF). Addresses >= 0xA0000
+  // (VGA MMIO, ROM area, high RAM above 1MB) are in separate PGM ranges and
+  // cannot be accessed via ramBase. Bail to IEM for those.
   function guestRb(addr) {
     if (romBufSize > 0 && addr >= romGCPhysStart && addr < romGCPhysEnd) return mem8[romBufBase + (addr - romGCPhysStart)];
-    const off = ramBase + addr;
-    if (off >= mem8.length) {
+    if (addr >= 655360) {
       mmioFault = true;
       return 255;
     }
+    const off = ramBase + addr;
     return mem8[off];
   }
   // Read word from guest physical address, ROM-aware
@@ -212,11 +215,11 @@ globalThis.VBoxJIT = (function() {
       const off = romBufBase + (addr - romGCPhysStart);
       return dv.getUint16(off, true);
     }
-    const off = ramBase + addr;
-    if (off + 2 > mem8.length) {
+    if (addr >= 655360) {
       mmioFault = true;
       return 65535;
     }
+    const off = ramBase + addr;
     return dv.getUint16(off, true);
   }
   // Read dword from guest physical address, ROM-aware
@@ -225,11 +228,11 @@ globalThis.VBoxJIT = (function() {
       const off = romBufBase + (addr - romGCPhysStart);
       return dv.getUint32(off, true);
     }
-    const off = ramBase + addr;
-    if (off + 4 > mem8.length) {
+    if (addr >= 655360) {
       mmioFault = true;
       return 4294967295;
     }
+    const off = ramBase + addr;
     return dv.getUint32(off, true);
   }
   // Read CPU register (64-bit, return as Number — safe for 32-bit values)
@@ -319,16 +322,13 @@ globalThis.VBoxJIT = (function() {
       }
     }
     addr = (addr & a20Mask) >>> 0;
-    // VGA memory range: bail to IEM so VGA device sees writes via PGM MMIO handler
-    if (addr >= 655360 && addr < 786432) {
+    // Bail for addresses outside low RAM (0-0x9FFFF): VGA MMIO, ROM area,
+    // and high RAM (>1MB) are in separate PGM ranges not covered by ramBase.
+    if (addr >= 655360) {
       mmioFault = true;
       return;
     }
     const off = ramBase + addr;
-    if (off >= mem8.length) {
-      mmioFault = true;
-      return;
-    }
     mem8[off] = v;
   }
   function ww(addr, v) {
@@ -340,15 +340,11 @@ globalThis.VBoxJIT = (function() {
       }
     }
     addr = (addr & a20Mask) >>> 0;
-    if (addr >= 655360 && addr < 786432) {
+    if (addr >= 655360) {
       mmioFault = true;
       return;
     }
     const off = ramBase + addr;
-    if (off + 2 > mem8.length) {
-      mmioFault = true;
-      return;
-    }
     dv.setUint16(off, v & 65535, true);
   }
   function wd(addr, v) {
@@ -360,15 +356,11 @@ globalThis.VBoxJIT = (function() {
       }
     }
     addr = (addr & a20Mask) >>> 0;
-    if (addr >= 655360 && addr < 786432) {
+    if (addr >= 655360) {
       mmioFault = true;
       return;
     }
     const off = ramBase + addr;
-    if (off + 4 > mem8.length) {
-      mmioFault = true;
-      return;
-    }
     dv.setUint32(off, v >>> 0, true);
   }
   // ── GPR access by index ──
@@ -1022,10 +1014,10 @@ globalThis.VBoxJIT = (function() {
     // on decode failure, falling back to IEM.
     const addrAccessible = addr => {
       if (romBufSize > 0 && addr >= romGCPhysStart && addr < romGCPhysEnd) return true;
-      // ROM range (0xC0000-0xFFFFF) is handled by ROM buffer above — if not in ROM, reject
-      if (addr >= 786432 && addr < 1048576) return false;
-      // Must be within the flat RAM buffer range
-      return addr >= 0 && addr + 16 <= ramSize;
+      // Only low RAM (0-0x9FFFF) is correctly mapped via ramBase.
+      // VGA MMIO, ROM area (not in romBuf), and high RAM (>1MB) are in
+      // separate PGM ranges — must bail to IEM for those.
+      return addr >= 0 && addr + 16 <= 655360;
     };
     const inRomRange = addr => romBufSize > 0 && addr >= romGCPhysStart && addr < romGCPhysEnd;
     if (pagingOn) {
@@ -2434,8 +2426,8 @@ globalThis.VBoxJIT = (function() {
                   iter = maxInsn;
                   break;
                 }
-                if (addrLo >= 0 && addrHi <= ramSize && (addrHi <= 655360 || addrLo >= 786432)) {
-                  // Fast path: all in RAM (not MMIO 0xA0000-0xBFFFF)
+                if (addrLo >= 0 && addrHi <= 655360) {
+                  // Fast path: all in low RAM (0-0x9FFFF)
                   if (codeSegStart < 786432 && addrHi > codeSegStart && addrLo < codeSegEnd) {
                     ilen = 0;
                     iter = maxInsn;
@@ -2482,8 +2474,8 @@ globalThis.VBoxJIT = (function() {
                   iter = maxInsn;
                   break;
                 }
-                if (addrLo >= 0 && addrHi <= ramSize && (addrHi <= 655360 || addrLo >= 786432)) {
-                  // Fast path: all in RAM (not MMIO)
+                if (addrLo >= 0 && addrHi <= 655360) {
+                  // Fast path: all in low RAM (0-0x9FFFF)
                   if (codeSegStart < 786432 && addrHi > codeSegStart && addrLo < codeSegEnd) {
                     ilen = 0;
                     iter = maxInsn;
@@ -2547,9 +2539,9 @@ globalThis.VBoxJIT = (function() {
                   iter = maxInsn;
                   break;
                 }
-                // Both src and dst must be in RAM (not MMIO 0xA0000-0xBFFFF, not ROM)
-                const srcInRam = srcLo >= 0 && srcHi <= ramSize && (srcHi <= 655360 || srcLo >= 786432);
-                const dstInRam = dstLo >= 0 && dstHi <= ramSize && (dstHi <= 655360 || dstLo >= 786432);
+                // Both src and dst must be in low RAM (0-0x9FFFF)
+                const srcInRam = srcLo >= 0 && srcHi <= 655360;
+                const dstInRam = dstLo >= 0 && dstHi <= 655360;
                 if (srcInRam && dstInRam) {
                   if (codeSegStart < 786432 && dstHi > codeSegStart && dstLo < codeSegEnd) {
                     ilen = 0;
@@ -2601,8 +2593,8 @@ globalThis.VBoxJIT = (function() {
                   iter = maxInsn;
                   break;
                 }
-                const srcOk5 = srcLo5 >= 0 && srcHi5 <= ramSize && (srcHi5 <= 655360 || srcLo5 >= 786432);
-                const dstOk5 = dstLo5 >= 0 && dstHi5 <= ramSize && (dstHi5 <= 655360 || dstLo5 >= 786432);
+                const srcOk5 = srcLo5 >= 0 && srcHi5 <= 655360;
+                const dstOk5 = dstLo5 >= 0 && dstHi5 <= 655360;
                 if (srcOk5 && dstOk5) {
                   if (codeSegStart < 786432 && dstHi5 > codeSegStart && dstLo5 < codeSegEnd) {
                     ilen = 0;

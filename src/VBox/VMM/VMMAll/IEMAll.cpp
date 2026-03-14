@@ -177,12 +177,13 @@
 # include <emscripten.h>
 # include <iprt/mem.h>
 
-EM_JS(int, wasmJitExecBlock, (void *pCpumCtx, void *pvRAM, int maxInsn, void *pvHighRAM, int cbHighRAM), {
+EM_JS(int, wasmJitExecBlock, (void *pCpumCtx, void *pvRAM, int maxInsn, void *pvHighRAM, int cbHighRAM, int fIrqPending), {
     if (typeof globalThis.VBoxJIT === 'undefined') return 0;
     if (!globalThis.VBoxJIT._initialized) {
         globalThis.VBoxJIT.init(wasmMemory);
         globalThis.VBoxJIT._initialized = true;
     }
+    globalThis.VBoxJIT._irqPending = fIrqPending;
     return globalThis.VBoxJIT.execBlock(Number(pCpumCtx), Number(pvRAM), maxInsn, Number(pvHighRAM), cbHighRAM);
 });
 
@@ -1246,8 +1247,9 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                 {
                     uint32_t cBatch = RT_MIN(cMaxInstructionsGccStupidity, 4096);
                     wasmJitSetA20(PGMPhysIsA20Enabled(pVCpu) ? 1 : 0);
+                    int fIrqPending = VMCPU_FF_IS_ANY_SET(pVCpu, VMCPU_FF_INTERRUPT_APIC | VMCPU_FF_INTERRUPT_PIC) ? 1 : 0;
                     int cJitInsns = wasmJitExecBlock(&pVCpu->cpum.GstCtx, s_pvJitRAM, cBatch,
-                                                     s_pvJitHighRAM, (int)s_cbJitHighRAM);
+                                                     s_pvJitHighRAM, (int)s_cbJitHighRAM, fIrqPending);
                     if (cJitInsns > 0)
                     {
                         pVCpu->iem.s.cInstructions += cJitInsns;

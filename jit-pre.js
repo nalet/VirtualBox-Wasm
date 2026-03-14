@@ -1745,7 +1745,7 @@ function execBlock(cpuP, ramB, maxInsn) {
       const wasIF0 = !(flags & 0x200);
       flags |= 0x200;
       ilen += 1;
-      if (wasIF0 && executed > 0) {
+      if (wasIF0 && executed > 0 && globalThis.VBoxJIT._irqPending) {
         // Transitioning IF from 0→1: bail to IEM so pending interrupts
         // (PIT timer, keyboard IRQ) can be delivered.  On real x86, one
         // instruction after STI executes before interrupts are serviced,

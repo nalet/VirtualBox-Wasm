@@ -2312,7 +2312,7 @@ globalThis.VBoxJIT = (function() {
           const wasIF0 = !(flags & 512);
           flags |= 512;
           ilen += 1;
-          if (wasIF0 && executed > 0) {
+          if (wasIF0 && executed > 0 && globalThis.VBoxJIT._irqPending) {
             // Transitioning IF from 0→1: bail to IEM so pending interrupts
             // (PIT timer, keyboard IRQ) can be delivered.  On real x86, one
             // instruction after STI executes before interrupts are serviced,
@@ -11088,12 +11088,13 @@ function wasmCallFuncPtrTrampoline(pfn, cArgs, pArgs) {
   return -1;
 }
 
-function wasmJitExecBlock(pCpumCtx, pvRAM, maxInsn, pvHighRAM, cbHighRAM) {
+function wasmJitExecBlock(pCpumCtx, pvRAM, maxInsn, pvHighRAM, cbHighRAM, fIrqPending) {
   if (typeof globalThis.VBoxJIT === "undefined") return 0;
   if (!globalThis.VBoxJIT._initialized) {
     globalThis.VBoxJIT.init(wasmMemory);
     globalThis.VBoxJIT._initialized = true;
   }
+  globalThis.VBoxJIT._irqPending = fIrqPending;
   return globalThis.VBoxJIT.execBlock(Number(pCpumCtx), Number(pvRAM), maxInsn, Number(pvHighRAM), cbHighRAM);
 }
 

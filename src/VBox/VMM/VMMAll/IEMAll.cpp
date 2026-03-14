@@ -1229,9 +1229,23 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                     else
                         s_cRomRefreshNext = UINT64_MAX; /* stop re-copying */
                 }
-                /* Drain keyboard scancodes from JS ring buffer on EMT thread */
-                wasmKbdDrainQueue();
-                if (s_pvJitRAM && s_cIemAfterJitBail == 0)
+                /* Drain keyboard scancodes from JS ring buffer on EMT thread.
+                   wasmKbdDrainQueue puts scancodes into DrvKeyboardQueue's PDM
+                   queue which sets VM_FF_PDM_QUEUES.  The EM main loop flushes
+                   the queue → PS2K → IRQ1 → VMCPU_FF_INTERRUPT_PIC.  We must
+                   skip the JIT when (a) scancodes were just drained, so the EM
+                   loop gets to flush the PDM queue promptly, or (b) hardware
+                   interrupts are pending, so IEM's per-instruction force-flag
+                   check can hand control back at the first STI window.  Without
+                   this, the JIT batches 4096 iterations of the BIOS INT 16h
+                   CLI/STI busy-wait and always returns with IF=0, creating a
+                   deadlock where the keyboard IRQ can never be injected. */
+                int cKbdDrained = wasmKbdDrainQueue();
+                if (s_pvJitRAM && s_cIemAfterJitBail == 0
+                    && cKbdDrained == 0
+                    && !VMCPU_FF_IS_ANY_SET(pVCpu, VMCPU_FF_INTERRUPT_APIC
+                                                 | VMCPU_FF_INTERRUPT_PIC
+                                                 | VMCPU_FF_INTERRUPT_NMI))
                 {
                     uint32_t cBatch = RT_MIN(cMaxInstructionsGccStupidity, 4096);
                     wasmJitSetA20(PGMPhysIsA20Enabled(pVCpu) ? 1 : 0);

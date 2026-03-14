@@ -821,6 +821,14 @@
                 ' read=0x' + kbdReadOff.toString(16) +
                 ' size=' + kbdBufSize);
               appendLine('Keyboard: direct SharedArrayBuffer input active', 'info');
+              // Auto-inject Enter for ISOLINUX boot prompt after 2 minutes.
+              // If ISOLINUX has a timeout it will boot sooner via PIT timer;
+              // this is a safety net in case the timeout is disabled.
+              setTimeout(function() {
+                console.log('[KBD] Auto-injecting Enter for ISOLINUX boot');
+                kbdPutScancodeDirect(0x1C); // Enter make
+                setTimeout(function() { kbdPutScancodeDirect(0x9C); }, 50); // Enter break
+              }, 120000);
             }
           } catch(e) { /* not ready yet */ }
         }

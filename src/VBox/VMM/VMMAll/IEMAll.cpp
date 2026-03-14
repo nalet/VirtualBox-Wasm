@@ -201,18 +201,26 @@ EM_JS(void, wasmJitSetRomBuffer, (void *pvROM, int cbROM, int uGCPhysStart), {
         globalThis.VBoxJIT.setRomBuffer(Number(pvROM), cbROM, uGCPhysStart);
 });
 
-static void    *s_pvJitRAM    = NULL;  /* NULL until PGMPhysGCPhys2CCPtr succeeds */
-static bool     s_fJitRomDone = false; /* true once ROM copy succeeded */
-static uint32_t s_cJitRetries = 0;     /* throttle counter for RAM init retries */
-static uint32_t s_cRomRetries = 0;     /* throttle counter for ROM copy retries */
+EM_JS(void, wasmJitSetHighRAM, (void *pvBase, int cbSize), {
+    console.log('[JIT] setHighRAM: base=0x' + Number(pvBase).toString(16) + ' size=' + cbSize);
+    if (typeof globalThis.VBoxJIT !== 'undefined' && globalThis.VBoxJIT.setHighRAM)
+        globalThis.VBoxJIT.setHighRAM(Number(pvBase), cbSize);
+});
+
+static void    *s_pvJitRAM      = NULL;  /* NULL until PGMPhysGCPhys2CCPtr succeeds */
+static void    *s_pvJitHighRAM  = NULL;  /* NULL until high RAM init succeeds */
+static bool     s_fHighRAMTried = false; /* true once high RAM init has been attempted */
+static bool     s_fJitRomDone   = false; /* true once ROM copy succeeded */
+static uint32_t s_cJitRetries   = 0;     /* throttle counter for RAM init retries */
+static uint32_t s_cRomRetries   = 0;     /* throttle counter for ROM copy retries */
 
 /* Defined in wasm-main.cpp — stores RAM base in shared Wasm memory for JS display */
 extern "C" void wasmJitSetGuestRAM(void *pv);
 
 static void iemJitEnsureInit(PVMCC pVM)
 {
-    /* Fast path: fully initialised */
-    if (RT_LIKELY(s_pvJitRAM && s_fJitRomDone))
+    /* Fast path: fully initialised (high RAM is optional — don't block on it) */
+    if (RT_LIKELY(s_pvJitRAM && s_fHighRAMTried && s_fJitRomDone))
         return;
 
     /* ── Phase 1: get flat RAM pointer ── */
@@ -261,6 +269,33 @@ static void iemJitEnsureInit(PVMCC pVM)
         }
         if (!s_pvJitRAM)
             return; /* Will retry on next throttle tick */
+    }
+
+    /* ── Phase 1b: get high RAM pointer (>= 0x100000) ── */
+    if (!s_fHighRAMTried && s_pvJitRAM)
+    {
+        s_fHighRAMTried = true; /* only try once — don't block fast path on failure */
+        PGMPAGEMAPLOCK Lock;
+        void *pv = NULL;
+        int rc = PGMPhysGCPhys2CCPtr(pVM, 0x100000, &pv, &Lock);
+        if (RT_SUCCESS(rc) && pv)
+        {
+            s_pvJitHighRAM = pv;
+            /* Guest has 32MB RAM → high RAM = 0x100000 to 0x1FFFFFF (31MB) */
+            uint32_t cbHighRAM = (32U * _1M) - 0x100000;
+            wasmJitSetHighRAM(pv, (int)cbHighRAM);
+            char szMsg[128];
+            RTStrPrintf(szMsg, sizeof(szMsg),
+                        "High RAM init OK: pv=%p size=0x%x (%uMB)",
+                        pv, cbHighRAM, cbHighRAM >> 20);
+            wasmJitLog(szMsg);
+        }
+        else
+        {
+            char szMsg[80];
+            RTStrPrintf(szMsg, sizeof(szMsg), "High RAM init fail: rc=%d", rc);
+            wasmJitLog(szMsg);
+        }
     }
 
     /* ── Phase 2: copy ROM (0xC0000–0xFFFFF = 256 KB) ── */
@@ -1215,7 +1250,7 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                         rcStrict = VINF_SUCCESS;
                         break;
                     }
-                    /* JIT returned 0 — it bailed on the very first instruction (I/O, etc.).
+                    /* JIT bailed on the very first instruction (I/O, segment change, etc.).
                        Let IEM handle the next few instructions to cover the remainder of
                        typical polling loops (IN; TEST; JNZ) without the overhead of a
                        wasted JIT call for just 2-3 instructions. */

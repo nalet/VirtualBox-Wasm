@@ -168,6 +168,15 @@ globalThis.VBoxJIT = (function() {
   // guest physical start (0xC0000)
   let romGCPhysEnd = 0;
   // guest physical end (0x100000)
+  // High RAM (>= 0x100000) — set by C++ via wasmJitSetHighRAM
+  // PGM allocates high RAM in a separate range from low RAM (0-0x9FFFF).
+  // highRamPtr is the Wasm memory offset of GCPhys 0x100000.
+  let highRamPtr = 0;
+  // Wasm memory offset for GCPhys 0x100000
+  let highRamSize = 0;
+  // size in bytes (e.g. 31MB for 32MB guest)
+  let highRamEnd = 0;
+  // GCPhys end = 0x100000 + highRamSize
   function init(memory) {
     mem8 = new Uint8Array(memory.buffer);
     dv = new DataView(memory.buffer);
@@ -186,6 +195,13 @@ globalThis.VBoxJIT = (function() {
     romGCPhysEnd = gcPhysStart + bufSize;
     console.log("[JIT] ROM buffer set: base=0x" + bufPtr.toString(16) + " size=" + (bufSize / 1024) + "KB range=0x" + gcPhysStart.toString(16) + "-0x" + romGCPhysEnd.toString(16));
   }
+  // Called from C++ after PGMPhysGCPhys2CCPtr maps high RAM
+  function setHighRAM(ptr, size) {
+    highRamPtr = ptr;
+    highRamSize = size;
+    highRamEnd = 1048576 + size;
+    console.log("[JIT] High RAM set: ptr=0x" + ptr.toString(16) + " size=" + (size >> 20) + "MB range=0x100000-0x" + highRamEnd.toString(16));
+  }
   // MMIO fault flag: set when a guest memory access goes to an MMIO address
   // (outside Wasm linear memory). The main loop checks this flag and bails
   // to IEM so the instruction is re-executed via the PGM MMIO handler.
@@ -196,43 +212,34 @@ globalThis.VBoxJIT = (function() {
   // contents than IEM.  Set via globalThis.VBoxJIT._a20 (from wasmJitSetA20).
   let a20Mask = 4294967295;
   // default: A20 enabled (all bits pass)
-  // Read byte from guest physical address, ROM-aware
-  // IMPORTANT: ramBase only covers low RAM (0-0x9FFFF). Addresses >= 0xA0000
-  // (VGA MMIO, ROM area, high RAM above 1MB) are in separate PGM ranges and
-  // cannot be accessed via ramBase. Bail to IEM for those.
-  function guestRb(addr) {
-    if (romBufSize > 0 && addr >= romGCPhysStart && addr < romGCPhysEnd) return mem8[romBufBase + (addr - romGCPhysStart)];
-    if (addr >= 655360) {
+  // Resolve guest physical address to Wasm memory offset.
+  // Returns the offset, or sets mmioFault and returns -1 for unmapped addresses.
+  // Memory map: low RAM (0-0x9FFFF), VGA MMIO (0xA0000-0xBFFFF) → bail,
+  // ROM (0xC0000-0xFFFFF) → romBuf, high RAM (0x100000+) → highRamPtr.
+  function resolvePhys(addr) {
+    if (addr < 655360) return ramBase + addr;
+    if (addr >= 1048576) {
+      if (highRamPtr && addr < highRamEnd) return highRamPtr + (addr - 1048576);
       mmioFault = true;
-      return 255;
+      return -1;
     }
-    const off = ramBase + addr;
+    if (romBufSize > 0 && addr >= romGCPhysStart && addr < romGCPhysEnd) return romBufBase + (addr - romGCPhysStart);
+    mmioFault = true;
+    return -1;
+  }
+  function guestRb(addr) {
+    const off = resolvePhys(addr);
+    if (off < 0) return 255;
     return mem8[off];
   }
-  // Read word from guest physical address, ROM-aware
   function guestRw(addr) {
-    if (romBufSize > 0 && addr >= romGCPhysStart && addr < romGCPhysEnd) {
-      const off = romBufBase + (addr - romGCPhysStart);
-      return dv.getUint16(off, true);
-    }
-    if (addr >= 655360) {
-      mmioFault = true;
-      return 65535;
-    }
-    const off = ramBase + addr;
+    const off = resolvePhys(addr);
+    if (off < 0) return 65535;
     return dv.getUint16(off, true);
   }
-  // Read dword from guest physical address, ROM-aware
   function guestRd(addr) {
-    if (romBufSize > 0 && addr >= romGCPhysStart && addr < romGCPhysEnd) {
-      const off = romBufBase + (addr - romGCPhysStart);
-      return dv.getUint32(off, true);
-    }
-    if (addr >= 655360) {
-      mmioFault = true;
-      return 4294967295;
-    }
-    const off = ramBase + addr;
+    const off = resolvePhys(addr);
+    if (off < 0) return 4294967295;
     return dv.getUint32(off, true);
   }
   // Read CPU register (64-bit, return as Number — safe for 32-bit values)
@@ -313,6 +320,31 @@ globalThis.VBoxJIT = (function() {
     addr = (addr & a20Mask) >>> 0;
     return guestRd(addr);
   }
+  // Resolve guest physical address for writes (no ROM — ROM is read-only)
+  function resolvePhysW(addr) {
+    if (addr < 655360) return ramBase + addr;
+    if (addr >= 1048576) {
+      if (highRamPtr && addr < highRamEnd) return highRamPtr + (addr - 1048576);
+      mmioFault = true;
+      return -1;
+    }
+    // 0xA0000-0xFFFFF: VGA MMIO and ROM area — bail to IEM
+    mmioFault = true;
+    return -1;
+  }
+  // Resolve a contiguous range [lo, hi) to Wasm offset of lo (read, includes ROM)
+  function resolveRange(lo, hi) {
+    if (lo >= 0 && hi <= 655360) return ramBase + lo;
+    if (lo >= 1048576 && hi <= highRamEnd && highRamPtr) return highRamPtr + (lo - 1048576);
+    if (romBufSize > 0 && lo >= romGCPhysStart && hi <= romGCPhysEnd) return romBufBase + (lo - romGCPhysStart);
+    return -1;
+  }
+  // Resolve a contiguous range [lo, hi) to Wasm offset of lo (write, excludes ROM)
+  function resolveRangeW(lo, hi) {
+    if (lo >= 0 && hi <= 655360) return ramBase + lo;
+    if (lo >= 1048576 && hi <= highRamEnd && highRamPtr) return highRamPtr + (lo - 1048576);
+    return -1;
+  }
   function wb(addr, v) {
     if (_pagingOn) {
       addr = translateLinear(addr >>> 0);
@@ -322,13 +354,8 @@ globalThis.VBoxJIT = (function() {
       }
     }
     addr = (addr & a20Mask) >>> 0;
-    // Bail for addresses outside low RAM (0-0x9FFFF): VGA MMIO, ROM area,
-    // and high RAM (>1MB) are in separate PGM ranges not covered by ramBase.
-    if (addr >= 655360) {
-      mmioFault = true;
-      return;
-    }
-    const off = ramBase + addr;
+    const off = resolvePhysW(addr);
+    if (off < 0) return;
     mem8[off] = v;
   }
   function ww(addr, v) {
@@ -340,11 +367,8 @@ globalThis.VBoxJIT = (function() {
       }
     }
     addr = (addr & a20Mask) >>> 0;
-    if (addr >= 655360) {
-      mmioFault = true;
-      return;
-    }
-    const off = ramBase + addr;
+    const off = resolvePhysW(addr);
+    if (off < 0) return;
     dv.setUint16(off, v & 65535, true);
   }
   function wd(addr, v) {
@@ -356,11 +380,8 @@ globalThis.VBoxJIT = (function() {
       }
     }
     addr = (addr & a20Mask) >>> 0;
-    if (addr >= 655360) {
-      mmioFault = true;
-      return;
-    }
-    const off = ramBase + addr;
+    const off = resolvePhysW(addr);
+    if (off < 0) return;
     dv.setUint32(off, v >>> 0, true);
   }
   // ── GPR access by index ──
@@ -796,48 +817,48 @@ globalThis.VBoxJIT = (function() {
   function push16(v, ssBase) {
     if (_ssBig) {
       let esp = (gr32(4) - 2) >>> 0;
-      sr32(4, esp);
       ww(ssBase + esp, v);
+      if (!mmioFault) sr32(4, esp);
     } else {
       let sp = (gr16(4) - 2) & 65535;
-      sr16(4, sp);
       ww(ssBase + sp, v);
+      if (!mmioFault) sr16(4, sp);
     }
   }
   function pop16(ssBase) {
     if (_ssBig) {
       const esp = gr32(4);
       const v = rw(ssBase + esp);
-      sr32(4, (esp + 2) >>> 0);
+      if (!mmioFault) sr32(4, (esp + 2) >>> 0);
       return v;
     } else {
       const sp = gr16(4);
       const v = rw(ssBase + sp);
-      sr16(4, (sp + 2) & 65535);
+      if (!mmioFault) sr16(4, (sp + 2) & 65535);
       return v;
     }
   }
   function push32(v, ssBase) {
     if (_ssBig) {
       let esp = (gr32(4) - 4) >>> 0;
-      sr32(4, esp);
       wd(ssBase + esp, v);
+      if (!mmioFault) sr32(4, esp);
     } else {
       let sp = (gr16(4) - 4) & 65535;
-      sr16(4, sp);
       wd(ssBase + sp, v);
+      if (!mmioFault) sr16(4, sp);
     }
   }
   function pop32(ssBase) {
     if (_ssBig) {
       const esp = gr32(4);
       const v = rd(ssBase + esp);
-      sr32(4, (esp + 4) >>> 0);
+      if (!mmioFault) sr32(4, (esp + 4) >>> 0);
       return v;
     } else {
       const sp = gr16(4);
       const v = rd(ssBase + sp);
-      sr16(4, (sp + 4) & 65535);
+      if (!mmioFault) sr16(4, (sp + 4) & 65535);
       return v;
     }
   }
@@ -865,8 +886,11 @@ globalThis.VBoxJIT = (function() {
     const pse = !!(cr4 & 16);
     // PDE: bits [31:22]
     const pdeAddr = cr3 + ((linearAddr >>> 22) << 2);
-    const pdeOff = ramBase + pdeAddr;
-    if (pdeOff + 4 > mem8.length) return -1;
+    const pdeOff = resolvePhys(pdeAddr);
+    if (pdeOff < 0) {
+      mmioFault = false;
+      return -1;
+    }
     const pde = dv.getUint32(pdeOff, true);
     if (!(pde & 1)) return -1;
     // not present
@@ -881,8 +905,11 @@ globalThis.VBoxJIT = (function() {
     // PTE: bits [21:12]
     const ptBase = pde & 4294963200;
     const pteAddr = ptBase + (((linearAddr >>> 12) & 1023) << 2);
-    const pteOff = ramBase + pteAddr;
-    if (pteOff + 4 > mem8.length) return -1;
+    const pteOff = resolvePhys(pteAddr);
+    if (pteOff < 0) {
+      mmioFault = false;
+      return -1;
+    }
     const pte = dv.getUint32(pteOff, true);
     if (!(pte & 1)) return -1;
     // not present
@@ -905,8 +932,11 @@ globalThis.VBoxJIT = (function() {
     // PDE: bits [29:21]
     const pdBase = pdpteLo & 4294963200;
     const pdeIdx = (linearAddr >>> 21) & 511;
-    const pdeOff = ramBase + pdBase + pdeIdx * 8;
-    if (pdeOff + 4 > mem8.length) return -1;
+    const pdeOff = resolvePhys(pdBase + pdeIdx * 8);
+    if (pdeOff < 0) {
+      mmioFault = false;
+      return -1;
+    }
     const pdeLo = dv.getUint32(pdeOff, true);
     if (!(pdeLo & 1)) return -1;
     // 2MB large page?
@@ -919,8 +949,11 @@ globalThis.VBoxJIT = (function() {
     // PTE: bits [20:12]
     const ptBase = pdeLo & 4294963200;
     const pteIdx = (linearAddr >>> 12) & 511;
-    const pteOff = ramBase + ptBase + pteIdx * 8;
-    if (pteOff + 4 > mem8.length) return -1;
+    const pteOff = resolvePhys(ptBase + pteIdx * 8);
+    if (pteOff < 0) {
+      mmioFault = false;
+      return -1;
+    }
     const pteLo = dv.getUint32(pteOff, true);
     if (!(pteLo & 1)) return -1;
     const phys = ((pteLo & 4294963200) | (linearAddr & 4095)) >>> 0;
@@ -983,33 +1016,29 @@ globalThis.VBoxJIT = (function() {
     let ip = csDefBig ? rr32(R_IP) : rr16(R_IP);
     // Bail immediately if Trap Flag is set — IEM must handle #DB exceptions
     if (flags & 256) return 0;
-    // PM execution tracer: log first N PM instructions to find the bug
-    if (protMode) {
-      if (!self._pmTrace) self._pmTrace = {
-        count: 0,
-        logged: 0,
-        maxLog: 500,
-        batches: 0,
-        bailed: false,
-        log: []
-      };
-      const pmt = self._pmTrace;
-      pmt.batches++;
-      // After logging enough, bail permanently to prevent triple fault
-      if (pmt.bailed) return 0;
-    }
+    // Protected mode: the JIT handles flat-model PM (base=0, limit=FFFFFFFF)
+    // directly. Per-instruction bails handle segment-changing instructions
+    // (MOV Sreg, RETF, INT, IRET, etc.) that need GDT/IDT lookup.
     // Initialize lazy flags from current RFLAGS
     loadFlags(flags);
     lazySize = csDefBig ? 4 : 2;
     // default operand size
     // Linear PC for diagnostics and ROM checks
     const linearPC = csBase + ip;
-    // Track code segment range for self-modifying code detection.
-    // REP STOSB/MOVSB can overwrite the current code segment (e.g. BIOS memory
-    // test). We detect this and bail to IEM rather than executing corrupted code.
-    const codeSegStart = csBase;
+    // Self-modifying code detection: bail if a write overlaps the code being
+    // executed. In real mode, track the 64K code segment. In PM flat model,
+    // track just the current 4KB code page (full segment is 0-4GB).
     const csLimit = rr32(S_CS + SEG_LIMIT);
-    const codeSegEnd = csDefBig ? (csBase + Math.min(csLimit + 1, 4294967296)) : (csBase + 65536);
+    const codeSegIsFlat = csDefBig && csBase === 0 && csLimit >= 4294967295;
+    let codeSegStart, codeSegEnd;
+    if (codeSegIsFlat) {
+      // Will be updated per-instruction from codePhys below
+      codeSegStart = 0;
+      codeSegEnd = 0;
+    } else {
+      codeSegStart = csBase;
+      codeSegEnd = csDefBig ? (csBase + Math.min(csLimit + 1, 4294967296)) : (csBase + 65536);
+    }
     // Helper to write IP back to CPUMCTX with correct width
     function wrIP(val) {
       if (csDefBig) wr32(R_IP, val & 4294967295); else wr16(R_IP, val & 65535);
@@ -1030,11 +1059,11 @@ globalThis.VBoxJIT = (function() {
     // the flat buffer — if not, the JIT will execute stale data and bail quickly
     // on decode failure, falling back to IEM.
     const addrAccessible = addr => {
+      if (addr >= 0 && addr + 16 <= 655360) return true;
+      // low RAM
       if (romBufSize > 0 && addr >= romGCPhysStart && addr < romGCPhysEnd) return true;
-      // Only low RAM (0-0x9FFFF) is correctly mapped via ramBase.
-      // VGA MMIO, ROM area (not in romBuf), and high RAM (>1MB) are in
-      // separate PGM ranges — must bail to IEM for those.
-      return addr >= 0 && addr + 16 <= 655360;
+      if (highRamPtr && addr >= 1048576 && addr + 16 <= highRamEnd) return true;
+      return false;
     };
     const inRomRange = addr => romBufSize > 0 && addr >= romGCPhysStart && addr < romGCPhysEnd;
     if (pagingOn) {
@@ -1077,6 +1106,11 @@ globalThis.VBoxJIT = (function() {
       if (!inRomRange(codePhys)) codePhys = (codePhys & a20Mask) >>> 0;
       if (codePhys < 0 || (!addrAccessible(codePhys))) break;
       // safety
+      // Update self-modifying code range for flat PM (track current 4KB page)
+      if (codeSegIsFlat) {
+        codeSegStart = codePhys & 4294963200;
+        codeSegEnd = codeSegStart + 4096;
+      }
       // Near page boundary: instruction might span two pages — bail to IEM
       if (pagingOn && (codePhys & 4095) > 4080) {
         executed = executed || 0;
@@ -1156,34 +1190,12 @@ globalThis.VBoxJIT = (function() {
       const opSize = csDefBig ? (opSizeOverride ? 2 : 4) : (opSizeOverride ? 4 : 2);
       // address size: inverted by 0x67 prefix
       const addrSize = csDefBig ? (addrSizeOverride ? 2 : 4) : (addrSizeOverride ? 4 : 2);
-      // Code bytes after prefixes — use ROM buffer if in ROM range
+      // Code bytes after prefixes — resolve physical address for code fetch
       const inROM = (codePhys >= romGCPhysStart && codePhys < romGCPhysEnd);
-      const ci = inROM ? (romBufBase + (codePhys - romGCPhysStart) + pos) : (ramBase + codePhys + pos);
+      const inHighRAM = (!inROM && codePhys >= 1048576);
+      const ci = inROM ? (romBufBase + (codePhys - romGCPhysStart) + pos) : inHighRAM ? (highRamPtr + (codePhys - 1048576) + pos) : (ramBase + codePhys + pos);
       let ilen = pos;
       // instruction length accumulator
-      // PM execution tracer: log opcode + state before execution
-      let _pmSnapBefore = null;
-      if (protMode && self._pmTrace && !self._pmTrace.bailed) {
-        const pmt = self._pmTrace;
-        if (pmt.logged < pmt.maxLog) {
-          _pmSnapBefore = {
-            ip,
-            op: b,
-            pos,
-            eax: gr32(0),
-            ecx: gr32(1),
-            edx: gr32(2),
-            ebx: gr32(3),
-            esp: gr32(4),
-            ebp: gr32(5),
-            esi: gr32(6),
-            edi: gr32(7),
-            fl: flags,
-            codeBytes: ""
-          };
-          for (let _i = 0; _i < 8; _i++) _pmSnapBefore.codeBytes += mem8[ci + _i].toString(16).padStart(2, "0");
-        }
-      }
       // ── Opcode dispatch ──
       switch (b) {
        // ──── NOP ────
@@ -2476,22 +2488,22 @@ globalThis.VBoxJIT = (function() {
                   iter = maxInsn;
                   break;
                 }
-                if (addrLo >= 0 && addrHi <= 655360) {
-                  // Fast path: all in low RAM (0-0x9FFFF)
-                  if (codeSegStart < 786432 && addrHi > codeSegStart && addrLo < codeSegEnd) {
-                    ilen = 0;
+                {
+                  const wOff = resolveRangeW(addrLo, addrHi);
+                  if (wOff >= 0) {
+                    if (!inRomRange(codePhys) && addrHi > codeSegStart && addrLo < codeSegEnd) {
+                      ilen = 0;
+                      iter = maxInsn;
+                      break;
+                    }
+                    mem8.fill(val, wOff, wOff + (addrHi - addrLo));
+                    di = (di + dir * byteCount) & aMask;
+                    cx = origCx - byteCount;
+                  } else {
+                    lastBailOp = b;
                     iter = maxInsn;
                     break;
                   }
-                  mem8.fill(val, ramBase + addrLo, ramBase + addrHi);
-                  di = (di + dir * byteCount) & aMask;
-                  cx = origCx - byteCount;
-                } else {
-                  // Slow path — bail to IEM for MMIO-touching REP STOS
-                  // (letting the loop run corrupts DI/CX when wb sets mmioFault)
-                  lastBailOp = b;
-                  iter = maxInsn;
-                  break;
                 }
                 srDI(di);
                 srCX(cx);
@@ -2524,38 +2536,32 @@ globalThis.VBoxJIT = (function() {
                   iter = maxInsn;
                   break;
                 }
-                if (addrLo >= 0 && addrHi <= 655360) {
-                  // Fast path: all in low RAM (0-0x9FFFF)
-                  if (codeSegStart < 786432 && addrHi > codeSegStart && addrLo < codeSegEnd) {
-                    ilen = 0;
+                {
+                  const wOff = resolveRangeW(addrLo, addrHi);
+                  if (wOff >= 0) {
+                    if (!inRomRange(codePhys) && addrHi > codeSegStart && addrLo < codeSegEnd) {
+                      ilen = 0;
+                      iter = maxInsn;
+                      break;
+                    }
+                    if (v === 0) {
+                      mem8.fill(0, wOff, wOff + totalBytes);
+                    } else {
+                      if (sz === 2) dv.setUint16(wOff, v, true); else dv.setUint32(wOff, v >>> 0, true);
+                      let filled = sz;
+                      while (filled < totalBytes) {
+                        const chunk = Math.min(filled, totalBytes - filled);
+                        mem8.copyWithin(wOff + filled, wOff, wOff + chunk);
+                        filled += chunk;
+                      }
+                    }
+                    di = (di + dir * totalBytes) & aMask;
+                    cx = origCxAB - cx;
+                  } else {
+                    lastBailOp = b;
                     iter = maxInsn;
                     break;
                   }
-                  const physLo = ramBase + addrLo;
-                  if (v === 0) {
-                    // Most common case: zeroing memory — single native fill
-                    if (totalBytes >= 1024 && statFastFillLogs < 5) {
-                      statFastFillLogs++;
-                      console.log("[JIT] REP STOS fast-fill zero " + totalBytes + " bytes at 0x" + addrLo.toString(16));
-                    }
-                    mem8.fill(0, physLo, physLo + totalBytes);
-                  } else {
-                    // Non-zero fill: write one unit, then exponential copyWithin doubling
-                    if (sz === 2) dv.setUint16(physLo, v, true); else dv.setUint32(physLo, v >>> 0, true);
-                    let filled = sz;
-                    while (filled < totalBytes) {
-                      const chunk = Math.min(filled, totalBytes - filled);
-                      mem8.copyWithin(physLo + filled, physLo, physLo + chunk);
-                      filled += chunk;
-                    }
-                  }
-                  di = (di + dir * totalBytes) & aMask;
-                  cx = origCxAB - cx;
-                } else {
-                  // Slow path — bail to IEM for MMIO-touching REP STOS
-                  lastBailOp = b;
-                  iter = maxInsn;
-                  break;
                 }
                 srDI(di);
                 srCX(cx);
@@ -2589,25 +2595,25 @@ globalThis.VBoxJIT = (function() {
                   iter = maxInsn;
                   break;
                 }
-                // Both src and dst must be in low RAM (0-0x9FFFF)
-                const srcInRam = srcLo >= 0 && srcHi <= 655360;
-                const dstInRam = dstLo >= 0 && dstHi <= 655360;
-                if (srcInRam && dstInRam) {
-                  if (codeSegStart < 786432 && dstHi > codeSegStart && dstLo < codeSegEnd) {
-                    ilen = 0;
+                {
+                  const srcOff = resolveRange(srcLo, srcHi);
+                  const dstOff = resolveRangeW(dstLo, dstHi);
+                  if (srcOff >= 0 && dstOff >= 0) {
+                    if (!inRomRange(codePhys) && dstHi > codeSegStart && dstLo < codeSegEnd) {
+                      ilen = 0;
+                      iter = maxInsn;
+                      break;
+                    }
+                    // copyWithin works even across different base offsets in same buffer
+                    mem8.copyWithin(dstOff, srcOff, srcOff + byteCount);
+                    si = (si + dir * byteCount) & aMask;
+                    di = (di + dir * byteCount) & aMask;
+                    cx = origCxA4 - byteCount;
+                  } else {
+                    lastBailOp = b;
                     iter = maxInsn;
                     break;
                   }
-                  // copyWithin handles overlapping regions correctly
-                  mem8.copyWithin(ramBase + dstLo, ramBase + srcLo, ramBase + srcHi);
-                  si = (si + dir * byteCount) & aMask;
-                  di = (di + dir * byteCount) & aMask;
-                  cx = origCxA4 - byteCount;
-                } else {
-                  // Slow path — bail to IEM for MMIO-touching REP MOVS
-                  lastBailOp = b;
-                  iter = maxInsn;
-                  break;
                 }
                 srSI(si);
                 srDI(di);
@@ -2643,23 +2649,24 @@ globalThis.VBoxJIT = (function() {
                   iter = maxInsn;
                   break;
                 }
-                const srcOk5 = srcLo5 >= 0 && srcHi5 <= 655360;
-                const dstOk5 = dstLo5 >= 0 && dstHi5 <= 655360;
-                if (srcOk5 && dstOk5) {
-                  if (codeSegStart < 786432 && dstHi5 > codeSegStart && dstLo5 < codeSegEnd) {
-                    ilen = 0;
+                {
+                  const srcOff5 = resolveRange(srcLo5, srcHi5);
+                  const dstOff5 = resolveRangeW(dstLo5, dstHi5);
+                  if (srcOff5 >= 0 && dstOff5 >= 0) {
+                    if (!inRomRange(codePhys) && dstHi5 > codeSegStart && dstLo5 < codeSegEnd) {
+                      ilen = 0;
+                      iter = maxInsn;
+                      break;
+                    }
+                    mem8.copyWithin(dstOff5, srcOff5, srcOff5 + totalBytes5);
+                    si = (si + dir * totalBytes5) & aMask;
+                    di = (di + dir * totalBytes5) & aMask;
+                    cx = origCxA5 - cx;
+                  } else {
+                    lastBailOp = b;
                     iter = maxInsn;
                     break;
                   }
-                  mem8.copyWithin(ramBase + dstLo5, ramBase + srcLo5, ramBase + srcHi5);
-                  si = (si + dir * totalBytes5) & aMask;
-                  di = (di + dir * totalBytes5) & aMask;
-                  cx = origCxA5 - cx;
-                } else {
-                  // Slow path — bail to IEM for MMIO-touching REP MOVS
-                  lastBailOp = b;
-                  iter = maxInsn;
-                  break;
                 }
                 srSI(si);
                 srDI(di);
@@ -4693,40 +4700,8 @@ globalThis.VBoxJIT = (function() {
         ip = (ip + ilen) & ipMask;
         executed++;
       }
-      // PM tracer: log the instruction that just executed
-      if (_pmSnapBefore && protMode && self._pmTrace && !self._pmTrace.bailed) {
-        const pmt = self._pmTrace;
-        pmt.count++;
-        if (pmt.logged < pmt.maxLog) {
-          const s = _pmSnapBefore;
-          const bail = lastBailOp >= 0 ? " BAIL" : (mmioFault ? " MMIO" : "");
-          const line = "#" + pmt.count + " IP=" + s.ip.toString(16).padStart(8, "0") + " op=" + s.op.toString(16).padStart(2, "0") + (s.pos > 0 ? " pfx=" + s.pos : "") + " [" + s.codeBytes + "]" + " EAX=" + s.eax.toString(16).padStart(8, "0") + " ECX=" + s.ecx.toString(16).padStart(8, "0") + " ESP=" + s.esp.toString(16).padStart(8, "0") + " ESI=" + s.esi.toString(16).padStart(8, "0") + " EDI=" + s.edi.toString(16).padStart(8, "0") + " FL=" + s.fl.toString(16) + bail;
-          pmt.log.push(line);
-          pmt.logged++;
-          if (pmt.logged >= pmt.maxLog) {
-            pmt.log.push("=== Trace limit reached (" + pmt.maxLog + ") ===");
-            pmt.bailed = true;
-            break;
-          }
-        }
-      }
     }
     // end for
-    // Write PM trace data to shared memory (readable from main thread)
-    if (self._pmTrace && self._pmTrace.log.length > 0 && !self._pmTrace.written) {
-      try {
-        const TRACE_OFF = 500 * 1024 * 1024;
-        // 500MB offset in Wasm heap
-        const traceStr = self._pmTrace.log.join("\n");
-        const enc = new TextEncoder;
-        const traceBytes = enc.encode(traceStr);
-        const len = Math.min(traceBytes.length, 6e4);
-        // cap at 60KB
-        dv.setUint32(TRACE_OFF, len, true);
-        mem8.set(traceBytes.subarray(0, len), TRACE_OFF + 4);
-        self._pmTrace.written = true;
-      } catch (e) {}
-    }
     // ── Store state back ──
     wrIP(ip);
     // Reconstruct RFLAGS
@@ -4991,6 +4966,7 @@ globalThis.VBoxJIT = (function() {
     execBlock: execBlockWrapped,
     init,
     setRomBuffer,
+    setHighRAM,
     setPortIO: function(inFn, outFn) {
       portInFn = inFn;
       portOutFn = outFn;
@@ -11083,6 +11059,11 @@ function wasmJitSetRomBuffer(pvROM, cbROM, uGCPhysStart) {
   if (typeof globalThis.VBoxJIT !== "undefined" && globalThis.VBoxJIT.setRomBuffer) globalThis.VBoxJIT.setRomBuffer(Number(pvROM), cbROM, uGCPhysStart);
 }
 
+function wasmJitSetHighRAM(pvBase, cbSize) {
+  console.log("[JIT] setHighRAM: base=0x" + Number(pvBase).toString(16) + " size=" + cbSize);
+  if (typeof globalThis.VBoxJIT !== "undefined" && globalThis.VBoxJIT.setHighRAM) globalThis.VBoxJIT.setHighRAM(Number(pvBase), cbSize);
+}
+
 // Imports from the Wasm binary.
 var _main, _wasmJitSetGuestRAM, _wasmJitGetGuestRAM, _pthread_self, _wasmDisplayGetFB, _wasmDisplayGetWidth, _wasmDisplayGetHeight, _wasmDisplayCheckDirty, _wasmDisplayGetFBSize, _wasmDisplayRefresh, _wasmDisplayGetRefreshCount, _wasmDisplayGetUpdateRectCount, _malloc, __emscripten_tls_init, __emscripten_proxy_main, __emscripten_thread_init, __emscripten_thread_crashed, _htonl, _htons, _ntohs, __emscripten_run_js_on_main_thread_done, __emscripten_run_js_on_main_thread, __emscripten_thread_free_data, __emscripten_thread_exit, __emscripten_check_mailbox, _setThrew, _emscripten_stack_set_limits, __emscripten_stack_restore, __emscripten_stack_alloc, _emscripten_stack_get_current, __indirect_function_table, wasmTable;
 
@@ -11262,6 +11243,7 @@ function assignWasmImports() {
     /** @export */ wasmJitExecBlock,
     /** @export */ wasmJitLog,
     /** @export */ wasmJitSetA20,
+    /** @export */ wasmJitSetHighRAM,
     /** @export */ wasmJitSetRomBuffer
   };
 }

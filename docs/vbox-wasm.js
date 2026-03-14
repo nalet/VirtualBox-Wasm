@@ -1020,11 +1020,16 @@ globalThis.VBoxJIT = (function() {
     let ip = csDefBig ? rr32(R_IP) : rr16(R_IP);
     // Bail immediately if Trap Flag is set — IEM must handle #DB exceptions
     if (flags & 256) return 0;
-    // Protected mode without paging: bail entirely so IEM handles all PM
-    // bootloader code (ISOLINUX PM trampoline, chain.c32, grub4dos).
-    // The JIT re-enters once the kernel enables paging (CR0.PG=1).
+    // Protected mode without paging: bail for non-flat segments.
+    // Flat PM (base=0, limit>=FFFFFFFF for CS/DS/SS) can be JIT'd directly.
+    // Non-flat PM (segment-based addressing) needs IEM for GDT lookups.
     if (protMode && !pagingOn) {
-      return 0;
+      const csLim = rr32(S_CS + SEG_LIMIT);
+      const dsLim = rr32(S_DS + SEG_LIMIT);
+      const ssLim = rr32(S_SS + SEG_LIMIT);
+      if (csBase !== 0 || dsBase !== 0 || ssBase !== 0 || csLim < 4294901760 || dsLim < 4294901760 || ssLim < 4294901760) {
+        return 0;
+      }
     }
     // Protected mode: the JIT handles flat-model PM (base=0, limit=FFFFFFFF)
     // directly. Per-instruction bails handle segment-changing instructions
@@ -4026,9 +4031,13 @@ globalThis.VBoxJIT = (function() {
             }
 
            // PUSH FS (0x0F 0xA0) / POP FS (0x0F 0xA1) / PUSH GS (0x0F 0xA8) / POP GS (0x0F 0xA9)
+            // In 32-bit PM (opSize=4), selector is zero-extended to 32 bits
             case 160:
-            push16(rr16(S_FS + SEG_SEL), ssBase);
-            break;
+            {
+              const s = rr16(S_FS + SEG_SEL);
+              if (opSize === 4) push32(s, ssBase); else push16(s, ssBase);
+              break;
+            }
 
            case 161:
             {
@@ -4044,8 +4053,11 @@ globalThis.VBoxJIT = (function() {
             }
 
            case 168:
-            push16(rr16(S_GS + SEG_SEL), ssBase);
-            break;
+            {
+              const s = rr16(S_GS + SEG_SEL);
+              if (opSize === 4) push32(s, ssBase); else push16(s, ssBase);
+              break;
+            }
 
            case 169:
             {
@@ -4234,25 +4246,38 @@ globalThis.VBoxJIT = (function() {
         break;
 
        // ──── PUSH ES/CS/SS/DS (0x06,0x0E,0x16,0x1E) ────
+        // In 32-bit PM (opSize=4), selector is zero-extended to 32 bits
         case 6:
-        push16(rr16(S_ES + SEG_SEL), ssBase);
-        ilen += 1;
-        break;
+        {
+          const s = rr16(S_ES + SEG_SEL);
+          if (opSize === 4) push32(s, ssBase); else push16(s, ssBase);
+          ilen += 1;
+          break;
+        }
 
        case 14:
-        push16(rr16(S_CS + SEG_SEL), ssBase);
-        ilen += 1;
-        break;
+        {
+          const s = rr16(S_CS + SEG_SEL);
+          if (opSize === 4) push32(s, ssBase); else push16(s, ssBase);
+          ilen += 1;
+          break;
+        }
 
        case 22:
-        push16(rr16(S_SS + SEG_SEL), ssBase);
-        ilen += 1;
-        break;
+        {
+          const s = rr16(S_SS + SEG_SEL);
+          if (opSize === 4) push32(s, ssBase); else push16(s, ssBase);
+          ilen += 1;
+          break;
+        }
 
        case 30:
-        push16(rr16(S_DS + SEG_SEL), ssBase);
-        ilen += 1;
-        break;
+        {
+          const s = rr16(S_DS + SEG_SEL);
+          if (opSize === 4) push32(s, ssBase); else push16(s, ssBase);
+          ilen += 1;
+          break;
+        }
 
        // ──── POP ES/SS/DS (0x07,0x17,0x1F) ────
         case 7:

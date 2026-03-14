@@ -735,11 +735,18 @@ function execBlock(cpuP, ramB, maxInsn) {
   // Bail immediately if Trap Flag is set — IEM must handle #DB exceptions
   if (flags & 0x100) return 0;
 
-  // Protected mode without paging: bail entirely so IEM handles all PM
-  // bootloader code (ISOLINUX PM trampoline, chain.c32, grub4dos).
-  // The JIT re-enters once the kernel enables paging (CR0.PG=1).
+  // Protected mode without paging: bail for non-flat segments.
+  // Flat PM (base=0, limit>=FFFFFFFF for CS/DS/SS) can be JIT'd directly.
+  // Non-flat PM (segment-based addressing) needs IEM for GDT lookups.
   if (protMode && !pagingOn) {
-    return 0;
+    const csLim = rr32(S_CS + SEG_LIMIT);
+    const dsLim = rr32(S_DS + SEG_LIMIT);
+    const ssLim = rr32(S_SS + SEG_LIMIT);
+    if (csBase !== 0 || dsBase !== 0 || ssBase !== 0 ||
+        csLim < 0xFFFF0000 || dsLim < 0xFFFF0000 || ssLim < 0xFFFF0000) {
+      return 0;
+    }
+    // Flat PM: fall through to JIT execution
   }
 
   // Protected mode: the JIT handles flat-model PM (base=0, limit=FFFFFFFF)
@@ -2951,12 +2958,13 @@ function execBlock(cpuP, ramB, maxInsn) {
         }
 
         // PUSH FS (0x0F 0xA0) / POP FS (0x0F 0xA1) / PUSH GS (0x0F 0xA8) / POP GS (0x0F 0xA9)
-        case 0xA0: push16(rr16(S_FS + SEG_SEL), ssBase); break;
+        // In 32-bit PM (opSize=4), selector is zero-extended to 32 bits
+        case 0xA0: { const s=rr16(S_FS+SEG_SEL); if(opSize===4) push32(s,ssBase); else push16(s,ssBase); break; }
         case 0xA1: {
           if (!realMode) { lastBailOp = 0x0F00 | b2; iter = maxInsn; break; }
           const s = pop16(ssBase); wr16(S_FS + SEG_SEL, s); wr64(S_FS + SEG_BASE, s << 4); break;
         }
-        case 0xA8: push16(rr16(S_GS + SEG_SEL), ssBase); break;
+        case 0xA8: { const s=rr16(S_GS+SEG_SEL); if(opSize===4) push32(s,ssBase); else push16(s,ssBase); break; }
         case 0xA9: {
           if (!realMode) { lastBailOp = 0x0F00 | b2; iter = maxInsn; break; }
           const s = pop16(ssBase); wr16(S_GS + SEG_SEL, s); wr64(S_GS + SEG_BASE, s << 4); break;
@@ -3065,10 +3073,11 @@ function execBlock(cpuP, ramB, maxInsn) {
       break;
 
     // ──── PUSH ES/CS/SS/DS (0x06,0x0E,0x16,0x1E) ────
-    case 0x06: push16(rr16(S_ES + SEG_SEL), ssBase); ilen += 1; break;
-    case 0x0E: push16(rr16(S_CS + SEG_SEL), ssBase); ilen += 1; break;
-    case 0x16: push16(rr16(S_SS + SEG_SEL), ssBase); ilen += 1; break;
-    case 0x1E: push16(rr16(S_DS + SEG_SEL), ssBase); ilen += 1; break;
+    // In 32-bit PM (opSize=4), selector is zero-extended to 32 bits
+    case 0x06: { const s=rr16(S_ES+SEG_SEL); if(opSize===4) push32(s,ssBase); else push16(s,ssBase); ilen+=1; break; }
+    case 0x0E: { const s=rr16(S_CS+SEG_SEL); if(opSize===4) push32(s,ssBase); else push16(s,ssBase); ilen+=1; break; }
+    case 0x16: { const s=rr16(S_SS+SEG_SEL); if(opSize===4) push32(s,ssBase); else push16(s,ssBase); ilen+=1; break; }
+    case 0x1E: { const s=rr16(S_DS+SEG_SEL); if(opSize===4) push32(s,ssBase); else push16(s,ssBase); ilen+=1; break; }
 
     // ──── POP ES/SS/DS (0x07,0x17,0x1F) ────
     case 0x07: {

@@ -143,11 +143,14 @@ let mmioFault = false;
 let a20Mask = 0xFFFFFFFF; // default: A20 enabled (all bits pass)
 
 // Read byte from guest physical address, ROM-aware
+// IMPORTANT: ramBase only covers low RAM (0-0x9FFFF). Addresses >= 0xA0000
+// (VGA MMIO, ROM area, high RAM above 1MB) are in separate PGM ranges and
+// cannot be accessed via ramBase. Bail to IEM for those.
 function guestRb(addr) {
   if (romBufSize > 0 && addr >= romGCPhysStart && addr < romGCPhysEnd)
     return mem8[romBufBase + (addr - romGCPhysStart)];
+  if (addr >= 0xA0000) { mmioFault = true; return 0xFF; }
   const off = ramBase + addr;
-  if (off >= mem8.length) { mmioFault = true; return 0xFF; }
   return mem8[off];
 }
 
@@ -157,8 +160,8 @@ function guestRw(addr) {
     const off = romBufBase + (addr - romGCPhysStart);
     return dv.getUint16(off, true);
   }
+  if (addr >= 0xA0000) { mmioFault = true; return 0xFFFF; }
   const off = ramBase + addr;
-  if (off + 2 > mem8.length) { mmioFault = true; return 0xFFFF; }
   return dv.getUint16(off, true);
 }
 
@@ -168,8 +171,8 @@ function guestRd(addr) {
     const off = romBufBase + (addr - romGCPhysStart);
     return dv.getUint32(off, true);
   }
+  if (addr >= 0xA0000) { mmioFault = true; return 0xFFFFFFFF; }
   const off = ramBase + addr;
-  if (off + 4 > mem8.length) { mmioFault = true; return 0xFFFFFFFF; }
   return dv.getUint32(off, true);
 }
 
@@ -233,10 +236,10 @@ function wb(addr, v) {
     if (addr < 0) { mmioFault = true; return; }
   }
   addr = (addr & a20Mask) >>> 0;
-  // VGA memory range: bail to IEM so VGA device sees writes via PGM MMIO handler
-  if (addr >= 0xA0000 && addr < 0xC0000) { mmioFault = true; return; }
+  // Bail for addresses outside low RAM (0-0x9FFFF): VGA MMIO, ROM area,
+  // and high RAM (>1MB) are in separate PGM ranges not covered by ramBase.
+  if (addr >= 0xA0000) { mmioFault = true; return; }
   const off = ramBase + addr;
-  if (off >= mem8.length) { mmioFault = true; return; }
   mem8[off] = v;
 }
 function ww(addr, v) {
@@ -245,9 +248,8 @@ function ww(addr, v) {
     if (addr < 0) { mmioFault = true; return; }
   }
   addr = (addr & a20Mask) >>> 0;
-  if (addr >= 0xA0000 && addr < 0xC0000) { mmioFault = true; return; }
+  if (addr >= 0xA0000) { mmioFault = true; return; }
   const off = ramBase + addr;
-  if (off + 2 > mem8.length) { mmioFault = true; return; }
   dv.setUint16(off, v & 0xFFFF, true);
 }
 function wd(addr, v) {
@@ -256,9 +258,8 @@ function wd(addr, v) {
     if (addr < 0) { mmioFault = true; return; }
   }
   addr = (addr & a20Mask) >>> 0;
-  if (addr >= 0xA0000 && addr < 0xC0000) { mmioFault = true; return; }
+  if (addr >= 0xA0000) { mmioFault = true; return; }
   const off = ramBase + addr;
-  if (off + 4 > mem8.length) { mmioFault = true; return; }
   dv.setUint32(off, v >>> 0, true);
 }
 
@@ -724,10 +725,10 @@ function execBlock(cpuP, ramB, maxInsn) {
   // on decode failure, falling back to IEM.
   const addrAccessible = (addr) => {
     if (romBufSize > 0 && addr >= romGCPhysStart && addr < romGCPhysEnd) return true;
-    // ROM range (0xC0000-0xFFFFF) is handled by ROM buffer above — if not in ROM, reject
-    if (addr >= 0xC0000 && addr < 0x100000) return false;
-    // Must be within the flat RAM buffer range
-    return addr >= 0 && addr + 16 <= ramSize;
+    // Only low RAM (0-0x9FFFF) is correctly mapped via ramBase.
+    // VGA MMIO, ROM area (not in romBuf), and high RAM (>1MB) are in
+    // separate PGM ranges — must bail to IEM for those.
+    return addr >= 0 && addr + 16 <= 0xA0000;
   };
   const inRomRange = (addr) => romBufSize > 0 && addr >= romGCPhysStart && addr < romGCPhysEnd;
   if (pagingOn) {
@@ -1811,8 +1812,8 @@ function execBlock(cpuP, ramB, maxInsn) {
             if (a20Mask !== 0xFFFFFFFF && addrHi > 0x100000) {
               lastBailOp = b; iter = maxInsn; break;
             }
-            if (addrLo >= 0 && addrHi <= ramSize && (addrHi <= 0xA0000 || addrLo >= 0xC0000)) {
-              // Fast path: all in RAM (not MMIO 0xA0000-0xBFFFF)
+            if (addrLo >= 0 && addrHi <= 0xA0000) {
+              // Fast path: all in low RAM (0-0x9FFFF)
               if (codeSegStart < 0xC0000 && addrHi > codeSegStart && addrLo < codeSegEnd) {
                 ilen = 0; iter = maxInsn; break;
               }
@@ -1844,8 +1845,8 @@ function execBlock(cpuP, ramB, maxInsn) {
             if (a20Mask !== 0xFFFFFFFF && addrHi > 0x100000) {
               lastBailOp = b; iter = maxInsn; break;
             }
-            if (addrLo >= 0 && addrHi <= ramSize && (addrHi <= 0xA0000 || addrLo >= 0xC0000)) {
-              // Fast path: all in RAM (not MMIO)
+            if (addrLo >= 0 && addrHi <= 0xA0000) {
+              // Fast path: all in low RAM (0-0x9FFFF)
               if (codeSegStart < 0xC0000 && addrHi > codeSegStart && addrLo < codeSegEnd) {
                 ilen = 0; iter = maxInsn; break;
               }
@@ -1893,9 +1894,9 @@ function execBlock(cpuP, ramB, maxInsn) {
             if (a20Mask !== 0xFFFFFFFF && (srcHi > 0x100000 || dstHi > 0x100000)) {
               lastBailOp = b; iter = maxInsn; break;
             }
-            // Both src and dst must be in RAM (not MMIO 0xA0000-0xBFFFF, not ROM)
-            const srcInRam = srcLo >= 0 && srcHi <= ramSize && (srcHi <= 0xA0000 || srcLo >= 0xC0000);
-            const dstInRam = dstLo >= 0 && dstHi <= ramSize && (dstHi <= 0xA0000 || dstLo >= 0xC0000);
+            // Both src and dst must be in low RAM (0-0x9FFFF)
+            const srcInRam = srcLo >= 0 && srcHi <= 0xA0000;
+            const dstInRam = dstLo >= 0 && dstHi <= 0xA0000;
             if (srcInRam && dstInRam) {
               if (codeSegStart < 0xC0000 && dstHi > codeSegStart && dstLo < codeSegEnd) {
                 ilen = 0; iter = maxInsn; break;
@@ -1931,8 +1932,8 @@ function execBlock(cpuP, ramB, maxInsn) {
             if (a20Mask !== 0xFFFFFFFF && (srcHi5 > 0x100000 || dstHi5 > 0x100000)) {
               lastBailOp = b; iter = maxInsn; break;
             }
-            const srcOk5 = srcLo5 >= 0 && srcHi5 <= ramSize && (srcHi5 <= 0xA0000 || srcLo5 >= 0xC0000);
-            const dstOk5 = dstLo5 >= 0 && dstHi5 <= ramSize && (dstHi5 <= 0xA0000 || dstLo5 >= 0xC0000);
+            const srcOk5 = srcLo5 >= 0 && srcHi5 <= 0xA0000;
+            const dstOk5 = dstLo5 >= 0 && dstHi5 <= 0xA0000;
             if (srcOk5 && dstOk5) {
               if (codeSegStart < 0xC0000 && dstHi5 > codeSegStart && dstLo5 < codeSegEnd) {
                 ilen = 0; iter = maxInsn; break;

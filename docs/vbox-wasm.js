@@ -994,11 +994,11 @@ globalThis.VBoxJIT = (function() {
     // CR0.PG
     _pagingOn = pagingOn;
     const realMode = !protMode;
-    // In real mode, CS base is ALWAYS selector<<4. The hidden base in CPUMCTX may
-    // retain a stale value from a prior protected-mode session (e.g. ISOLINUX
-    // enters PM briefly for A20/unreal-mode, then returns to RM via far JMP;
-    // IEM may not have executed the far JMP yet when the JIT resumes).
-    let csBase = realMode ? (rr16(S_CS) << 4) : segBase(S_CS);
+    // Use CPUMCTX hidden base for CS — it's authoritative in all modes.
+    // In normal real mode, hidden base == selector<<4.
+    // In "unreal mode" (PM→RM without far JMP), hidden base retains PM value
+    // (e.g. CS=0x0020, hidden base=0xF0000). IEM keeps it accurate.
+    let csBase = segBase(S_CS);
     let dsBase = segBase(S_DS);
     let ssBase = segBase(S_SS);
     let esBase = segBase(S_ES);

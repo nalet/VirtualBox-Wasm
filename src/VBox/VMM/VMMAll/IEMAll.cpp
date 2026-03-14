@@ -208,6 +208,8 @@ static bool     s_fHighRAMTried = false; /* true once high RAM init has been att
 static bool     s_fJitRomDone   = false; /* true once ROM copy succeeded */
 static uint32_t s_cJitRetries   = 0;     /* throttle counter for RAM init retries */
 static uint32_t s_cRomRetries   = 0;     /* throttle counter for ROM copy retries */
+static void    *s_pvJitRomBuf   = NULL;  /* ROM buffer pointer (for re-copy) */
+static uint64_t s_cRomRefreshNext = 20000; /* next instruction milestone for ROM re-copy */
 
 /* Defined in wasm-main.cpp — stores RAM base in shared Wasm memory for JS display */
 extern "C" void wasmJitSetGuestRAM(void *pv);
@@ -325,7 +327,10 @@ static void iemJitEnsureInit(PVMCC pVM)
         wasmJitLog(szMsg);
 
         if (cPagesOK > 0 && cNonTrivial > 100)
+        {
+            s_pvJitRomBuf = pvROM;
             wasmJitSetRomBuffer(pvROM, (int)cbROM, (int)uROMStart);
+        }
         else
         {
             wasmJitLog("ROM buffer REJECTED: content looks empty");
@@ -1203,6 +1208,27 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                     }
                 }
                 iemJitEnsureInit(pVM);
+                /* Periodic ROM re-copy: BIOS decompresses code to shadow RAM
+                   during POST, so our boot-time ROM snapshot becomes stale.
+                   Re-copy at exponentially spaced milestones. */
+                if (RT_UNLIKELY(   s_pvJitRomBuf
+                                && pVCpu->iem.s.cInstructions >= s_cRomRefreshNext))
+                {
+                    PVMCC pVMLocal = pVCpu->CTX_SUFF(pVM);
+                    for (uint32_t off = 0; off < 0x40000; off += GUEST_PAGE_SIZE)
+                        PGMPhysRead(pVMLocal, (RTGCPHYS)(0xC0000 + off),
+                                    (uint8_t *)s_pvJitRomBuf + off, GUEST_PAGE_SIZE,
+                                    PGMACCESSORIGIN_IEM);
+                    char szMsg[80];
+                    RTStrPrintf(szMsg, sizeof(szMsg), "ROM re-copy at insn %llu",
+                                (unsigned long long)pVCpu->iem.s.cInstructions);
+                    wasmJitLog(szMsg);
+                    /* Next milestone: double the interval, cap at 50M */
+                    if (s_cRomRefreshNext < 50000000)
+                        s_cRomRefreshNext = s_cRomRefreshNext * 3;
+                    else
+                        s_cRomRefreshNext = UINT64_MAX; /* stop re-copying */
+                }
                 /* Drain keyboard scancodes from JS ring buffer on EMT thread */
                 wasmKbdDrainQueue();
                 if (s_pvJitRAM && s_cIemAfterJitBail == 0)

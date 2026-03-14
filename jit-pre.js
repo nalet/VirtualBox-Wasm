@@ -869,6 +869,16 @@ function execBlock(cpuP, ramB, maxInsn) {
     // Read up to 15 bytes of instruction (ROM-aware)
     const c0 = guestRb(codePhys);
 
+    // Stale ROM detection: if the first code byte AND the next 3 bytes are
+    // all zero in a ROM page, the ROM buffer is likely stale (BIOS hasn't
+    // decompressed this page yet). Bail to IEM which reads from PGM directly.
+    if (c0 === 0 && inRomRange(codePhys)) {
+      const c1 = guestRb(codePhys + 1), c2 = guestRb(codePhys + 2), c3 = guestRb(codePhys + 3);
+      if (c1 === 0 && c2 === 0 && c3 === 0) {
+        break; // bail — stale ROM page
+      }
+    }
+
     // ── Prefix handling ──
     let segOverride = -1; // -1 = default
     let opSizeOverride = false;

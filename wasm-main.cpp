@@ -108,6 +108,16 @@ static DECLCALLBACK(int) vboxWasmCfgmConstructor(PUVM pUVM, PVM pVM, PCVMMR3VTAB
     INSERT_INTEGER(pNem, "Enabled", 0);
 
     /*
+     * TM — accelerate virtual time for IEM-only execution.
+     * At ~200K IPS, virtual time runs ~10,000x slower than real time.
+     * WarpDrivePercentage=2000 (20x) makes PIT fire every ~27s instead
+     * of every ~9min, so bootloader timeouts complete in minutes not hours.
+     */
+    PCFGMNODE pTm;
+    INSERT_NODE(pRoot, "TM", &pTm);
+    INSERT_INTEGER(pTm, "WarpDrivePercentage", 2000);
+
+    /*
      * EM — tune IEM instruction batching for maximum throughput.
      * Larger batches = fewer context switches = faster BIOS POST.
      */

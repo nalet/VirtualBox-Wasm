@@ -1239,10 +1239,14 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                         break;
                     }
                     /* JIT bailed on the very first instruction (I/O, segment change, etc.).
-                       Let IEM handle the next few instructions to cover the remainder of
-                       typical polling loops (IN; TEST; JNZ) without the overhead of a
-                       wasted JIT call for just 2-3 instructions. */
-                    s_cIemAfterJitBail = 4;
+                       Let IEM handle the next few instructions before re-entering JIT.
+                       In protected mode (CR0.PE=1), use a large cooldown so IEM handles
+                       the entire PM trampoline (LGDT, segment loads, far JMPs, function
+                       calls) without the JIT interfering mid-sequence.  ISOLINUX enters
+                       PM briefly for unreal-mode setup; if the JIT resumes too early it
+                       reads stale segment state and jumps to garbage addresses.
+                       In real mode, a short cooldown (4) suffices for I/O polling loops. */
+                    s_cIemAfterJitBail = (pVCpu->cpum.GstCtx.cr0 & X86_CR0_PE) ? 500 : 4;
                 }
                 else if (s_cIemAfterJitBail > 0)
                     s_cIemAfterJitBail--;

@@ -1020,6 +1020,17 @@ globalThis.VBoxJIT = (function() {
     let ip = csDefBig ? rr32(R_IP) : rr16(R_IP);
     // Bail immediately if Trap Flag is set — IEM must handle #DB exceptions
     if (flags & 256) return 0;
+    // Protected mode: bail entirely during early PM transitions (ISOLINUX
+    // unreal-mode setup, chain.c32 loading, etc.) where segment descriptors
+    // may not be fully loaded yet.  The IEMAll.cpp bail cooldown (500 for PM)
+    // ensures IEM handles the complete PM trampoline before the JIT re-enters.
+    // Once paging is enabled (CR0.PG), the kernel is running and we allow
+    // JIT PM execution for flat-model code.
+    if (protMode && !pagingOn) {
+      if (!execBlock._pmBailCount) execBlock._pmBailCount = 0;
+      if (execBlock._pmBailCount++ < 5) console.log("[JIT-PM-BAIL] Bailing in PM (no paging): CS=" + rr16(S_CS + SEG_SEL).toString(16).padStart(4, "0") + " EIP=0x" + ip.toString(16).padStart(8, "0") + " csBase=0x" + csBase.toString(16) + " EBP=0x" + rr32(R_BP).toString(16).padStart(8, "0") + " ESP=0x" + rr32(R_SP).toString(16).padStart(8, "0") + " CR0=0x" + cr0.toString(16).padStart(8, "0"));
+      return 0;
+    }
     // Protected mode: the JIT handles flat-model PM (base=0, limit=FFFFFFFF)
     // directly. Per-instruction bails handle segment-changing instructions
     // (MOV Sreg, RETF, INT, IRET, etc.) that need GDT/IDT lookup.

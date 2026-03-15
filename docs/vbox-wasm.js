@@ -993,6 +993,9 @@ globalThis.VBoxJIT = (function() {
     refreshViews();
     // Load frequently-used state
     let flags = rr32(R_FLAGS);
+    // After direct boot, the kernel runs in 32-bit PM.  The JIT is designed
+    // for real-mode BIOS code — bail immediately and let IEM handle PM code.
+    if (_directBootDone) return 0;
     // CR0: check PE and PG (read before segment bases so we can fix up real-mode CS)
     const cr0 = rr32(R_CR0);
     const protMode = !!(cr0 & 1);

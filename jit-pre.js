@@ -3225,9 +3225,10 @@ function execBlock(cpuP, ramB, maxInsn) {
       if (!realMode) { lastBailOp = b; iter = maxInsn; break; } // protected mode INT needs IDT
       const intNum = mem8[ci+1];
       // Log all INT calls to trace ISOLINUX boot sequence
+      if (intNum !== 0x1c && intNum !== 0x08) { // skip timer INTs from count
       if (!execBlock._intLog) execBlock._intLog = { count: 0 };
       const cntInt = ++execBlock._intLog.count;
-      if (cntInt <= 1000 && intNum !== 0x1c) { // skip INT 1Ch (timer hook) noise
+      if (cntInt <= 2000) {
         const ahInt = (gr16(0) >> 8) & 0xFF;
         const alInt = gr16(0) & 0xFF;
         console.log('[INT] INT 0x' + intNum.toString(16).padStart(2,'0') +
@@ -3236,6 +3237,7 @@ function execBlock(cpuP, ramB, maxInsn) {
           ' @' + (csBase>>>4).toString(16) + ':' + ip.toString(16) +
           ' #' + cntInt);
       }
+      } // end timer filter
       // INT 10h (Video BIOS): Handle natively — let the JIT execute the VGA
       // BIOS handler.  The JIT will bail on VGA memory writes (mmioFault) or
       // I/O port accesses (AH=02h cursor update writes to 0x3D4/0x3D5).

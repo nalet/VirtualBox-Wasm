@@ -4547,16 +4547,19 @@ globalThis.VBoxJIT = (function() {
           // protected mode INT needs IDT
           const intNum = mem8[ci + 1];
           // Log all INT calls to trace ISOLINUX boot sequence
-          if (!execBlock._intLog) execBlock._intLog = {
-            count: 0
-          };
-          const cntInt = ++execBlock._intLog.count;
-          if (cntInt <= 1e3 && intNum !== 28) {
-            // skip INT 1Ch (timer hook) noise
-            const ahInt = (gr16(0) >> 8) & 255;
-            const alInt = gr16(0) & 255;
-            console.log("[INT] INT 0x" + intNum.toString(16).padStart(2, "0") + " AH=0x" + ahInt.toString(16).padStart(2, "0") + " AL=0x" + alInt.toString(16).padStart(2, "0") + " @" + (csBase >>> 4).toString(16) + ":" + ip.toString(16) + " #" + cntInt);
+          if (intNum !== 28 && intNum !== 8) {
+            // skip timer INTs from count
+            if (!execBlock._intLog) execBlock._intLog = {
+              count: 0
+            };
+            const cntInt = ++execBlock._intLog.count;
+            if (cntInt <= 2e3) {
+              const ahInt = (gr16(0) >> 8) & 255;
+              const alInt = gr16(0) & 255;
+              console.log("[INT] INT 0x" + intNum.toString(16).padStart(2, "0") + " AH=0x" + ahInt.toString(16).padStart(2, "0") + " AL=0x" + alInt.toString(16).padStart(2, "0") + " @" + (csBase >>> 4).toString(16) + ":" + ip.toString(16) + " #" + cntInt);
+            }
           }
+          // end timer filter
           // INT 10h (Video BIOS): Handle natively — let the JIT execute the VGA
           // BIOS handler.  The JIT will bail on VGA memory writes (mmioFault) or
           // I/O port accesses (AH=02h cursor update writes to 0x3D4/0x3D5).

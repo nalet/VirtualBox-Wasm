@@ -869,6 +869,7 @@ globalThis.VBoxJIT = (function() {
   }
   // ── 32-bit paging support ──
   let _pagingOn = false;
+  let _directBootDone = false;
   // Direct-mapped TLB: 1024 entries for fast virtual-to-physical lookup
   const TLB_SIZE = 1024;
   const TLB_MASK = TLB_SIZE - 1;
@@ -4088,7 +4089,7 @@ globalThis.VBoxJIT = (function() {
 
            default:
             // CPUID (0xA2) — fake LM after direct boot, bail otherwise
-            if (b2 === 162 && execBlock._directBootDone) {
+            if (b2 === 162 && _directBootDone) {
               const leaf = gr32(0);
               if (leaf === 2147483649) {
                 sr32(0, 0); sr32(3, 0);
@@ -4759,11 +4760,11 @@ globalThis.VBoxJIT = (function() {
           // at f000:709c), check if the main thread has staged kernel data.
           // If so, copy to correct guest addresses, set boot params, and
           // switch CPU to boot Linux directly (bypass crashed ISOLINUX).
-          if (hltCS === 61440 && ip === 28828 && !execBlock._directBootDone && hltCnt >= 100) {
+          if (hltCS === 61440 && ip === 28828 && !_directBootDone && hltCnt >= 100) {
             // Check magic "KRNL" at guest 0x50C
             const m0 = guestRb(1292), m1 = guestRb(1293), m2 = guestRb(1294), m3 = guestRb(1295);
             if (m0 === 75 && m1 === 82 && m2 === 78 && m3 === 76) {
-              execBlock._directBootDone = true;
+              _directBootDone = true;
               // Read metadata from guest 0x500
               const stageBase = guestRb(1280) | (guestRb(1281) << 8) | (guestRb(1282) << 16) | ((guestRb(1283) << 24) >>> 0);
               const vmlinuzLen = guestRb(1284) | (guestRb(1285) << 8) | (guestRb(1286) << 16) | ((guestRb(1287) << 24) >>> 0);

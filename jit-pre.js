@@ -577,6 +577,9 @@ function pop32(ssBase) {
 // ── 32-bit paging support ──
 let _pagingOn = false;
 
+// ── Direct boot flag — set after kernel staging, used for CPUID faking ──
+let _directBootDone = false;
+
 // Direct-mapped TLB: 1024 entries for fast virtual-to-physical lookup
 const TLB_SIZE = 1024;
 const TLB_MASK = TLB_SIZE - 1;
@@ -2987,7 +2990,7 @@ function execBlock(cpuP, ramB, maxInsn) {
 
         default:
           // CPUID (0xA2) — fake LM after direct boot, bail otherwise
-          if (b2 === 0xA2 && execBlock._directBootDone) {
+          if (b2 === 0xA2 && _directBootDone) {
             const leaf = gr32(0);
             if (leaf === 0x80000001) {
               sr32(0, 0); sr32(3, 0);
@@ -3420,12 +3423,12 @@ function execBlock(cpuP, ramB, maxInsn) {
         // If so, copy to correct guest addresses, set boot params, and
         // switch CPU to boot Linux directly (bypass crashed ISOLINUX).
         if (hltCS === 0xF000 && ip === 0x709C &&
-            !execBlock._directBootDone && hltCnt >= 100) {
+            !_directBootDone && hltCnt >= 100) {
           // Check magic "KRNL" at guest 0x50C
           const m0 = guestRb(0x50C), m1 = guestRb(0x50D),
                 m2 = guestRb(0x50E), m3 = guestRb(0x50F);
           if (m0 === 0x4B && m1 === 0x52 && m2 === 0x4E && m3 === 0x4C) {
-            execBlock._directBootDone = true;
+            _directBootDone = true;
             // Read metadata from guest 0x500
             const stageBase = guestRb(0x500) | (guestRb(0x501) << 8) |
                               (guestRb(0x502) << 16) | ((guestRb(0x503) << 24) >>> 0);

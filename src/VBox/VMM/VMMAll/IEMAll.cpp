@@ -1559,15 +1559,19 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                                          abCode[8], abCode[9], abCode[10], abCode[11],
                                          abCode[12], abCode[13], abCode[14], abCode[15]);
                                 RTStrmFlush(g_pStdOut);
+                                /* Clear CR2 magic so the FF bypass deactivates.
+                                 * With instruction-count-based virtual time, the timer
+                                 * cascade no longer happens (JIT doesn't advance the clock). */
+                                pVCpu->cpum.GstCtx.cr2 = 0;
                             }
                             else if (pVCpu->cpum.GstCtx.cr0 & X86_CR0_PE)
                             {
-                                /* Kernel already entered PM on its own (via real-mode setup path).
-                                   The CPUID LM injection + IEM FF bypass prevented the timer cascade. */
+                                /* Kernel already entered PM on its own (via real-mode setup path). */
                                 s_fDirectBootDetected = true;
                                 RTPrintf("[DIRECT-BOOT-CPP] Kernel already in PM (CR0=%08x) — skipping 32-bit boot\n",
                                          (unsigned)pVCpu->cpum.GstCtx.cr0);
                                 RTStrmFlush(g_pStdOut);
+                                pVCpu->cpum.GstCtx.cr2 = 0;
                             }
                             /* else: metadata not ready yet (premature CR2 from CPUID LM injection).
                                Don't set s_fDirectBootDetected — retry on next JIT bail. */

@@ -5509,7 +5509,7 @@ function initMemory() {
   if (Module["wasmMemory"]) {
     wasmMemory = Module["wasmMemory"];
   } else {
-    var INITIAL_MEMORY = Module["INITIAL_MEMORY"] || 536870912;
+    var INITIAL_MEMORY = Module["INITIAL_MEMORY"] || 1073741824;
     /** @suppress {checkTypes} */ wasmMemory = new WebAssembly.Memory({
       "initial": BigInt(INITIAL_MEMORY / 65536),
       // In theory we should not need to emit the maximum if we want "unlimited"

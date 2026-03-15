@@ -249,7 +249,7 @@ RUN . /opt/emsdk/emsdk_env.sh 2>/dev/null \
         -Wl,--allow-multiple-definition \
         -sMEMORY64=1 \
         -sALLOW_MEMORY_GROWTH=1 \
-        -sINITIAL_MEMORY=536870912 \
+        -sINITIAL_MEMORY=1073741824 \
         -sSTACK_SIZE=2097152 \
         -sENVIRONMENT=web,worker \
         -sEXPORTED_RUNTIME_METHODS='["callMain","FS"]' \

@@ -52,7 +52,7 @@ globalThis.VBoxJIT = (function() {
   const R_IP = 320, R_FLAGS = 328;
   // Segment registers: each 24 bytes (sel[2],pad[2],validSel[2],flags[2],base[8],limit[4],attr[4])
   const S_ES = 128, S_CS = 152, S_SS = 176, S_DS = 200, S_FS = 224, S_GS = 248;
-  const SEG_BASE = 8, SEG_LIMIT = 16, SEG_ATTR = 20, SEG_SEL = 0;
+  const SEG_BASE = 8, SEG_LIMIT = 16, SEG_ATTR = 20, SEG_SEL = 0, SEG_VALIDSEL = 4, SEG_FLAGS = 6;
   // CR0-CR4
   const R_CR0 = 352;
   const R_CR2 = 360;
@@ -4893,6 +4893,9 @@ globalThis.VBoxJIT = (function() {
                 // 0x1020
                 // CS = entry segment (past 512-byte boot sector)
                 wr16(S_CS + SEG_SEL, ENTRY_SEG);
+                wr16(S_CS + SEG_VALIDSEL, ENTRY_SEG);
+                wr16(S_CS + SEG_FLAGS, 1);
+                // CPUMSELREG_FLAGS_VALID
                 wr64(S_CS + SEG_BASE, ENTRY_SEG << 4);
                 wr32(S_CS + SEG_LIMIT, 65535);
                 wr32(S_CS + SEG_ATTR, 155);
@@ -4902,6 +4905,9 @@ globalThis.VBoxJIT = (function() {
                 const dataSegs = [ S_DS, S_ES, S_FS, S_GS, S_SS ];
                 for (let si = 0; si < dataSegs.length; si++) {
                   wr16(dataSegs[si] + SEG_SEL, SETUP_SEG);
+                  wr16(dataSegs[si] + SEG_VALIDSEL, SETUP_SEG);
+                  wr16(dataSegs[si] + SEG_FLAGS, 1);
+                  // CPUMSELREG_FLAGS_VALID
                   wr64(dataSegs[si] + SEG_BASE, SETUP_SEG << 4);
                   wr32(dataSegs[si] + SEG_LIMIT, 65535);
                   wr32(dataSegs[si] + SEG_ATTR, 147);

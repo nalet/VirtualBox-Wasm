@@ -11,7 +11,7 @@ const R_AX=0,R_CX=8,R_DX=0x10,R_BX=0x18,R_SP=0x20,R_BP=0x28,R_SI=0x30,R_DI=0x38;
 const R_IP=0x140, R_FLAGS=0x148;
 // Segment registers: each 24 bytes (sel[2],pad[2],validSel[2],flags[2],base[8],limit[4],attr[4])
 const S_ES=0x80,S_CS=0x98,S_SS=0xB0,S_DS=0xC8,S_FS=0xE0,S_GS=0xF8;
-const SEG_BASE=8, SEG_LIMIT=16, SEG_ATTR=20, SEG_SEL=0;
+const SEG_BASE=8, SEG_LIMIT=16, SEG_ATTR=20, SEG_SEL=0, SEG_VALIDSEL=4, SEG_FLAGS=6;
 // CR0-CR4
 const R_CR0=0x160;
 const R_CR2=0x168;
@@ -3561,6 +3561,8 @@ function execBlock(cpuP, ramB, maxInsn) {
 
               // CS = entry segment (past 512-byte boot sector)
               wr16(S_CS + SEG_SEL, ENTRY_SEG);
+              wr16(S_CS + SEG_VALIDSEL, ENTRY_SEG);
+              wr16(S_CS + SEG_FLAGS, 0x0001); // CPUMSELREG_FLAGS_VALID
               wr64(S_CS + SEG_BASE, ENTRY_SEG << 4);
               wr32(S_CS + SEG_LIMIT, 0xFFFF);
               wr32(S_CS + SEG_ATTR, 0x009B);
@@ -3572,6 +3574,8 @@ function execBlock(cpuP, ramB, maxInsn) {
               const dataSegs = [S_DS, S_ES, S_FS, S_GS, S_SS];
               for (let si = 0; si < dataSegs.length; si++) {
                 wr16(dataSegs[si] + SEG_SEL, SETUP_SEG);
+                wr16(dataSegs[si] + SEG_VALIDSEL, SETUP_SEG);
+                wr16(dataSegs[si] + SEG_FLAGS, 0x0001); // CPUMSELREG_FLAGS_VALID
                 wr64(dataSegs[si] + SEG_BASE, SETUP_SEG << 4);
                 wr32(dataSegs[si] + SEG_LIMIT, 0xFFFF);
                 wr32(dataSegs[si] + SEG_ATTR, 0x0093);

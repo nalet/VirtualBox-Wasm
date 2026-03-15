@@ -101,6 +101,15 @@ static DECLCALLBACK(int) vboxWasmCfgmConstructor(PUVM pUVM, PVM pVM, PCVMMR3VTAB
     INSERT_INTEGER(pHm, "FallbackToNEM", 0);
 
     /*
+     * CPUM — enable 64-bit guest support (LM, NX, SYSCALL in CPUID).
+     * This uses VBox's official API to set GuestFeatures flags properly,
+     * which also updates CPUID leaves via CPUMR3SetGuestCpuIdFeature.
+     */
+    PCFGMNODE pCpum;
+    INSERT_NODE(pRoot, "CPUM", &pCpum);
+    INSERT_INTEGER(pCpum, "Enable64bit", 1);
+
+    /*
      * NEM — disable native execution manager (no KVM in Wasm).
      */
     PCFGMNODE pNem;

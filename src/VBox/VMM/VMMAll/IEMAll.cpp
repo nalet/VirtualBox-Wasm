@@ -1200,6 +1200,25 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                     g_cWasmVirtualInstructions = pVCpu->iem.s.cInstructions;
                 }
 
+                /* Clear CR2 magic once kernel is in PM.  The CR2=0xC0DEBA5E FF
+                 * bypass was needed during BIOS real-mode to prevent timer interrupt
+                 * cascades, but with instruction-count-based virtual time the cascade
+                 * no longer occurs.  The direct-boot detection code is inside the JIT
+                 * bail handler (real-mode only), so this separate check is needed to
+                 * clear CR2 once the kernel enters protected mode. */
+                {
+                    static bool s_fCr2Cleared = false;
+                    if (!s_fCr2Cleared
+                        && (pVCpu->cpum.GstCtx.cr0 & X86_CR0_PE)
+                        && pVCpu->cpum.GstCtx.cr2 == UINT64_C(0xC0DEBA5E))
+                    {
+                        s_fCr2Cleared = true;
+                        pVCpu->cpum.GstCtx.cr2 = 0;
+                        RTPrintf("[TIMER-FIX] Cleared CR2 magic (PE mode) — timer FFs now enabled\n");
+                        RTStrmFlush(g_pStdOut);
+                    }
+                }
+
                 /* Delay loop fast-forward: detect __delay() pattern (dec rax; jnz -5).
                  * Only fast-forward VERY long delays (RAX > 10M iterations = 20M insns
                  * = 2 seconds virtual time).  Do NOT fast-forward small delays because

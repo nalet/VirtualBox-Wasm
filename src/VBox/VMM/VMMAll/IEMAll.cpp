@@ -1268,20 +1268,23 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                         cMaxInstructionsGccStupidity -= RT_MIN((uint32_t)cJitInsns, cMaxInstructionsGccStupidity);
 
                         /* Check forced actions and poll timers */
+#ifdef __EMSCRIPTEN__
+                        /* During kernel direct-boot (CR2 magic), bypass ALL forced-action
+                           and timer checks.  The PIT fires continuously and the EM scheduler
+                           injects timer IRQs between every IEM loop iteration, creating an
+                           infinite cascade.  Kernel setup code doesn't need interrupts. */
+                        if (   pVCpu->cpum.GstCtx.cr2 == UINT64_C(0xC0DEBA5E)
+                            && cMaxInstructionsGccStupidity > 0)
+                        {
+                            iemReInitDecoder(pVCpu);
+                            continue;
+                        }
+#endif
                         uint64_t fCpu = pVCpu->fLocalForcedActions;
                         fCpu &= VMCPU_FF_ALL_MASK & ~(  VMCPU_FF_PGM_SYNC_CR3
                                                        | VMCPU_FF_PGM_SYNC_CR3_NON_GLOBAL
                                                        | VMCPU_FF_TLB_FLUSH
                                                        | VMCPU_FF_UNHALT );
-#ifdef __EMSCRIPTEN__
-                        /* During kernel direct-boot phase (CR2 magic 0xC0DEBA5E), mask
-                           VMCPU_FF_TIMER to prevent timer interrupt cascade.  The magic
-                           persists until the kernel enables paging and CR2 gets overwritten
-                           by a page fault address.  Must check all CS values (kernel at
-                           0x1020, setup at 0x1000, BIOS ISRs at 0xF000). */
-                        if (pVCpu->cpum.GstCtx.cr2 == UINT64_C(0xC0DEBA5E))
-                            fCpu &= ~VMCPU_FF_TIMER;
-#endif
                         if (RT_LIKELY(   iemExecLoopTargetCheckMaskedCpuFFs(pVCpu, fCpu)
                                       && !VM_FF_IS_ANY_SET(pVM, VM_FF_ALL_MASK)
                                       && cMaxInstructionsGccStupidity > 0))
@@ -1289,12 +1292,7 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                             /* Always poll timers after JIT batch — the JIT skips
                                cPollRate alignment so we must poll every return to
                                ensure PIT timer interrupts get delivered. */
-#ifdef __EMSCRIPTEN__
-                            if (   pVCpu->cpum.GstCtx.cr2 == UINT64_C(0xC0DEBA5E)
-                                || !TMTimerPollBool(pVM, pVCpu))
-#else
                             if (!TMTimerPollBool(pVM, pVCpu))
-#endif
                             {
                                 iemReInitDecoder(pVCpu);
                                 continue;
@@ -1482,14 +1480,13 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                                                       | VMCPU_FF_TLB_FLUSH
                                                       | VMCPU_FF_UNHALT );
 #ifdef __EMSCRIPTEN__
-                        /* During kernel direct-boot phase, suppress all interrupt/timer
-                           forced actions to prevent the timer cascade.  The PIT fires
-                           continuously and sets both VMCPU_FF_TIMER and VMCPU_FF_INTERRUPT_PIC;
-                           with IF=1 (after kernel STI) the IEM loop would break on every
-                           instruction to deliver timer IRQs, creating an infinite cascade. */
-                        if (pVCpu->cpum.GstCtx.cr2 == UINT64_C(0xC0DEBA5E))
-                            fCpu &= ~(VMCPU_FF_TIMER | VMCPU_FF_INTERRUPT_PIC
-                                      | VMCPU_FF_UPDATE_APIC | VMCPU_FF_INTERRUPT_APIC);
+                        if (   pVCpu->cpum.GstCtx.cr2 == UINT64_C(0xC0DEBA5E)
+                            && --cMaxInstructionsGccStupidity > 0)
+                        {
+                            Assert(ICORE(pVCpu).cActiveMappings == 0);
+                            iemReInitDecoder(pVCpu);
+                            continue;
+                        }
 #endif
 
                         if (RT_LIKELY(   iemExecLoopTargetCheckMaskedCpuFFs(pVCpu, fCpu)
@@ -1499,9 +1496,6 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                             {
                                 /* Poll timers every now an then according to the caller's specs. */
                                 if (   (cMaxInstructionsGccStupidity & cPollRate) != 0
-#ifdef __EMSCRIPTEN__
-                                    || pVCpu->cpum.GstCtx.cr2 == UINT64_C(0xC0DEBA5E)
-#endif
                                     || !TMTimerPollBool(pVM, pVCpu))
                                 {
                                     Assert(ICORE(pVCpu).cActiveMappings == 0);
@@ -1665,14 +1659,13 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecForExits(PVMCPUCC pVCpu, uint32_t fWillExit, u
                                                       | VMCPU_FF_TLB_FLUSH
                                                       | VMCPU_FF_UNHALT );
 #ifdef __EMSCRIPTEN__
-                        /* During kernel direct-boot phase, suppress all interrupt/timer
-                           forced actions to prevent the timer cascade.  The PIT fires
-                           continuously and sets both VMCPU_FF_TIMER and VMCPU_FF_INTERRUPT_PIC;
-                           with IF=1 (after kernel STI) the IEM loop would break on every
-                           instruction to deliver timer IRQs, creating an infinite cascade. */
-                        if (pVCpu->cpum.GstCtx.cr2 == UINT64_C(0xC0DEBA5E))
-                            fCpu &= ~(VMCPU_FF_TIMER | VMCPU_FF_INTERRUPT_PIC
-                                      | VMCPU_FF_UPDATE_APIC | VMCPU_FF_INTERRUPT_APIC);
+                        if (   pVCpu->cpum.GstCtx.cr2 == UINT64_C(0xC0DEBA5E)
+                            && pStats->cInstructions < cMaxInstructions)
+                        {
+                            Assert(ICORE(pVCpu).cActiveMappings == 0);
+                            iemReInitDecoder(pVCpu);
+                            continue;
+                        }
 #endif
                         if (RT_LIKELY(   iemExecLoopTargetCheckMaskedCpuFFs(pVCpu, fCpu)
                                       && !VM_FF_IS_ANY_SET(pVM, VM_FF_ALL_MASK) ))

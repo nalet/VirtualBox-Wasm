@@ -1273,6 +1273,12 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                                                        | VMCPU_FF_PGM_SYNC_CR3_NON_GLOBAL
                                                        | VMCPU_FF_TLB_FLUSH
                                                        | VMCPU_FF_UNHALT );
+#ifdef __EMSCRIPTEN__
+                        /* During kernel direct-boot setup (CS=0x1020), mask VMCPU_FF_TIMER
+                           to prevent timer interrupt cascade that traps the kernel forever. */
+                        if (pVCpu->cpum.GstCtx.cs.Sel == 0x1020)
+                            fCpu &= ~VMCPU_FF_TIMER;
+#endif
                         if (RT_LIKELY(   iemExecLoopTargetCheckMaskedCpuFFs(pVCpu, fCpu)
                                       && !VM_FF_IS_ANY_SET(pVM, VM_FF_ALL_MASK)
                                       && cMaxInstructionsGccStupidity > 0))
@@ -1380,35 +1386,55 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
 #endif
                 rcStrict = iemExecDecodeAndInterpretTargetInstruction(pVCpu);
 #ifdef __EMSCRIPTEN__
-                /* Trace first 100 instructions after direct boot */
+                /* Monitor kernel boot progress: log CS changes and milestones */
                 {
-                    static int32_t s_cPostBootTrace = -1; /* -1 = not started */
-                    if (s_cPostBootTrace == -1 && pVCpu->cpum.GstCtx.cr2 == UINT64_C(0xC0DEBA5E))
-                        s_cPostBootTrace = 100;
-                    if (s_cPostBootTrace > 0)
+                    static bool     s_fBootActive = false;
+                    static uint16_t s_uLastCS = 0;
+                    static uint64_t s_cBootInsns = 0;
+                    static uint64_t s_cLastReport = 0;
+                    if (!s_fBootActive && pVCpu->cpum.GstCtx.cr2 == UINT64_C(0xC0DEBA5E))
                     {
-                        s_cPostBootTrace--;
-                        uint8_t abOp[8];
-                        RTGCPHYS GCPhys = pVCpu->cpum.GstCtx.cs.u64Base + pVCpu->cpum.GstCtx.rip;
-                        PGMPhysRead(pVM, GCPhys, abOp, sizeof(abOp), PGMACCESSORIGIN_IEM);
-                        RTPrintf("[DBOOT-TRACE] #%d rc=%d CS=%04x IP=%04llx SP=%04llx FL=%08llx "
-                                 "AX=%04llx BX=%04llx CX=%04llx DX=%04llx SI=%04llx DI=%04llx "
-                                 "code=%02x%02x%02x%02x%02x%02x%02x%02x\n",
-                                 100 - s_cPostBootTrace, (int)rcStrict,
-                                 pVCpu->cpum.GstCtx.cs.Sel,
-                                 (unsigned long long)pVCpu->cpum.GstCtx.rip,
-                                 (unsigned long long)pVCpu->cpum.GstCtx.rsp,
-                                 (unsigned long long)pVCpu->cpum.GstCtx.rflags.u,
-                                 (unsigned long long)pVCpu->cpum.GstCtx.rax,
-                                 (unsigned long long)pVCpu->cpum.GstCtx.rbx,
-                                 (unsigned long long)pVCpu->cpum.GstCtx.rcx,
-                                 (unsigned long long)pVCpu->cpum.GstCtx.rdx,
-                                 (unsigned long long)pVCpu->cpum.GstCtx.rsi,
-                                 (unsigned long long)pVCpu->cpum.GstCtx.rdi,
-                                 abOp[0], abOp[1], abOp[2], abOp[3],
-                                 abOp[4], abOp[5], abOp[6], abOp[7]);
-                        if (s_cPostBootTrace % 10 == 0 || s_cPostBootTrace == 0)
+                        s_fBootActive = true;
+                        s_uLastCS = pVCpu->cpum.GstCtx.cs.Sel;
+                        RTPrintf("[DBOOT] Kernel boot active, CS=%04x IP=%04llx CR0=%08llx\n",
+                                 s_uLastCS, (unsigned long long)pVCpu->cpum.GstCtx.rip,
+                                 (unsigned long long)pVCpu->cpum.GstCtx.cr0);
+                        RTStrmFlush(g_pStdOut);
+                    }
+                    if (s_fBootActive)
+                    {
+                        s_cBootInsns++;
+                        uint16_t uCS = pVCpu->cpum.GstCtx.cs.Sel;
+                        /* Log CS changes (segment transitions, PM entry, INT calls) */
+                        if (uCS != s_uLastCS)
+                        {
+                            RTPrintf("[DBOOT] CS change: %04x→%04x at insn #%llu IP=%04llx CR0=%08llx FL=%08llx\n",
+                                     s_uLastCS, uCS, (unsigned long long)s_cBootInsns,
+                                     (unsigned long long)pVCpu->cpum.GstCtx.rip,
+                                     (unsigned long long)pVCpu->cpum.GstCtx.cr0,
+                                     (unsigned long long)pVCpu->cpum.GstCtx.rflags.u);
                             RTStrmFlush(g_pStdOut);
+                            s_uLastCS = uCS;
+                            /* Protected mode entry (CR0.PE set) — kernel is past setup */
+                            if (pVCpu->cpum.GstCtx.cr0 & 1)
+                            {
+                                RTPrintf("[DBOOT] Protected mode entered! CS=%04x IP=%04llx insns=%llu\n",
+                                         uCS, (unsigned long long)pVCpu->cpum.GstCtx.rip,
+                                         (unsigned long long)s_cBootInsns);
+                                RTStrmFlush(g_pStdOut);
+                                s_fBootActive = false; /* stop monitoring */
+                            }
+                        }
+                        /* Periodic progress every 100K instructions */
+                        if (s_cBootInsns - s_cLastReport >= 100000)
+                        {
+                            s_cLastReport = s_cBootInsns;
+                            RTPrintf("[DBOOT] Progress: %lluK insns CS=%04x IP=%04llx CR0=%08llx\n",
+                                     (unsigned long long)(s_cBootInsns / 1000), uCS,
+                                     (unsigned long long)pVCpu->cpum.GstCtx.rip,
+                                     (unsigned long long)pVCpu->cpum.GstCtx.cr0);
+                            RTStrmFlush(g_pStdOut);
+                        }
                     }
                 }
 #endif
@@ -1447,6 +1473,10 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                                                       | VMCPU_FF_PGM_SYNC_CR3_NON_GLOBAL
                                                       | VMCPU_FF_TLB_FLUSH
                                                       | VMCPU_FF_UNHALT );
+#ifdef __EMSCRIPTEN__
+                        if (pVCpu->cpum.GstCtx.cs.Sel == 0x1020)
+                            fCpu &= ~VMCPU_FF_TIMER;
+#endif
 
                         if (RT_LIKELY(   iemExecLoopTargetCheckMaskedCpuFFs(pVCpu, fCpu)
                                       && !VM_FF_IS_ANY_SET(pVM, VM_FF_ALL_MASK) ))
@@ -1617,6 +1647,10 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecForExits(PVMCPUCC pVCpu, uint32_t fWillExit, u
                                                       | VMCPU_FF_PGM_SYNC_CR3_NON_GLOBAL
                                                       | VMCPU_FF_TLB_FLUSH
                                                       | VMCPU_FF_UNHALT );
+#ifdef __EMSCRIPTEN__
+                        if (pVCpu->cpum.GstCtx.cs.Sel == 0x1020)
+                            fCpu &= ~VMCPU_FF_TIMER;
+#endif
                         if (RT_LIKELY(   iemExecLoopTargetCheckMaskedCpuFFs(pVCpu, fCpu)
                                       && !VM_FF_IS_ANY_SET(pVM, VM_FF_ALL_MASK) ))
                         {

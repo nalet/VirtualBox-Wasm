@@ -1771,7 +1771,13 @@ function execBlock(cpuP, ramB, maxInsn) {
       const wasIF0 = !(flags & 0x200);
       flags |= 0x200;
       ilen += 1;
-      if (wasIF0 && executed > 0 && globalThis.VBoxJIT._irqPending) {
+      // Don't bail for kernel setup code (CS=0x1020) — the timer cascade
+      // prevents the kernel from ever getting past STI.  Let the kernel
+      // continue executing in JIT until it hits something we can't handle
+      // (protected mode, unsupported INT, etc.).
+      const csSel_sti = rr16(S_CS);
+      if (wasIF0 && executed > 0 && globalThis.VBoxJIT._irqPending
+          && csSel_sti !== 0x1020) {
         // Transitioning IF from 0→1: bail to IEM so pending interrupts
         // (PIT timer, keyboard IRQ) can be delivered.  On real x86, one
         // instruction after STI executes before interrupts are serviced,

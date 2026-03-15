@@ -4551,23 +4551,17 @@ globalThis.VBoxJIT = (function() {
             count: 0
           };
           const cntInt = ++execBlock._intLog.count;
-          if (cntInt <= 500) {
+          if (cntInt <= 1e3 && intNum !== 28) {
+            // skip INT 1Ch (timer hook) noise
             const ahInt = (gr16(0) >> 8) & 255;
             const alInt = gr16(0) & 255;
             console.log("[INT] INT 0x" + intNum.toString(16).padStart(2, "0") + " AH=0x" + ahInt.toString(16).padStart(2, "0") + " AL=0x" + alInt.toString(16).padStart(2, "0") + " @" + (csBase >>> 4).toString(16) + ":" + ip.toString(16) + " #" + cntInt);
           }
-          // Bail to IEM for video BIOS (INT 10h) — needs MMIO for VGA memory writes
-          if (intNum === 16) {
-            if (!execBlock._int10Log) execBlock._int10Log = {
-              count: 0
-            };
-            const cnt = ++execBlock._int10Log.count;
-            const ah = (gr16(0) >> 8) & 255;
-            if (cnt <= 100) console.log("[INT10] AH=0x" + ah.toString(16).padStart(2, "0") + " AL=0x" + (gr16(0) & 255).toString(16).padStart(2, "0") + " BX=0x" + gr16(3).toString(16).padStart(4, "0") + " @" + (csBase >>> 4).toString(16) + ":" + ip.toString(16) + " #" + cnt);
-            lastBailOp = b;
-            iter = maxInsn;
-            break;
-          }
+          // INT 10h (Video BIOS): Handle natively — let the JIT execute the VGA
+          // BIOS handler.  The JIT will bail on VGA memory writes (mmioFault) or
+          // I/O port accesses (AH=02h cursor update writes to 0x3D4/0x3D5).
+          // AH=03h (Get Cursor) runs entirely in the JIT with no bail.
+          // This avoids a costly JIT→IEM transition for each character write.
           // Log INT 13h calls (disk I/O) to trace ISOLINUX boot failures
           if (intNum === 19) {
             if (!execBlock._int13Log) execBlock._int13Log = {

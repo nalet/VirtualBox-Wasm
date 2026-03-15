@@ -8150,6 +8150,19 @@ IEM_CIMPL_DEF_0(iemCImpl_cpuid)
         CPUMGetGuestCpuId(pVCpu, uEax, uEcx, pVCpu->cpum.GstCtx.cs.Attr.n.u1Long,
                           &pVCpu->cpum.GstCtx.eax, &pVCpu->cpum.GstCtx.ebx, &pVCpu->cpum.GstCtx.ecx, &pVCpu->cpum.GstCtx.edx);
 
+#ifdef __EMSCRIPTEN__
+    /* Inject LM/NX/SYSCALL/RDTSCP directly at the IEM level to be absolutely
+     * sure it takes effect, regardless of CPUMGetGuestCpuId internals. */
+    if (uEax == UINT32_C(0x80000001))
+    {
+        pVCpu->cpum.GstCtx.edx |= X86_CPUID_EXT_FEATURE_EDX_LONG_MODE
+                                 | X86_CPUID_EXT_FEATURE_EDX_NX
+                                 | X86_CPUID_EXT_FEATURE_EDX_SYSCALL
+                                 | X86_CPUID_EXT_FEATURE_EDX_RDTSCP;
+        pVCpu->cpum.GstCtx.ecx |= X86_CPUID_EXT_FEATURE_ECX_LAHF_SAHF;
+    }
+#endif
+
     pVCpu->cpum.GstCtx.rax &= UINT32_C(0xffffffff);
     pVCpu->cpum.GstCtx.rbx &= UINT32_C(0xffffffff);
     pVCpu->cpum.GstCtx.rcx &= UINT32_C(0xffffffff);

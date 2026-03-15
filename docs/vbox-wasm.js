@@ -4087,6 +4087,19 @@ globalThis.VBoxJIT = (function() {
             }
 
            default:
+            // CPUID (0xA2) — fake LM after direct boot, bail otherwise
+            if (b2 === 162 && execBlock._directBootDone) {
+              const leaf = gr32(0);
+              if (leaf === 2147483649) {
+                sr32(0, 0); sr32(3, 0);
+                sr32(1, 1); // ECX: LAHF/SAHF
+                sr32(2, 739248128); // EDX: LM|RDTSCP|FXSR|NX|SYSCALL
+                break;
+              } else if (leaf === 2147483648) {
+                sr32(0, 2147483656); sr32(3, 0); sr32(1, 0); sr32(2, 0);
+                break;
+              }
+            }
             // Unsupported 0x0F opcode — fallback
             lastBailOp = 3840 | b2;
             iter = maxInsn;

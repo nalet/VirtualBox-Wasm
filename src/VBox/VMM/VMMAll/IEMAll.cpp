@@ -1380,22 +1380,35 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
 #endif
                 rcStrict = iemExecDecodeAndInterpretTargetInstruction(pVCpu);
 #ifdef __EMSCRIPTEN__
-                /* Log first instruction after direct boot */
+                /* Trace first 100 instructions after direct boot */
                 {
-                    static bool s_fLoggedPostBoot = false;
-                    if (!s_fLoggedPostBoot && pVCpu->cpum.GstCtx.cr2 == UINT64_C(0xC0DEBA5E))
+                    static int32_t s_cPostBootTrace = -1; /* -1 = not started */
+                    if (s_cPostBootTrace == -1 && pVCpu->cpum.GstCtx.cr2 == UINT64_C(0xC0DEBA5E))
+                        s_cPostBootTrace = 100;
+                    if (s_cPostBootTrace > 0)
                     {
-                        s_fLoggedPostBoot = true;
-                        uint64_t fCpuDbg = pVCpu->fLocalForcedActions;
-                        uint64_t fVmDbg  = pVM->fGlobalForcedActions;
-                        RTPrintf("[DIRECT-BOOT-CPP] after 1st insn: rc=%d CS=%04x IP=%08llx FL=%08llx fCpuFF=%016llx fVmFF=%016llx\n",
-                                 (int)rcStrict,
+                        s_cPostBootTrace--;
+                        uint8_t abOp[8];
+                        RTGCPHYS GCPhys = pVCpu->cpum.GstCtx.cs.u64Base + pVCpu->cpum.GstCtx.rip;
+                        PGMPhysRead(pVM, GCPhys, abOp, sizeof(abOp), PGMACCESSORIGIN_IEM);
+                        RTPrintf("[DBOOT-TRACE] #%d rc=%d CS=%04x IP=%04llx SP=%04llx FL=%08llx "
+                                 "AX=%04llx BX=%04llx CX=%04llx DX=%04llx SI=%04llx DI=%04llx "
+                                 "code=%02x%02x%02x%02x%02x%02x%02x%02x\n",
+                                 100 - s_cPostBootTrace, (int)rcStrict,
                                  pVCpu->cpum.GstCtx.cs.Sel,
                                  (unsigned long long)pVCpu->cpum.GstCtx.rip,
+                                 (unsigned long long)pVCpu->cpum.GstCtx.rsp,
                                  (unsigned long long)pVCpu->cpum.GstCtx.rflags.u,
-                                 (unsigned long long)fCpuDbg,
-                                 (unsigned long long)fVmDbg);
-                        RTStrmFlush(g_pStdOut);
+                                 (unsigned long long)pVCpu->cpum.GstCtx.rax,
+                                 (unsigned long long)pVCpu->cpum.GstCtx.rbx,
+                                 (unsigned long long)pVCpu->cpum.GstCtx.rcx,
+                                 (unsigned long long)pVCpu->cpum.GstCtx.rdx,
+                                 (unsigned long long)pVCpu->cpum.GstCtx.rsi,
+                                 (unsigned long long)pVCpu->cpum.GstCtx.rdi,
+                                 abOp[0], abOp[1], abOp[2], abOp[3],
+                                 abOp[4], abOp[5], abOp[6], abOp[7]);
+                        if (s_cPostBootTrace % 10 == 0 || s_cPostBootTrace == 0)
+                            RTStrmFlush(g_pStdOut);
                     }
                 }
 #endif

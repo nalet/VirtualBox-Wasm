@@ -1025,6 +1025,17 @@ globalThis.VBoxJIT = (function() {
     const ssAttr = rr32(S_SS + SEG_ATTR);
     _ssBig = protMode && !!(ssAttr & X86DESCATTR_D);
     let ip = csDefBig ? rr32(R_IP) : rr16(R_IP);
+    // Trace kernel setup code (CS=0x1020) for debugging direct boot
+    if (!execBlock._kernelTraceCount) execBlock._kernelTraceCount = 0;
+    const csSel = rr16(S_CS);
+    if (csSel === 4128 && execBlock._kernelTraceCount < 20) {
+      execBlock._kernelTraceCount++;
+      const c0 = mem8[ramBase + csBase + ip];
+      const c1 = mem8[ramBase + csBase + ip + 1];
+      const c2 = mem8[ramBase + csBase + ip + 2];
+      const c3 = mem8[ramBase + csBase + ip + 3];
+      console.log("[JIT-KERNEL] #" + execBlock._kernelTraceCount + " CS=" + csSel.toString(16) + " IP=" + ip.toString(16) + " FL=" + flags.toString(16) + " code=" + c0.toString(16).padStart(2, "0") + c1.toString(16).padStart(2, "0") + c2.toString(16).padStart(2, "0") + c3.toString(16).padStart(2, "0") + " DS=" + rr16(S_DS).toString(16) + " dsBase=" + dsBase.toString(16) + " ssBase=" + ssBase.toString(16) + " SP=" + rr16(R_SP).toString(16));
+    }
     // Bail immediately if Trap Flag is set — IEM must handle #DB exceptions
     if (flags & 256) return 0;
     // Protected mode without paging: bail for non-flat segments.

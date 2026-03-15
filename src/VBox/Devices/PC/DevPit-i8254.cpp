@@ -1142,6 +1142,17 @@ static DECLCALLBACK(void) pitR3Timer(PPDMDEVINS pDevIns, TMTIMERHANDLE hTimer, v
     Assert(PDMDevHlpCritSectIsOwner(pDevIns, &pThis->CritSect));
     Assert(PDMDevHlpTimerIsLockOwner(pDevIns, hTimer));
 
+#ifdef __EMSCRIPTEN__
+    {
+        static uint32_t s_cPitFires = 0;
+        if (++s_cPitFires <= 5 || (s_cPitFires % 100) == 0)
+        {
+            LogRel(("[PIT-FIRE] #%u irq=%d mode=%d disabled_by_hpet=%d\n",
+                    s_cPitFires, pChan->irq, pChan->mode, pThis->fDisabledByHpet));
+        }
+    }
+#endif
+
     pitR3IrqTimerUpdate(pDevIns, pThis, pChan, pChan->next_transition_time, PDMDevHlpTimerGet(pDevIns, hTimer), true);
 
     STAM_PROFILE_ADV_STOP(&pThis->StatPITHandler, a);

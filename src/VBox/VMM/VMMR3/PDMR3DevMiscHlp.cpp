@@ -69,9 +69,27 @@ static DECLCALLBACK(void) pdmR3PicHlp_SetInterruptFF(PPDMDEVINS pDevIns)
 #ifdef VBOX_VMM_TARGET_X86
     PVMCPU pVCpu = pVM->apCpusR3[0];  /* for PIC we always deliver to CPU 0, SMP uses APIC */
     if (pVM->pdm.s.Ic.pDevInsR3)
+    {
+#ifdef __EMSCRIPTEN__
+        {
+            static uint32_t s_cApicPath = 0;
+            if (++s_cApicPath <= 5)
+                LogRel(("[PIC-FF] APIC path #%u (Ic.pDevInsR3=%p)\n", s_cApicPath, pVM->pdm.s.Ic.pDevInsR3));
+        }
+#endif
         PDMApicSetLocalInterrupt(pVCpu, 0 /* u8Pin */, 1 /* u8Level */, VINF_SUCCESS /* rcRZ */);
+    }
     else
+    {
+#ifdef __EMSCRIPTEN__
+        {
+            static uint32_t s_cPicPath = 0;
+            if (++s_cPicPath <= 5 || (s_cPicPath % 100) == 0)
+                LogRel(("[PIC-FF] SET VMCPU_FF_INTERRUPT_PIC #%u\n", s_cPicPath));
+        }
+#endif
         VMCPU_FF_SET(pVCpu, VMCPU_FF_INTERRUPT_PIC);
+    }
 #else
     AssertReleaseFailed();
     RT_NOREF(pVM);
@@ -93,7 +111,16 @@ static DECLCALLBACK(void) pdmR3PicHlp_ClearInterruptFF(PPDMDEVINS pDevIns)
     if (pVM->pdm.s.Ic.pDevInsR3)
         PDMApicSetLocalInterrupt(pVCpu, 0 /* u8Pin */,  0 /* u8Level */, VINF_SUCCESS /* rcRZ */);
     else
+    {
+#ifdef __EMSCRIPTEN__
+        {
+            static uint32_t s_cPicClear = 0;
+            if (++s_cPicClear <= 5 || (s_cPicClear % 100) == 0)
+                LogRel(("[PIC-FF] CLEAR VMCPU_FF_INTERRUPT_PIC #%u\n", s_cPicClear));
+        }
+#endif
         VMCPU_FF_CLEAR(pVCpu, VMCPU_FF_INTERRUPT_PIC);
+    }
 #else
     AssertReleaseFailed();
     RT_NOREF(pVM);

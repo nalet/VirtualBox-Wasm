@@ -707,10 +707,6 @@ function execBlock(cpuP, ramB, maxInsn) {
   // Load frequently-used state
   let flags = rr32(R_FLAGS);
 
-  // After direct boot, the kernel runs in 32-bit PM.  The JIT is designed
-  // for real-mode BIOS code — bail immediately and let IEM handle PM code.
-  if (_directBootDone) return 0;
-
   // CR0: check PE and PG (read before segment bases so we can fix up real-mode CS)
   const cr0 = rr32(R_CR0);
   const protMode = !!(cr0 & 1);        // CR0.PE
@@ -736,6 +732,9 @@ function execBlock(cpuP, ramB, maxInsn) {
   // CS descriptor D bit: determines default operand/address size in protected mode
   const csAttr = rr32(S_CS + SEG_ATTR);
   const csDefBig = protMode && !!(csAttr & X86DESCATTR_D);
+  // Bail on 32-bit PM — the JIT is for real-mode BIOS code. After the 32-bit
+  // boot protocol enters the kernel in PM, IEM handles all code correctly.
+  if (csDefBig) return 0;
   const ipMask = csDefBig ? 0xFFFFFFFF : 0xFFFF;
 
   // SS.B for stack operations (ESP vs SP)

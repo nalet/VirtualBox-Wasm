@@ -1198,6 +1198,23 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                 {
                     extern volatile uint64_t g_cWasmVirtualInstructions;
                     g_cWasmVirtualInstructions = pVCpu->iem.s.cInstructions;
+
+                    /* Periodic diagnostic: log timer/FF state every ~1M instructions */
+                    static uint64_t s_cNextDiag = 1000000;
+                    if (g_cWasmVirtualInstructions >= s_cNextDiag)
+                    {
+                        s_cNextDiag = g_cWasmVirtualInstructions + 1000000;
+                        uint64_t fFFs = pVCpu->fLocalForcedActions;
+                        RTPrintf("[IEM-DIAG] insns=%llu CR2=%#llx CR0=%#llx EFER=%#llx IF=%d FFs=%#RX64 EIP=%#llx\n",
+                                 (unsigned long long)g_cWasmVirtualInstructions,
+                                 (unsigned long long)pVCpu->cpum.GstCtx.cr2,
+                                 (unsigned long long)pVCpu->cpum.GstCtx.cr0,
+                                 (unsigned long long)pVCpu->cpum.GstCtx.msrEFER,
+                                 !!(pVCpu->cpum.GstCtx.eflags.u & X86_EFL_IF),
+                                 fFFs,
+                                 (unsigned long long)pVCpu->cpum.GstCtx.rip);
+                        RTStrmFlush(g_pStdOut);
+                    }
                 }
 
                 /* Clear CR2 magic once kernel is in PM.  The CR2=0xC0DEBA5E FF
@@ -1718,6 +1735,23 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                                     iemReInitDecoder(pVCpu);
                                     continue;
                                 }
+#ifdef __EMSCRIPTEN__
+                                /* Timer poll detected expiry — log periodically */
+                                {
+                                    static uint32_t s_cTimerHits = 0;
+                                    if (++s_cTimerHits <= 5 || (s_cTimerHits % 100) == 0)
+                                    {
+                                        extern volatile uint64_t g_cWasmVirtualInstructions;
+                                        RTPrintf("[TIMER-POLL] hit #%u insns=%llu FFs=%#RX64 CR2=%#RX64 IF=%d\n",
+                                                 s_cTimerHits,
+                                                 (unsigned long long)g_cWasmVirtualInstructions,
+                                                 (uint64_t)pVCpu->fLocalForcedActions,
+                                                 pVCpu->cpum.GstCtx.cr2,
+                                                 !!(pVCpu->cpum.GstCtx.eflags.u & X86_EFL_IF));
+                                        RTStrmFlush(g_pStdOut);
+                                    }
+                                }
+#endif
                             }
                         }
                     }

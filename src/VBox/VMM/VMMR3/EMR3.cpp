@@ -1729,7 +1729,33 @@ int emR3ForcedActions(PVM pVM, PVMCPU pVCpu, int rc)
          */
         if (   VMCPU_FF_IS_SET(pVCpu, VMCPU_FF_TIMER)
             && !VM_FF_IS_SET(pVM, VM_FF_PGM_NO_MEMORY))
+        {
+#ifdef __EMSCRIPTEN__
+            {
+                static uint32_t s_cTimerDo = 0;
+                if (++s_cTimerDo <= 5 || (s_cTimerDo % 100) == 0)
+                {
+                    extern volatile uint64_t g_cWasmVirtualInstructions;
+                    RTPrintf("[EM-TIMER] TMR3TimerQueuesDo #%u insns=%llu FFs_before=%#RX64\n",
+                             s_cTimerDo, (unsigned long long)g_cWasmVirtualInstructions,
+                             (uint64_t)pVCpu->fLocalForcedActions);
+                    RTStrmFlush(g_pStdOut);
+                }
+            }
+#endif
             TMR3TimerQueuesDo(pVM);
+#ifdef __EMSCRIPTEN__
+            {
+                static uint32_t s_cTimerDo2 = 0;
+                if (++s_cTimerDo2 <= 5 || (s_cTimerDo2 % 100) == 0)
+                {
+                    RTPrintf("[EM-TIMER] after TMR3TimerQueuesDo #%u FFs_after=%#RX64\n",
+                             s_cTimerDo2, (uint64_t)pVCpu->fLocalForcedActions);
+                    RTStrmFlush(g_pStdOut);
+                }
+            }
+#endif
+        }
 
 #ifdef VBOX_VMM_TARGET_X86
         /*
@@ -1985,6 +2011,21 @@ int emR3ForcedActions(PVM pVM, PVMCPU pVCpu, int rc)
                                 timer handler — no BIOS cascade possible. */
                             )
                     {
+#ifdef __EMSCRIPTEN__
+                        {
+                            static uint32_t s_cInject = 0;
+                            if (++s_cInject <= 10 || (s_cInject % 100) == 0)
+                            {
+                                RTPrintf("[EM-IRQ] inject attempt #%u CS:IP=%04x:%08llx IF=%d FFs=%#RX64\n",
+                                         s_cInject,
+                                         pVCpu->cpum.GstCtx.cs.Sel,
+                                         (unsigned long long)pVCpu->cpum.GstCtx.rip,
+                                         !!(pVCpu->cpum.GstCtx.eflags.u & X86_EFL_IF),
+                                         (uint64_t)pVCpu->fLocalForcedActions);
+                                RTStrmFlush(g_pStdOut);
+                            }
+                        }
+#endif
                         Assert(pVCpu->em.s.enmState != EMSTATE_WAIT_SIPI);
                         if (fInVmxNonRootMode)
                             rc2 = emR3VmxNstGstIntrIntercept(pVCpu);
@@ -2002,6 +2043,17 @@ int emR3ForcedActions(PVM pVM, PVMCPU pVCpu, int rc)
                             LogFlow(("Calling TRPMR3InjectEvent: %04x:%08RX64 efl=%#x\n",
                                      pVCpu->cpum.GstCtx.cs.Sel, pVCpu->cpum.GstCtx.rip, pVCpu->cpum.GstCtx.eflags));
                             rc2 = TRPMR3InjectEvent(pVM, pVCpu, TRPM_HARDWARE_INT, &fInjected);
+#ifdef __EMSCRIPTEN__
+                            {
+                                static uint32_t s_cInjected = 0;
+                                if (++s_cInjected <= 10 || (s_cInjected % 100) == 0)
+                                {
+                                    RTPrintf("[EM-IRQ] TRPMR3InjectEvent #%u rc2=%d fInjected=%d\n",
+                                             s_cInjected, rc2, (int)fInjected);
+                                    RTStrmFlush(g_pStdOut);
+                                }
+                            }
+#endif
                             fWakeupPending = true;
                             if (   pVM->em.s.fIemExecutesAll
                                 && (   rc2 == VINF_EM_RESCHEDULE_REM

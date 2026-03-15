@@ -909,7 +909,15 @@
         // metadata to guest low RAM. The JIT (in the worker thread) reads
         // the staged data and copies it to the correct guest addresses.
         let kernelPreloaded = false;
+        let _tryPreloadCount = 0;
         function tryPreloadKernel() {
+          _tryPreloadCount++;
+          if (_tryPreloadCount <= 3) {
+            console.log('[DIRECT-BOOT] tryPreloadKernel #' + _tryPreloadCount +
+              ': kp=' + kernelPreloaded +
+              ' vm=' + (directBootVmlinuz ? directBootVmlinuz.length : 'null') +
+              ' ir=' + (directBootInitrd ? directBootInitrd.length : 'null'));
+          }
           if (kernelPreloaded || !directBootVmlinuz || !directBootInitrd) return;
           try {
             if (!Module._wasmJitGetGuestRAM) return;

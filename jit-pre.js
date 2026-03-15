@@ -3787,27 +3787,6 @@ function execBlockWrapped(cpuP, ramB, maxInsn, highRamP, highRamSz) {
     }
   }
 
-  // ── Post-IEM CPUID override: if previous call bailed on CPUID and
-  // IEM has now executed it, override the results with LM/NX/SYSCALL.
-  // This avoids adding code to execBlock's hot loop (which triggers V8
-  // deoptimization and causes triple faults due to function size).
-  if (_pendingCpuidLeaf >= 0) {
-    refreshViews();
-    const leaf = _pendingCpuidLeaf;
-    _pendingCpuidLeaf = -1;
-    console.log('[CPUID-OVERRIDE] Applying override for leaf=0x' + leaf.toString(16) +
-      ' current EAX=0x' + rr32(R_AX).toString(16));
-    if (leaf === 0x80000001) {
-      wr32(R_AX, 0x00000000);  // EAX
-      wr32(R_BX, 0x00000000);  // EBX
-      wr32(R_CX, 0x00000001);  // ECX: LAHF/SAHF
-      wr32(R_DX, 0x2C100800);  // EDX: LM|RDTSCP|FXSR|NX|SYSCALL
-    } else if (leaf === 0x80000000) {
-      wr32(R_AX, 0x80000008);  // report extended leaves up to 0x80000008
-      wr32(R_BX, 0); wr32(R_CX, 0); wr32(R_DX, 0);
-    }
-  }
-
   let n = 0;
   try {
     n = execBlock(cpuP, ramB, maxInsn);
@@ -3824,22 +3803,6 @@ function execBlockWrapped(cpuP, ramB, maxInsn, highRamP, highRamSz) {
   }
 
   // If execBlock bailed on CPUID (0x0F 0xA2 = 0x0FA2) and direct boot is done,
-  // save the leaf (EAX) for override on next call (after IEM handles the CPUID).
-  if (_directBootDone && _lastBailOp >= 0x0F00) {
-    // Log all 0x0F-prefix bails after direct boot (diagnostic)
-    if (!execBlockWrapped._0fBailLog) execBlockWrapped._0fBailLog = 0;
-    if (execBlockWrapped._0fBailLog++ < 20) {
-      refreshViews();
-      console.log('[CPUID-DBG] 0x0F bail: op=0x' + _lastBailOp.toString(16) +
-        ' EAX=0x' + rr32(R_AX).toString(16) + ' IP=0x' + rr32(R_IP).toString(16));
-    }
-  }
-  if (_lastBailOp === 0x0FA2 && _directBootDone) {
-    refreshViews();
-    _pendingCpuidLeaf = rr32(R_AX); // EAX has the leaf number (not yet overwritten by IEM)
-    console.log('[CPUID-OVERRIDE] Detected CPUID bail, leaf=0x' + _pendingCpuidLeaf.toString(16));
-  }
-
   // Stuck-detection: if we stay in the same 32-byte IP range for >50000 calls, dump full state
   {
     const curIP = rr32(R_IP);

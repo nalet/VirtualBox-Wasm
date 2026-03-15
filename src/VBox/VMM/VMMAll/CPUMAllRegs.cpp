@@ -1000,6 +1000,22 @@ VMMDECL(void) CPUMGetGuestCpuId(PVMCPUCC pVCpu, uint32_t uLeaf, uint32_t uSubLea
                     || pVM->cpum.s.GuestFeatures.enmCpuVendor == CPUMCPUVENDOR_SHANGHAI /*?*/ ) )
                 *pEdx &= ~X86_CPUID_EXT_FEATURE_EDX_SYSCALL;
 
+#ifdef __EMSCRIPTEN__
+            /* Wasm: inject LM/NX/SYSCALL/FXSR/RDTSCP into extended leaf 0x80000001
+               so Linux kernels detect a 64-bit capable CPU. We inject at runtime
+               rather than using Enable64bit to avoid changing GuestFeatures flags
+               which affect PGM and other subsystems. */
+            if (uLeaf == UINT32_C(0x80000001))
+            {
+                *pEdx |= X86_CPUID_EXT_FEATURE_EDX_LONG_MODE
+                       | X86_CPUID_EXT_FEATURE_EDX_NX
+                       | X86_CPUID_EXT_FEATURE_EDX_SYSCALL
+                       | X86_CPUID_EXT_FEATURE_EDX_FXSR
+                       | X86_CPUID_EXT_FEATURE_EDX_RDTSCP;
+                *pEcx |= X86_CPUID_EXT_FEATURE_ECX_LAHF_SAHF;
+            }
+#endif
+
         }
         /*
          * Out of range sub-leaves aren't quite as easy and pretty as we emulate

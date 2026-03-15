@@ -4741,70 +4741,105 @@ globalThis.VBoxJIT = (function() {
             }
             console.log("[CODE-DUMP] around " + codeBase.toString(16) + ": " + codeDump);
           }
-
-        // ── Direct Kernel Boot: detect halt_forever, load staged kernel, boot ──
-        if (hltCS === 0xF000 && ip === 0x709C &&
-            !execBlock._directBootDone && hltCnt >= 100) {
-          const m0 = guestRb(0x50C), m1 = guestRb(0x50D),
-                m2 = guestRb(0x50E), m3 = guestRb(0x50F);
-          if (m0 === 0x4B && m1 === 0x52 && m2 === 0x4E && m3 === 0x4C) {
-            execBlock._directBootDone = true;
-            const stageBase = guestRb(0x500) | (guestRb(0x501) << 8) |
-                              (guestRb(0x502) << 16) | ((guestRb(0x503) << 24) >>> 0);
-            const vmlinuzLen = guestRb(0x504) | (guestRb(0x505) << 8) |
-                               (guestRb(0x506) << 16) | ((guestRb(0x507) << 24) >>> 0);
-            const initrdLen = guestRb(0x508) | (guestRb(0x509) << 8) |
-                              (guestRb(0x50A) << 16) | ((guestRb(0x50B) << 24) >>> 0);
-            console.log("[DIRECT-BOOT] Found staged kernel: stage=0x" + stageBase.toString(16) +
-              " vmlinuz=" + vmlinuzLen + " initrd=" + initrdLen +
-              " highRamPtr=0x" + highRamPtr.toString(16));
-            if (!highRamPtr) { console.error("[DIRECT-BOOT] highRamPtr not set"); break; }
-            const m = new Uint8Array(wasmMemory.buffer);
-            const vmlinuz = m.subarray(stageBase, stageBase + vmlinuzLen);
-            const initrd = m.subarray(stageBase + vmlinuzLen, stageBase + vmlinuzLen + initrdLen);
-            const setup_sects = vmlinuz[0x1F1] || 4;
-            const setup_size = (setup_sects + 1) * 512;
-            const SETUP_ADDR = 0x10000, KERNEL_ADDR = 0x100000;
-            const INITRD_ADDR = 0x1800000, CMDLINE_ADDR = 0x20000;
-            const rb = Number(ramBase);
-            m.set(vmlinuz.subarray(0, setup_size), rb + SETUP_ADDR);
-            m.set(vmlinuz.subarray(setup_size), highRamPtr + 0);
-            m.set(initrd, highRamPtr + (INITRD_ADDR - 0x100000));
-            const cmdline = "pmedia=cd\0";
-            for (let ci = 0; ci < cmdline.length; ci++)
-              m[rb + CMDLINE_ADDR + ci] = cmdline.charCodeAt(ci);
-            const hdr = rb + SETUP_ADDR;
-            m[hdr + 0x210] = 0xFF;
-            m[hdr + 0x211] = (m[hdr + 0x211] | 0x01 | 0x80);
-            var he = 0xFE00 - 0x0200;
-            m[hdr + 0x224] = he & 0xFF; m[hdr + 0x225] = (he >> 8) & 0xFF;
-            m[hdr + 0x218] = INITRD_ADDR & 0xFF; m[hdr + 0x219] = (INITRD_ADDR >> 8) & 0xFF;
-            m[hdr + 0x21A] = (INITRD_ADDR >> 16) & 0xFF; m[hdr + 0x21B] = (INITRD_ADDR >> 24) & 0xFF;
-            m[hdr + 0x21C] = initrdLen & 0xFF; m[hdr + 0x21D] = (initrdLen >> 8) & 0xFF;
-            m[hdr + 0x21E] = (initrdLen >> 16) & 0xFF; m[hdr + 0x21F] = (initrdLen >> 24) & 0xFF;
-            m[hdr + 0x228] = CMDLINE_ADDR & 0xFF; m[hdr + 0x229] = (CMDLINE_ADDR >> 8) & 0xFF;
-            m[hdr + 0x22A] = (CMDLINE_ADDR >> 16) & 0xFF; m[hdr + 0x22B] = (CMDLINE_ADDR >> 24) & 0xFF;
-            console.log("[DIRECT-BOOT] Copied: setup=" + setup_size + " kernel=" + (vmlinuzLen - setup_size) +
-              " initrd=" + initrdLen);
-            wr16(S_CS + SEG_SEL, 0x1020);
-            wr64(S_CS + SEG_BASE, 0x10200);
-            wr32(S_CS + SEG_LIMIT, 0xFFFF);
-            wr32(S_CS + SEG_ATTR, 0x009B);
-            const dataSegs = [S_DS, S_ES, S_SS, S_FS, S_GS];
-            for (let si = 0; si < dataSegs.length; si++) {
-              wr16(dataSegs[si] + SEG_SEL, 0x1000);
-              wr64(dataSegs[si] + SEG_BASE, 0x10000);
-              wr32(dataSegs[si] + SEG_LIMIT, 0xFFFF);
-              wr32(dataSegs[si] + SEG_ATTR, 0x0093);
+          // ── Direct Kernel Boot: detect halt_forever and jump to kernel ──
+          // When the BIOS invalid opcode handler enters halt_forever (HLT loop
+          // at f000:709c), check if the main thread has staged kernel data.
+          // If so, copy to correct guest addresses, set boot params, and
+          // switch CPU to boot Linux directly (bypass crashed ISOLINUX).
+          if (hltCS === 61440 && ip === 28828 && !execBlock._directBootDone && hltCnt >= 100) {
+            // Check magic "KRNL" at guest 0x50C
+            const m0 = guestRb(1292), m1 = guestRb(1293), m2 = guestRb(1294), m3 = guestRb(1295);
+            if (m0 === 75 && m1 === 82 && m2 === 78 && m3 === 76) {
+              execBlock._directBootDone = true;
+              // Read metadata from guest 0x500
+              const stageBase = guestRb(1280) | (guestRb(1281) << 8) | (guestRb(1282) << 16) | ((guestRb(1283) << 24) >>> 0);
+              const vmlinuzLen = guestRb(1284) | (guestRb(1285) << 8) | (guestRb(1286) << 16) | ((guestRb(1287) << 24) >>> 0);
+              const initrdLen = guestRb(1288) | (guestRb(1289) << 8) | (guestRb(1290) << 16) | ((guestRb(1291) << 24) >>> 0);
+              console.log("[DIRECT-BOOT] Found staged kernel: stage=0x" + stageBase.toString(16) + " vmlinuz=" + vmlinuzLen + " initrd=" + initrdLen + " highRamPtr=0x" + highRamPtr.toString(16));
+              if (!highRamPtr) {
+                console.error("[DIRECT-BOOT] highRamPtr not set, cannot preload");
+                break;
+              }
+              // Read staged data from Wasm memory
+              const m = new Uint8Array(wasmMemory.buffer);
+              const vmlinuz = m.subarray(stageBase, stageBase + vmlinuzLen);
+              const initrd = m.subarray(stageBase + vmlinuzLen, stageBase + vmlinuzLen + initrdLen);
+              // Parse vmlinuz header
+              const setup_sects = vmlinuz[497] || 4;
+              const setup_size = (setup_sects + 1) * 512;
+              const kernel_size = vmlinuzLen - setup_size;
+              const SETUP_ADDR = 65536;
+              const KERNEL_ADDR = 1048576;
+              const INITRD_ADDR = 25165824;
+              // 24 MB
+              const CMDLINE_ADDR = 131072;
+              // Copy setup code to guest 0x10000 (low RAM via ramBase)
+              const rb = Number(ramBase);
+              m.set(vmlinuz.subarray(0, setup_size), rb + SETUP_ADDR);
+              // Copy PM kernel to guest 0x100000 (high RAM via highRamPtr)
+              m.set(vmlinuz.subarray(setup_size), highRamPtr + 0);
+              // Copy initrd to guest 0x1800000 (high RAM)
+              m.set(initrd, highRamPtr + (INITRD_ADDR - 1048576));
+              // Write command line at guest 0x20000
+              const cmdline = "pmedia=cd\0";
+              for (let ci = 0; ci < cmdline.length; ci++) m[rb + CMDLINE_ADDR + ci] = cmdline.charCodeAt(ci);
+              // Set up boot_params header at SETUP_ADDR
+              const hdr = rb + SETUP_ADDR;
+              m[hdr + 528] = 255;
+              // type_of_loader
+              m[hdr + 529] = (m[hdr + 529] | 1 | 128);
+              // LOADED_HIGH | CAN_USE_HEAP
+              var he = 65024 - 512;
+              m[hdr + 548] = he & 255;
+              m[hdr + 549] = (he >> 8) & 255;
+              // ramdisk_image
+              m[hdr + 536] = INITRD_ADDR & 255;
+              m[hdr + 537] = (INITRD_ADDR >> 8) & 255;
+              m[hdr + 538] = (INITRD_ADDR >> 16) & 255;
+              m[hdr + 539] = (INITRD_ADDR >> 24) & 255;
+              // ramdisk_size
+              m[hdr + 540] = initrdLen & 255;
+              m[hdr + 541] = (initrdLen >> 8) & 255;
+              m[hdr + 542] = (initrdLen >> 16) & 255;
+              m[hdr + 543] = (initrdLen >> 24) & 255;
+              // cmd_line_ptr
+              m[hdr + 552] = CMDLINE_ADDR & 255;
+              m[hdr + 553] = (CMDLINE_ADDR >> 8) & 255;
+              m[hdr + 554] = (CMDLINE_ADDR >> 16) & 255;
+              m[hdr + 555] = (CMDLINE_ADDR >> 24) & 255;
+              console.log("[DIRECT-BOOT] Copied: setup=" + setup_size + " kernel=" + kernel_size + " initrd=" + initrdLen + " to guest RAM");
+              // Set CPU state for real-mode kernel entry
+              // CS = 0x1020, base = 0x10200 → entry at offset 0x200 in vmlinuz
+              wr16(S_CS + SEG_SEL, 4128);
+              wr64(S_CS + SEG_BASE, 66048);
+              wr32(S_CS + SEG_LIMIT, 65535);
+              wr32(S_CS + SEG_ATTR, 155);
+              const dataSegs = [ S_DS, S_ES, S_SS, S_FS, S_GS ];
+              for (let si = 0; si < dataSegs.length; si++) {
+                wr16(dataSegs[si] + SEG_SEL, 4096);
+                wr64(dataSegs[si] + SEG_BASE, 65536);
+                wr32(dataSegs[si] + SEG_LIMIT, 65535);
+                wr32(dataSegs[si] + SEG_ATTR, 147);
+              }
+              wr32(R_IP, 0);
+              wr32(R_SP, 65520);
+              wr32(R_FLAGS, 2);
+              wr32(R_AX, 0);
+              wr32(R_BX, 0);
+              wr32(R_CX, 0);
+              wr32(R_DX, 0);
+              wr32(R_SI, 0);
+              wr32(R_DI, 0);
+              wr32(R_BP, 0);
+              // Clear magic so we don't re-trigger
+              guestWb(1292, 0);
+              console.log("[DIRECT-BOOT] CPU state set: CS=1020 IP=0000 → phys 0x10200");
+              // Return immediately — must NOT fall through to wrIP(ip)/wr32(R_FLAGS)
+              // which would overwrite our CPU state with the old HLT location.
+              // Return 1 so IEM re-reads CPUMCTX and finds CS=1020 IP=0000.
+              return 1;
             }
-            wr32(R_IP, 0); wr32(R_SP, 0xFFF0); wr32(R_FLAGS, 0x0002);
-            wr32(R_AX, 0); wr32(R_BX, 0); wr32(R_CX, 0); wr32(R_DX, 0);
-            wr32(R_SI, 0); wr32(R_DI, 0); wr32(R_BP, 0);
-            guestWb(0x50C, 0);
-            console.log("[DIRECT-BOOT] CPU state set: CS=1020 IP=0000 -> phys 0x10200");
-            return 1;
           }
-        }
         }
         lastBailOp = b;
         iter = maxInsn;
@@ -4907,17 +4942,20 @@ globalThis.VBoxJIT = (function() {
       console.log("[JIT] High RAM set: ptr=0x" + highRamP.toString(16) + " size=" + (highRamSz >> 20) + "MB range=0x100000-0x" + highRamEnd.toString(16));
     }
     // Write highRamPtr to guest RAM at 0x7010 so main thread can read it
-    // (closure variables are thread-local in Emscripten pthreads)
+    // (closure variables are thread-local in Emscripten pthreads;
+    // use one-shot flag since highRamPtr may be set after first call)
     if (highRamPtr && !execBlockWrapped._highRamShared) {
       execBlockWrapped._highRamShared = true;
       const rb = Number(ramB);
       const m = new Uint8Array(wasmMemory.buffer);
-      m[rb + 0x7010] = highRamPtr & 0xFF;
-      m[rb + 0x7011] = (highRamPtr >> 8) & 0xFF;
-      m[rb + 0x7012] = (highRamPtr >> 16) & 0xFF;
-      m[rb + 0x7013] = (highRamPtr >> 24) & 0xFF;
-      m[rb + 0x7014] = 0; m[rb + 0x7015] = 0;
-      m[rb + 0x7016] = 0; m[rb + 0x7017] = 0;
+      m[rb + 28688] = highRamPtr & 255;
+      m[rb + 28689] = (highRamPtr >> 8) & 255;
+      m[rb + 28690] = (highRamPtr >> 16) & 255;
+      m[rb + 28691] = (highRamPtr >> 24) & 255;
+      m[rb + 28692] = 0;
+      m[rb + 28693] = 0;
+      m[rb + 28694] = 0;
+      m[rb + 28695] = 0;
       console.log("[JIT] Wrote highRamPtr=0x" + highRamPtr.toString(16) + " to guest RAM at 0x7010 for main thread");
     }
     const fA20 = globalThis.VBoxJIT._a20;
@@ -5136,7 +5174,13 @@ globalThis.VBoxJIT = (function() {
         fallbacks: statFallbacks
       };
     },
-    _getHighRAM: function() { return { ptr: highRamPtr, size: highRamSize, end: highRamEnd }; }
+    _getHighRAM: function() {
+      return {
+        ptr: highRamPtr,
+        size: highRamSize,
+        end: highRamEnd
+      };
+    }
   };
 })();
 

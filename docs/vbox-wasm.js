@@ -4900,6 +4900,11 @@ globalThis.VBoxJIT = (function() {
                 // type=2 (reserved)
                 e820idx++;
                 mem8[bp + 488] = e820idx;
+                // ── ext_mem_k (offset 0x02) — extended memory above 1MB in KB ──
+                const extMemK = ((TOTAL_RAM - 1048576) >>> 10);
+                dv.setUint16(bp + 2, Math.min(extMemK, 65535), true);
+                // alt_mem_k (offset 0x1E0) — same but 32-bit
+                dv.setUint32(bp + 480, extMemK, true);
                 // ── screen_info (offset 0x00) — basic VGA text mode ──
                 mem8[bp + 6] = 3;
                 // orig_video_mode = 3 (80x25 text)

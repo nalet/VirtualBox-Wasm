@@ -3464,8 +3464,13 @@ function execBlock(cpuP, ramB, maxInsn) {
               mem8[stageBase+0x204], mem8[stageBase+0x205]);
             const protoVer = mem8[stageBase+0x206] | (mem8[stageBase+0x207]<<8);
 
+            // Read init_size and pref_address from setup header
+            const initSz = dv.getUint32(stageBase + 0x260, true);
+            const prefAddr = dv.getUint32(stageBase + 0x258, true);
             console.log('[DIRECT-BOOT] header=' + hdrSig + ' proto=0x' +
-              protoVer.toString(16) + ' setup_sects=' + setup_sects);
+              protoVer.toString(16) + ' setup_sects=' + setup_sects +
+              ' init_size=0x' + initSz.toString(16) +
+              ' pref_addr=0x' + prefAddr.toString(16));
 
             if (hdrSig === 'HdrS' && highRamPtr) {
               const setupSize = (setup_sects + 1) * 512;
@@ -3513,6 +3518,42 @@ function execBlock(cpuP, ramB, maxInsn) {
               dv.setUint32(ramBase + SETUP_GPA + 0x228, CMDLINE_GPA, true); // cmd_line_ptr
               dv.setUint32(ramBase + SETUP_GPA + 0x218, INITRD_GPA, true); // ramdisk_image
               dv.setUint32(ramBase + SETUP_GPA + 0x21C, initrdLen, true);  // ramdisk_size
+
+              // ── e820 memory map ──
+              // boot_params->e820_entries at offset 0x1E8
+              // boot_params->e820_table at offset 0x2D0 (20 bytes per entry)
+              const TOTAL_RAM = 0x100000 + highRamSize; // e.g. 512MB + 1MB low
+              const e820Off = bp + 0x2D0;
+              let e820idx = 0;
+              // Entry 0: 0x000000-0x09FFFF usable (640KB conventional)
+              dv.setUint32(e820Off + 0, 0x00000, true);  dv.setUint32(e820Off + 4, 0, true);
+              dv.setUint32(e820Off + 8, 0xA0000, true);  dv.setUint32(e820Off + 12, 0, true);
+              dv.setUint32(e820Off + 16, 1, true); // type=1 (usable)
+              e820idx++;
+              // Entry 1: 0x100000-end_of_ram usable
+              const e1 = e820Off + 20;
+              dv.setUint32(e1 + 0, 0x100000, true);  dv.setUint32(e1 + 4, 0, true);
+              dv.setUint32(e1 + 8, (TOTAL_RAM - 0x100000) >>> 0, true);
+              dv.setUint32(e1 + 12, ((TOTAL_RAM - 0x100000) > 0xFFFFFFFF) ? 1 : 0, true);
+              dv.setUint32(e1 + 16, 1, true); // type=1 (usable)
+              e820idx++;
+              // Entry 2: 0x0F0000-0x0FFFFF reserved (BIOS area)
+              const e2 = e820Off + 40;
+              dv.setUint32(e2 + 0, 0xF0000, true);  dv.setUint32(e2 + 4, 0, true);
+              dv.setUint32(e2 + 8, 0x10000, true);  dv.setUint32(e2 + 12, 0, true);
+              dv.setUint32(e2 + 16, 2, true); // type=2 (reserved)
+              e820idx++;
+              mem8[bp + 0x1E8] = e820idx;
+
+              // ── screen_info (offset 0x00) — basic VGA text mode ──
+              mem8[bp + 0x06] = 3;     // orig_video_mode = 3 (80x25 text)
+              mem8[bp + 0x07] = 80;    // orig_video_cols
+              mem8[bp + 0x0E] = 25;    // orig_video_lines
+              mem8[bp + 0x0F] = 0;     // orig_video_isVGA = 0 (standard VGA)
+              dv.setUint16(bp + 0x10, 16, true); // orig_video_points (char height)
+
+              console.log('[DIRECT-BOOT] e820: ' + e820idx + ' entries, RAM=' +
+                (TOTAL_RAM >> 20) + 'MB');
 
               // ── CPU state for kernel entry ──
               const SETUP_SEG = SETUP_GPA >>> 4; // 0x1000

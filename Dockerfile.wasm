@@ -250,7 +250,7 @@ RUN . /opt/emsdk/emsdk_env.sh 2>/dev/null \
         -sMEMORY64=1 \
         -sALLOW_MEMORY_GROWTH=1 \
         -sINITIAL_MEMORY=1073741824 \
-        -sSTACK_SIZE=2097152 \
+        -sSTACK_SIZE=4194304 \
         -sENVIRONMENT=web,worker \
         -sEXPORTED_RUNTIME_METHODS='["callMain","FS"]' \
         --pre-js jit-pre.js \
@@ -263,7 +263,7 @@ RUN . /opt/emsdk/emsdk_env.sh 2>/dev/null \
         -sALLOW_BLOCKING_ON_MAIN_THREAD=1 \
         -sPROXY_TO_PTHREAD \
         -sFORCE_FILESYSTEM=1 \
-        -sDEFAULT_PTHREAD_STACK_SIZE=1048576 \
+        -sDEFAULT_PTHREAD_STACK_SIZE=4194304 \
         -Wno-unused-command-line-argument \
         -sERROR_ON_UNDEFINED_SYMBOLS=0 \
     && ls -lh docs/vbox-wasm.js docs/vbox-wasm.wasm docs/vbox-wasm.js.symbols \

@@ -1217,6 +1217,37 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                         RTPrintf("[CPU-DIAG] CS=%04x IP=%08llx CR0=%08x FL=%08x EAX=%08x EDX=%08x insns=%llu jitBail=%u\n",
                                  cs, (unsigned long long)rip, cr0, efl, eax, edx,
                                  (unsigned long long)pVCpu->iem.s.cInstructions, s_cIemAfterJitBail);
+                        /* Stuck detector: if EIP hasn't changed, dump instruction bytes + extra regs */
+                        static uint64_t s_uLastDiagRip = 0;
+                        static uint32_t s_cStuckCount = 0;
+                        if (rip == s_uLastDiagRip)
+                        {
+                            if (++s_cStuckCount == 3)
+                            {
+                                uint8_t abCode[16];
+                                RTGCPHYS GCPhys = rip; /* simplified: works for identity-mapped or flat code */
+                                PGMPhysRead(pVM, GCPhys, abCode, sizeof(abCode), PGMACCESSORIGIN_IEM);
+                                RTPrintf("[CPU-STUCK] EIP=%08llx bytes: %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x\n",
+                                         (unsigned long long)rip,
+                                         abCode[0], abCode[1], abCode[2], abCode[3],
+                                         abCode[4], abCode[5], abCode[6], abCode[7],
+                                         abCode[8], abCode[9], abCode[10], abCode[11],
+                                         abCode[12], abCode[13], abCode[14], abCode[15]);
+                                RTPrintf("[CPU-STUCK] EBX=%08x ECX=%08x ESI=%08x EDI=%08x ESP=%08x EBP=%08x CR2=%08llx CR3=%08llx CR4=%08x EFER=%016llx\n",
+                                         pVCpu->cpum.GstCtx.ebx, pVCpu->cpum.GstCtx.ecx,
+                                         pVCpu->cpum.GstCtx.esi, pVCpu->cpum.GstCtx.edi,
+                                         pVCpu->cpum.GstCtx.esp, pVCpu->cpum.GstCtx.ebp,
+                                         (unsigned long long)pVCpu->cpum.GstCtx.cr2,
+                                         (unsigned long long)pVCpu->cpum.GstCtx.cr3,
+                                         (unsigned)pVCpu->cpum.GstCtx.cr4,
+                                         (unsigned long long)pVCpu->cpum.GstCtx.msrEFER);
+                            }
+                        }
+                        else
+                        {
+                            s_cStuckCount = 0;
+                            s_uLastDiagRip = rip;
+                        }
                         RTStrmFlush(g_pStdOut);
                     }
                 }

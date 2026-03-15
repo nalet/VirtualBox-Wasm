@@ -4792,14 +4792,12 @@ globalThis.VBoxJIT = (function() {
             console.log("[CODE-DUMP] around " + codeBase.toString(16) + ": " + codeDump);
           }
           // ── Direct Kernel Boot ──
-          // When the BIOS is stuck in its HLT loop (CD-ROM read never completes),
+          // When the BIOS is stuck in its ATA retry/halt loop after boot failure,
           // bypass ISOLINUX by loading the pre-staged kernel directly into guest RAM.
-          // Trigger: HLTs at BIOS halt_forever (f000:709c) with SP >= 0xFF00
-          // (post-POST halt loop), NOT during memory init (SP=0x7b58).
-          // The SP check distinguishes the final halt loop from BIOS POST HLTs
-          // at the same address during memory initialization.
+          // Trigger: 30K+ HLTs at BIOS halt_forever (f000:709c) + KRNL magic present.
+          // BIOS POST is already complete by this point (ISOLINUX has run and failed).
           const hltSP = gr16(4);
-          if (hltCnt >= 3e4 && hltCS === 61440 && ip === 28828 && hltSP >= 65280 && !execBlock._directBootDone) {
+          if (hltCnt >= 3e4 && hltCS === 61440 && ip === 28828 && !execBlock._directBootDone) {
             const md = ramBase + 1280;
             if (mem8[md + 12] === 75 && mem8[md + 13] === 82 && mem8[md + 14] === 78 && mem8[md + 15] === 76) {
               // "KRNL" magic

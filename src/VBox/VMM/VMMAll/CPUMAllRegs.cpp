@@ -1000,6 +1000,7 @@ VMMDECL(void) CPUMGetGuestCpuId(PVMCPUCC pVCpu, uint32_t uLeaf, uint32_t uSubLea
                     || pVM->cpum.s.GuestFeatures.enmCpuVendor == CPUMCPUVENDOR_SHANGHAI /*?*/ ) )
                 *pEdx &= ~X86_CPUID_EXT_FEATURE_EDX_SYSCALL;
 
+#if 0 /* disabled — causes BIOS triple fault at eip=0e6b0c05 */
 #ifdef __EMSCRIPTEN__
             /* Wasm: inject LM/NX/SYSCALL/FXSR/RDTSCP into extended leaf 0x80000001
                so Linux kernels detect a 64-bit capable CPU. We inject at runtime
@@ -1013,6 +1014,7 @@ VMMDECL(void) CPUMGetGuestCpuId(PVMCPUCC pVCpu, uint32_t uLeaf, uint32_t uSubLea
                        | X86_CPUID_EXT_FEATURE_EDX_RDTSCP;
                 *pEcx |= X86_CPUID_EXT_FEATURE_ECX_LAHF_SAHF;
             }
+#endif
 #endif
 
         }

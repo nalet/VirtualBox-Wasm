@@ -4742,14 +4742,50 @@ globalThis.VBoxJIT = (function() {
             console.log("[CODE-DUMP] around " + codeBase.toString(16) + ": " + codeDump);
           }
 
-        // ── Direct Kernel Boot: detect halt_forever and jump to kernel ──
+        // ── Direct Kernel Boot: detect halt_forever, load staged kernel, boot ──
         if (hltCS === 0xF000 && ip === 0x709C &&
             !execBlock._directBootDone && hltCnt >= 100) {
-          const m0 = guestRb(0x7000), m1 = guestRb(0x7001),
-                m2 = guestRb(0x7002), m3 = guestRb(0x7003);
-          if (m0 === 0x4F && m1 === 0x42 && m2 === 0x4D && m3 === 0x56) {
+          const m0 = guestRb(0x50C), m1 = guestRb(0x50D),
+                m2 = guestRb(0x50E), m3 = guestRb(0x50F);
+          if (m0 === 0x4B && m1 === 0x52 && m2 === 0x4E && m3 === 0x4C) {
             execBlock._directBootDone = true;
-            console.log("[DIRECT-BOOT] Kernel preloaded, switching CPU to kernel setup");
+            const stageBase = guestRb(0x500) | (guestRb(0x501) << 8) |
+                              (guestRb(0x502) << 16) | ((guestRb(0x503) << 24) >>> 0);
+            const vmlinuzLen = guestRb(0x504) | (guestRb(0x505) << 8) |
+                               (guestRb(0x506) << 16) | ((guestRb(0x507) << 24) >>> 0);
+            const initrdLen = guestRb(0x508) | (guestRb(0x509) << 8) |
+                              (guestRb(0x50A) << 16) | ((guestRb(0x50B) << 24) >>> 0);
+            console.log("[DIRECT-BOOT] Found staged kernel: stage=0x" + stageBase.toString(16) +
+              " vmlinuz=" + vmlinuzLen + " initrd=" + initrdLen +
+              " highRamPtr=0x" + highRamPtr.toString(16));
+            if (!highRamPtr) { console.error("[DIRECT-BOOT] highRamPtr not set"); break; }
+            const m = new Uint8Array(wasmMemory.buffer);
+            const vmlinuz = m.subarray(stageBase, stageBase + vmlinuzLen);
+            const initrd = m.subarray(stageBase + vmlinuzLen, stageBase + vmlinuzLen + initrdLen);
+            const setup_sects = vmlinuz[0x1F1] || 4;
+            const setup_size = (setup_sects + 1) * 512;
+            const SETUP_ADDR = 0x10000, KERNEL_ADDR = 0x100000;
+            const INITRD_ADDR = 0x1800000, CMDLINE_ADDR = 0x20000;
+            const rb = Number(ramBase);
+            m.set(vmlinuz.subarray(0, setup_size), rb + SETUP_ADDR);
+            m.set(vmlinuz.subarray(setup_size), highRamPtr + 0);
+            m.set(initrd, highRamPtr + (INITRD_ADDR - 0x100000));
+            const cmdline = "pmedia=cd\0";
+            for (let ci = 0; ci < cmdline.length; ci++)
+              m[rb + CMDLINE_ADDR + ci] = cmdline.charCodeAt(ci);
+            const hdr = rb + SETUP_ADDR;
+            m[hdr + 0x210] = 0xFF;
+            m[hdr + 0x211] = (m[hdr + 0x211] | 0x01 | 0x80);
+            var he = 0xFE00 - 0x0200;
+            m[hdr + 0x224] = he & 0xFF; m[hdr + 0x225] = (he >> 8) & 0xFF;
+            m[hdr + 0x218] = INITRD_ADDR & 0xFF; m[hdr + 0x219] = (INITRD_ADDR >> 8) & 0xFF;
+            m[hdr + 0x21A] = (INITRD_ADDR >> 16) & 0xFF; m[hdr + 0x21B] = (INITRD_ADDR >> 24) & 0xFF;
+            m[hdr + 0x21C] = initrdLen & 0xFF; m[hdr + 0x21D] = (initrdLen >> 8) & 0xFF;
+            m[hdr + 0x21E] = (initrdLen >> 16) & 0xFF; m[hdr + 0x21F] = (initrdLen >> 24) & 0xFF;
+            m[hdr + 0x228] = CMDLINE_ADDR & 0xFF; m[hdr + 0x229] = (CMDLINE_ADDR >> 8) & 0xFF;
+            m[hdr + 0x22A] = (CMDLINE_ADDR >> 16) & 0xFF; m[hdr + 0x22B] = (CMDLINE_ADDR >> 24) & 0xFF;
+            console.log("[DIRECT-BOOT] Copied: setup=" + setup_size + " kernel=" + (vmlinuzLen - setup_size) +
+              " initrd=" + initrdLen);
             wr16(S_CS + SEG_SEL, 0x1020);
             wr64(S_CS + SEG_BASE, 0x10200);
             wr32(S_CS + SEG_LIMIT, 0xFFFF);
@@ -4761,12 +4797,10 @@ globalThis.VBoxJIT = (function() {
               wr32(dataSegs[si] + SEG_LIMIT, 0xFFFF);
               wr32(dataSegs[si] + SEG_ATTR, 0x0093);
             }
-            wr32(R_IP, 0);
-            wr32(R_SP, 0xFFF0);
-            wr32(R_FLAGS, 0x0002);
+            wr32(R_IP, 0); wr32(R_SP, 0xFFF0); wr32(R_FLAGS, 0x0002);
             wr32(R_AX, 0); wr32(R_BX, 0); wr32(R_CX, 0); wr32(R_DX, 0);
             wr32(R_SI, 0); wr32(R_DI, 0); wr32(R_BP, 0);
-            guestWb(0x7000, 0);
+            guestWb(0x50C, 0);
             console.log("[DIRECT-BOOT] CPU state set: CS=1020 IP=0000 -> phys 0x10200");
             lastBailOp = b; iter = maxInsn;
             break;

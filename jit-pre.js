@@ -3403,26 +3403,87 @@ function execBlock(cpuP, ramB, maxInsn) {
 
         // ── Direct Kernel Boot: detect halt_forever and jump to kernel ──
         // When the BIOS invalid opcode handler enters halt_forever (HLT loop
-        // at f000:709c), check if the main thread has preloaded the Linux
-        // kernel into guest RAM. If so, set CPU state to boot the kernel
-        // directly, bypassing the crashed ISOLINUX bootloader.
+        // at f000:709c), check if the main thread has staged kernel data.
+        // If so, copy to correct guest addresses, set boot params, and
+        // switch CPU to boot Linux directly (bypass crashed ISOLINUX).
         if (hltCS === 0xF000 && ip === 0x709C &&
             !execBlock._directBootDone && hltCnt >= 100) {
-          // Check magic flag at guest physical 0x7000
-          const m0 = guestRb(0x7000), m1 = guestRb(0x7001),
-                m2 = guestRb(0x7002), m3 = guestRb(0x7003);
-          if (m0 === 0x4F && m1 === 0x42 && m2 === 0x4D && m3 === 0x56) {
+          // Check magic "KRNL" at guest 0x50C
+          const m0 = guestRb(0x50C), m1 = guestRb(0x50D),
+                m2 = guestRb(0x50E), m3 = guestRb(0x50F);
+          if (m0 === 0x4B && m1 === 0x52 && m2 === 0x4E && m3 === 0x4C) {
             execBlock._directBootDone = true;
-            console.log('[DIRECT-BOOT] Kernel preloaded, switching CPU to kernel setup');
+            // Read metadata from guest 0x500
+            const stageBase = guestRb(0x500) | (guestRb(0x501) << 8) |
+                              (guestRb(0x502) << 16) | ((guestRb(0x503) << 24) >>> 0);
+            const vmlinuzLen = guestRb(0x504) | (guestRb(0x505) << 8) |
+                               (guestRb(0x506) << 16) | ((guestRb(0x507) << 24) >>> 0);
+            const initrdLen = guestRb(0x508) | (guestRb(0x509) << 8) |
+                              (guestRb(0x50A) << 16) | ((guestRb(0x50B) << 24) >>> 0);
+            console.log('[DIRECT-BOOT] Found staged kernel: stage=0x' + stageBase.toString(16) +
+              ' vmlinuz=' + vmlinuzLen + ' initrd=' + initrdLen +
+              ' highRamPtr=0x' + highRamPtr.toString(16));
 
-            // Set segment registers for real-mode kernel entry:
+            if (!highRamPtr) {
+              console.error('[DIRECT-BOOT] highRamPtr not set, cannot preload');
+              break;
+            }
+
+            // Read staged data from Wasm memory
+            const m = new Uint8Array(wasmMemory.buffer);
+            const vmlinuz = m.subarray(stageBase, stageBase + vmlinuzLen);
+            const initrd = m.subarray(stageBase + vmlinuzLen, stageBase + vmlinuzLen + initrdLen);
+
+            // Parse vmlinuz header
+            const setup_sects = vmlinuz[0x1F1] || 4;
+            const setup_size = (setup_sects + 1) * 512;
+            const kernel_size = vmlinuzLen - setup_size;
+            const SETUP_ADDR = 0x10000;
+            const KERNEL_ADDR = 0x100000;
+            const INITRD_ADDR = 0x1800000; // 24 MB
+            const CMDLINE_ADDR = 0x20000;
+
+            // Copy setup code to guest 0x10000 (low RAM via ramBase)
+            const rb = Number(ramBase);
+            m.set(vmlinuz.subarray(0, setup_size), rb + SETUP_ADDR);
+
+            // Copy PM kernel to guest 0x100000 (high RAM via highRamPtr)
+            m.set(vmlinuz.subarray(setup_size), highRamPtr + 0);
+
+            // Copy initrd to guest 0x1800000 (high RAM)
+            m.set(initrd, highRamPtr + (INITRD_ADDR - 0x100000));
+
+            // Write command line at guest 0x20000
+            const cmdline = 'pmedia=cd\0';
+            for (let ci = 0; ci < cmdline.length; ci++)
+              m[rb + CMDLINE_ADDR + ci] = cmdline.charCodeAt(ci);
+
+            // Set up boot_params header at SETUP_ADDR
+            const hdr = rb + SETUP_ADDR;
+            m[hdr + 0x210] = 0xFF; // type_of_loader
+            m[hdr + 0x211] = (m[hdr + 0x211] | 0x01 | 0x80); // LOADED_HIGH | CAN_USE_HEAP
+            var he = 0xFE00 - 0x0200;
+            m[hdr + 0x224] = he & 0xFF; m[hdr + 0x225] = (he >> 8) & 0xFF;
+            // ramdisk_image
+            m[hdr + 0x218] = INITRD_ADDR & 0xFF; m[hdr + 0x219] = (INITRD_ADDR >> 8) & 0xFF;
+            m[hdr + 0x21A] = (INITRD_ADDR >> 16) & 0xFF; m[hdr + 0x21B] = (INITRD_ADDR >> 24) & 0xFF;
+            // ramdisk_size
+            m[hdr + 0x21C] = initrdLen & 0xFF; m[hdr + 0x21D] = (initrdLen >> 8) & 0xFF;
+            m[hdr + 0x21E] = (initrdLen >> 16) & 0xFF; m[hdr + 0x21F] = (initrdLen >> 24) & 0xFF;
+            // cmd_line_ptr
+            m[hdr + 0x228] = CMDLINE_ADDR & 0xFF; m[hdr + 0x229] = (CMDLINE_ADDR >> 8) & 0xFF;
+            m[hdr + 0x22A] = (CMDLINE_ADDR >> 16) & 0xFF; m[hdr + 0x22B] = (CMDLINE_ADDR >> 24) & 0xFF;
+
+            console.log('[DIRECT-BOOT] Copied: setup=' + setup_size + ' kernel=' + kernel_size +
+              ' initrd=' + initrdLen + ' to guest RAM');
+
+            // Set CPU state for real-mode kernel entry
             // CS = 0x1020, base = 0x10200 → entry at offset 0x200 in vmlinuz
             wr16(S_CS + SEG_SEL, 0x1020);
             wr64(S_CS + SEG_BASE, 0x10200);
             wr32(S_CS + SEG_LIMIT, 0xFFFF);
             wr32(S_CS + SEG_ATTR, 0x009B);
 
-            // DS = ES = SS = FS = GS = 0x1000, base = 0x10000
             const dataSegs = [S_DS, S_ES, S_SS, S_FS, S_GS];
             for (let si = 0; si < dataSegs.length; si++) {
               wr16(dataSegs[si] + SEG_SEL, 0x1000);
@@ -3431,23 +3492,14 @@ function execBlock(cpuP, ramB, maxInsn) {
               wr32(dataSegs[si] + SEG_ATTR, 0x0093);
             }
 
-            // IP = 0 (CS base 0x10200 + IP 0 = physical 0x10200)
-            wr32(R_IP, 0);
-            // SP = top of setup segment heap
-            wr32(R_SP, 0xFFF0);
-            // FLAGS: IF=0, clear DF
-            wr32(R_FLAGS, 0x0002);
-            // Clear general-purpose registers
+            wr32(R_IP, 0); wr32(R_SP, 0xFFF0); wr32(R_FLAGS, 0x0002);
             wr32(R_AX, 0); wr32(R_BX, 0); wr32(R_CX, 0); wr32(R_DX, 0);
             wr32(R_SI, 0); wr32(R_DI, 0); wr32(R_BP, 0);
-            // CR0: keep real mode (PE=0)
 
-            // Clear the magic flag so we don't re-trigger
-            guestWb(0x7000, 0);
+            // Clear magic so we don't re-trigger
+            guestWb(0x50C, 0);
 
             console.log('[DIRECT-BOOT] CPU state set: CS=1020 IP=0000 → phys 0x10200');
-
-            // Break out and let IEM pick up the new CPU state
             lastBailOp = b; iter = maxInsn;
             break;
           }

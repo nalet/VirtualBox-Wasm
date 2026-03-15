@@ -903,7 +903,11 @@
         }
         requestAnimationFrame(renderLoop);
 
-        // ── Direct Kernel Boot: preload into guest RAM ──
+        // ── Direct Kernel Boot: stage kernel data in Wasm memory ──
+        // The main thread cannot access highRamPtr (worker-thread closure),
+        // so we stage vmlinuz+initrd in the Wasm shared buffer and write
+        // metadata to guest low RAM. The JIT (in the worker thread) reads
+        // the staged data and copies it to the correct guest addresses.
         let kernelPreloaded = false;
         function tryPreloadKernel() {
           if (kernelPreloaded || !directBootVmlinuz || !directBootInitrd) return;
@@ -913,85 +917,54 @@
             if (!ramPtr) return;
 
             const mem = new Uint8Array(wasmMemory.buffer);
-            const setup_sects = directBootVmlinuz[0x1F1] || 4;
-            const setup_size = (setup_sects + 1) * 512;
-            const kernel_size = directBootVmlinuz.length - setup_size;
-            const version = directBootVmlinuz[0x206] | (directBootVmlinuz[0x207] << 8);
+            const bufLen = wasmMemory.buffer.byteLength;
 
-            // Guest physical addresses
-            const SETUP_ADDR = 0x10000;
-            const KERNEL_ADDR = 0x100000;
-            const INITRD_ADDR = 0x1800000; // 24 MB
-            const CMDLINE_ADDR = 0x20000;
+            // Stage kernel data at end of Wasm memory (last 16MB)
+            const STAGE_SIZE = 16 * 1024 * 1024;
+            const stageBase = bufLen - STAGE_SIZE;
+            if (stageBase < 0x2000000) return; // safety: need at least 32MB headroom
 
-            // Read highRamPtr from guest RAM at 0x7010 (written by JIT worker thread)
-            // JIT closure variables are thread-local in Emscripten pthreads,
-            // so we use SharedArrayBuffer to share the pointer.
-            const highRamP = mem[ramPtr + 0x7010] | (mem[ramPtr + 0x7011] << 8) |
-                             (mem[ramPtr + 0x7012] << 16) | ((mem[ramPtr + 0x7013] << 24) >>> 0);
-            if (!highRamP) return; // JIT hasn't set it yet
-            {
-              // Copy setup code to 0x10000 (low RAM)
-              mem.set(directBootVmlinuz.subarray(0, setup_size),
-                      ramPtr + SETUP_ADDR);
+            const vmlinuzLen = directBootVmlinuz.length;
+            const initrdLen = directBootInitrd.length;
+            if (vmlinuzLen + initrdLen > STAGE_SIZE) return; // won't fit
 
-              // Copy PM kernel to 0x100000 (high RAM)
-              mem.set(directBootVmlinuz.subarray(setup_size),
-                      highRamP + 0); // highRamPtr maps GCPhys 0x100000
+            // Write kernel data to staging area
+            mem.set(directBootVmlinuz, stageBase);
+            mem.set(directBootInitrd, stageBase + vmlinuzLen);
 
-              // Copy initrd to 0x1800000 (high RAM)
-              const initrdHighOff = INITRD_ADDR - 0x100000;
-              mem.set(directBootInitrd, highRamP + initrdHighOff);
+            // Write metadata to guest 0x500 (free conventional memory area)
+            // Layout: magic(4) + stageBase(4) + vmlinuzLen(4) + initrdLen(4)
+            const md = ramPtr + 0x500;
+            // stageBase (Wasm memory offset)
+            mem[md + 0] = stageBase & 0xFF;
+            mem[md + 1] = (stageBase >> 8) & 0xFF;
+            mem[md + 2] = (stageBase >> 16) & 0xFF;
+            mem[md + 3] = (stageBase >> 24) & 0xFF;
+            // vmlinuzLen
+            mem[md + 4] = vmlinuzLen & 0xFF;
+            mem[md + 5] = (vmlinuzLen >> 8) & 0xFF;
+            mem[md + 6] = (vmlinuzLen >> 16) & 0xFF;
+            mem[md + 7] = (vmlinuzLen >> 24) & 0xFF;
+            // initrdLen
+            mem[md + 8] = initrdLen & 0xFF;
+            mem[md + 9] = (initrdLen >> 8) & 0xFF;
+            mem[md + 10] = (initrdLen >> 16) & 0xFF;
+            mem[md + 11] = (initrdLen >> 24) & 0xFF;
+            // Magic "KRNL" at offset 12
+            mem[md + 12] = 0x4B; // 'K'
+            mem[md + 13] = 0x52; // 'R'
+            mem[md + 14] = 0x4E; // 'N'
+            mem[md + 15] = 0x4C; // 'L'
 
-              // Write command line at 0x20000 (low RAM)
-              const cmdline = 'pmedia=cd\0';
-              for (let i = 0; i < cmdline.length; i++)
-                mem[ramPtr + CMDLINE_ADDR + i] = cmdline.charCodeAt(i);
-
-              // Set up boot_params header at SETUP_ADDR
-              const hdr = ramPtr + SETUP_ADDR;
-              // type_of_loader = 0xFF
-              mem[hdr + 0x210] = 0xFF;
-              // loadflags: LOADED_HIGH (bit 0) | CAN_USE_HEAP (bit 7)
-              mem[hdr + 0x211] = (mem[hdr + 0x211] | 0x01 | 0x80);
-              // heap_end_ptr (relative to setup segment)
-              var he = 0xFE00 - 0x0200;
-              mem[hdr + 0x224] = he & 0xFF;
-              mem[hdr + 0x225] = (he >> 8) & 0xFF;
-              // ramdisk_image
-              mem[hdr + 0x218] = (INITRD_ADDR) & 0xFF;
-              mem[hdr + 0x219] = (INITRD_ADDR >> 8) & 0xFF;
-              mem[hdr + 0x21A] = (INITRD_ADDR >> 16) & 0xFF;
-              mem[hdr + 0x21B] = (INITRD_ADDR >> 24) & 0xFF;
-              // ramdisk_size
-              var irs = directBootInitrd.length;
-              mem[hdr + 0x21C] = irs & 0xFF;
-              mem[hdr + 0x21D] = (irs >> 8) & 0xFF;
-              mem[hdr + 0x21E] = (irs >> 16) & 0xFF;
-              mem[hdr + 0x21F] = (irs >> 24) & 0xFF;
-              // cmd_line_ptr
-              mem[hdr + 0x228] = (CMDLINE_ADDR) & 0xFF;
-              mem[hdr + 0x229] = (CMDLINE_ADDR >> 8) & 0xFF;
-              mem[hdr + 0x22A] = (CMDLINE_ADDR >> 16) & 0xFF;
-              mem[hdr + 0x22B] = (CMDLINE_ADDR >> 24) & 0xFF;
-
-              // Write magic flag at guest 0x7000 (low RAM)
-              mem[ramPtr + 0x7000] = 0x4F; // 'O'
-              mem[ramPtr + 0x7001] = 0x42; // 'B'
-              mem[ramPtr + 0x7002] = 0x4D; // 'M'
-              mem[ramPtr + 0x7003] = 0x56; // 'V' → "OBMV" LE = 0x564D424F
-
-              kernelPreloaded = true;
-              console.log('[DIRECT-BOOT] Kernel preloaded: setup=' + setup_size +
-                ' kernel=' + kernel_size + ' initrd=' + irs +
-                ' version=0x' + version.toString(16) +
-                ' highRamP=0x' + highRamP.toString(16));
-              appendLine('Direct boot: kernel preloaded into guest RAM', 'info');
-              directBootVmlinuz = null;
-              directBootInitrd = null;
-            }
+            kernelPreloaded = true;
+            console.log('[DIRECT-BOOT] Staged: vmlinuz=' + vmlinuzLen +
+              ' initrd=' + initrdLen + ' at 0x' + stageBase.toString(16) +
+              ' bufLen=0x' + bufLen.toString(16));
+            appendLine('Direct boot: kernel staged for JIT preload', 'info');
+            directBootVmlinuz = null;
+            directBootInitrd = null;
           } catch(e) {
-            console.error('[DIRECT-BOOT] preload error:', e.message);
+            console.error('[DIRECT-BOOT] stage error:', e.message);
           }
         }
 

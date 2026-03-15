@@ -3795,6 +3795,8 @@ function execBlockWrapped(cpuP, ramB, maxInsn, highRamP, highRamSz) {
     refreshViews();
     const leaf = _pendingCpuidLeaf;
     _pendingCpuidLeaf = -1;
+    console.log('[CPUID-OVERRIDE] Applying override for leaf=0x' + leaf.toString(16) +
+      ' current EAX=0x' + rr32(R_AX).toString(16));
     if (leaf === 0x80000001) {
       wr32(R_AX, 0x00000000);  // EAX
       wr32(R_BX, 0x00000000);  // EBX
@@ -3823,9 +3825,19 @@ function execBlockWrapped(cpuP, ramB, maxInsn, highRamP, highRamSz) {
 
   // If execBlock bailed on CPUID (0x0F 0xA2 = 0x0FA2) and direct boot is done,
   // save the leaf (EAX) for override on next call (after IEM handles the CPUID).
+  if (_directBootDone && _lastBailOp >= 0x0F00) {
+    // Log all 0x0F-prefix bails after direct boot (diagnostic)
+    if (!execBlockWrapped._0fBailLog) execBlockWrapped._0fBailLog = 0;
+    if (execBlockWrapped._0fBailLog++ < 20) {
+      refreshViews();
+      console.log('[CPUID-DBG] 0x0F bail: op=0x' + _lastBailOp.toString(16) +
+        ' EAX=0x' + rr32(R_AX).toString(16) + ' IP=0x' + rr32(R_IP).toString(16));
+    }
+  }
   if (_lastBailOp === 0x0FA2 && _directBootDone) {
     refreshViews();
     _pendingCpuidLeaf = rr32(R_AX); // EAX has the leaf number (not yet overwritten by IEM)
+    console.log('[CPUID-OVERRIDE] Detected CPUID bail, leaf=0x' + _pendingCpuidLeaf.toString(16));
   }
 
   // Stuck-detection: if we stay in the same 32-byte IP range for >50000 calls, dump full state

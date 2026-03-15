@@ -5089,6 +5089,8 @@ globalThis.VBoxJIT = (function() {
       refreshViews();
       const leaf = _pendingCpuidLeaf;
       _pendingCpuidLeaf = -1;
+      console.log("[CPUID-OVERRIDE] Applying override for leaf=0x" + leaf.toString(16) +
+        " current EAX=0x" + rr32(R_AX).toString(16));
       if (leaf === 2147483649) { // 0x80000001
         wr32(R_AX, 0);
         wr32(R_BX, 0);
@@ -5114,11 +5116,21 @@ globalThis.VBoxJIT = (function() {
       statFallbacks++;
     }
 
+    // Log 0x0F-prefix bails after direct boot
+    if (_directBootDone && _lastBailOp >= 3840) { // >= 0x0F00
+      if (!execBlockWrapped._0fBailLog) execBlockWrapped._0fBailLog = 0;
+      if (execBlockWrapped._0fBailLog++ < 20) {
+        refreshViews();
+        console.log("[CPUID-DBG] 0x0F bail: op=0x" + _lastBailOp.toString(16) +
+          " EAX=0x" + rr32(R_AX).toString(16) + " IP=0x" + rr32(R_IP).toString(16));
+      }
+    }
     // If execBlock bailed on CPUID (0x0FA2) and direct boot is done,
     // save the leaf (EAX) for override on next call.
     if (_lastBailOp === 4002 && _directBootDone) { // 0x0FA2 = 4002
       refreshViews();
       _pendingCpuidLeaf = rr32(R_AX);
+      console.log("[CPUID-OVERRIDE] Detected CPUID bail, leaf=0x" + _pendingCpuidLeaf.toString(16));
     }
     // Stuck-detection: if we stay in the same 32-byte IP range for >50000 calls, dump full state
     {

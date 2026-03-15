@@ -4091,31 +4091,33 @@ globalThis.VBoxJIT = (function() {
            // ──── CPUID (0x0F 0xA2) ────
             case 162:
             {
-              if (!_directBootDone) {
-                // Before direct boot: bail to IEM so BIOS/ISOLINUX get
-                // the real CPUID values (no LM → ISOLINUX won't crash)
-                lastBailOp = 3840 | b2;
-                iter = maxInsn;
-                break;
-              }
-              // After direct boot: handle CPUID in JS.
-              // Inject LM/NX/SYSCALL so the Linux kernel detects a 64-bit CPU.
+              // CS-based LM injection: the kernel setup code runs at CS >= 0x1000
+              // (typically CS=0x1020). BIOS runs at CS=F000, ISOLINUX at CS < 0x1000.
+              // Inject LM/NX/SYSCALL only for the kernel, not for BIOS/ISOLINUX.
+              const cpuidCS = rr16(S_CS + SEG_SEL);
               const leaf = rr32(R_AX) >>> 0;
-              if (leaf === 2147483648) {
-                // Max extended CPUID leaf
-                wr32(R_AX, 2147483656);
-                wr32(R_BX, 0);
-                wr32(R_CX, 0);
-                wr32(R_DX, 0);
-              } else if (leaf === 2147483649) {
-                // Extended feature flags — inject LM, NX, SYSCALL, RDTSCP
-                wr32(R_AX, 0);
-                wr32(R_BX, 0);
-                wr32(R_CX, 1);
-                // LAHF/SAHF
-                wr32(R_DX, (1 << 29) | (1 << 20) | (1 << 11) | (1 << 27));
+              if (cpuidCS >= 4096 && cpuidCS < 61440 && (leaf === 2147483648 || leaf === 2147483649)) {
+                if (leaf === 2147483648) {
+                  wr32(R_AX, 2147483656);
+                  wr32(R_BX, 0);
+                  wr32(R_CX, 0);
+                  wr32(R_DX, 0);
+                } else {
+                  // leaf 0x80000001: inject LM, NX, SYSCALL, RDTSCP
+                  wr32(R_AX, 0);
+                  wr32(R_BX, 0);
+                  wr32(R_CX, 1);
+                  // LAHF/SAHF
+                  wr32(R_DX, (1 << 29) | (1 << 20) | (1 << 11) | (1 << 27));
+                  // Set CR2 magic so CPUMGetGuestCpuId also injects LM in PM
+                  if (!_directBootDone) {
+                    _directBootDone = true;
+                    wr32(R_CR2, 3235822174);
+                    console.log("[CPUID] LM injected for kernel at CS=0x" + cpuidCS.toString(16) + " — CR2 magic set");
+                  }
+                }
               } else {
-                // All other leaves: bail to IEM
+                // BIOS/ISOLINUX or non-extended leaf: bail to IEM
                 lastBailOp = 3840 | b2;
                 iter = maxInsn;
                 break;
@@ -4777,110 +4779,6 @@ globalThis.VBoxJIT = (function() {
               codeDump += mem8[codeBase + i].toString(16).padStart(2, "0") + " ";
             }
             console.log("[CODE-DUMP] around " + codeBase.toString(16) + ": " + codeDump);
-          }
-          // ── Direct Kernel Boot: detect halt_forever and jump to kernel ──
-          // When the BIOS invalid opcode handler enters halt_forever (HLT loop
-          // at f000:709c), check if the main thread has staged kernel data.
-          // If so, copy to correct guest addresses, set boot params, and
-          // switch CPU to boot Linux directly (bypass crashed ISOLINUX).
-          if (hltCS === 61440 && ip === 28828 && !_directBootDone && hltCnt >= 100) {
-            // Check magic "KRNL" at guest 0x50C
-            const m0 = guestRb(1292), m1 = guestRb(1293), m2 = guestRb(1294), m3 = guestRb(1295);
-            if (m0 === 75 && m1 === 82 && m2 === 78 && m3 === 76) {
-              _directBootDone = true;
-              // Read metadata from guest 0x500
-              const stageBase = guestRb(1280) | (guestRb(1281) << 8) | (guestRb(1282) << 16) | ((guestRb(1283) << 24) >>> 0);
-              const vmlinuzLen = guestRb(1284) | (guestRb(1285) << 8) | (guestRb(1286) << 16) | ((guestRb(1287) << 24) >>> 0);
-              const initrdLen = guestRb(1288) | (guestRb(1289) << 8) | (guestRb(1290) << 16) | ((guestRb(1291) << 24) >>> 0);
-              console.log("[DIRECT-BOOT] Found staged kernel: stage=0x" + stageBase.toString(16) + " vmlinuz=" + vmlinuzLen + " initrd=" + initrdLen + " highRamPtr=0x" + highRamPtr.toString(16));
-              if (!highRamPtr) {
-                console.error("[DIRECT-BOOT] highRamPtr not set, cannot preload");
-                break;
-              }
-              // Read staged data from Wasm memory
-              const m = new Uint8Array(wasmMemory.buffer);
-              const vmlinuz = m.subarray(stageBase, stageBase + vmlinuzLen);
-              const initrd = m.subarray(stageBase + vmlinuzLen, stageBase + vmlinuzLen + initrdLen);
-              // Parse vmlinuz header
-              const setup_sects = vmlinuz[497] || 4;
-              const setup_size = (setup_sects + 1) * 512;
-              const kernel_size = vmlinuzLen - setup_size;
-              const SETUP_ADDR = 65536;
-              const KERNEL_ADDR = 1048576;
-              const INITRD_ADDR = 25165824;
-              // 24 MB
-              const CMDLINE_ADDR = 131072;
-              // Copy setup code to guest 0x10000 (low RAM via ramBase)
-              const rb = Number(ramBase);
-              m.set(vmlinuz.subarray(0, setup_size), rb + SETUP_ADDR);
-              // Copy PM kernel to guest 0x100000 (high RAM via highRamPtr)
-              m.set(vmlinuz.subarray(setup_size), highRamPtr + 0);
-              // Copy initrd to guest 0x1800000 (high RAM)
-              m.set(initrd, highRamPtr + (INITRD_ADDR - 1048576));
-              // Write command line at guest 0x20000
-              const cmdline = "pmedia=cd\0";
-              for (let ci = 0; ci < cmdline.length; ci++) m[rb + CMDLINE_ADDR + ci] = cmdline.charCodeAt(ci);
-              // Set up boot_params header at SETUP_ADDR
-              const hdr = rb + SETUP_ADDR;
-              m[hdr + 528] = 255;
-              // type_of_loader
-              m[hdr + 529] = (m[hdr + 529] | 1 | 128);
-              // LOADED_HIGH | CAN_USE_HEAP
-              var he = 65024 - 512;
-              m[hdr + 548] = he & 255;
-              m[hdr + 549] = (he >> 8) & 255;
-              // ramdisk_image
-              m[hdr + 536] = INITRD_ADDR & 255;
-              m[hdr + 537] = (INITRD_ADDR >> 8) & 255;
-              m[hdr + 538] = (INITRD_ADDR >> 16) & 255;
-              m[hdr + 539] = (INITRD_ADDR >> 24) & 255;
-              // ramdisk_size
-              m[hdr + 540] = initrdLen & 255;
-              m[hdr + 541] = (initrdLen >> 8) & 255;
-              m[hdr + 542] = (initrdLen >> 16) & 255;
-              m[hdr + 543] = (initrdLen >> 24) & 255;
-              // cmd_line_ptr
-              m[hdr + 552] = CMDLINE_ADDR & 255;
-              m[hdr + 553] = (CMDLINE_ADDR >> 8) & 255;
-              m[hdr + 554] = (CMDLINE_ADDR >> 16) & 255;
-              m[hdr + 555] = (CMDLINE_ADDR >> 24) & 255;
-              console.log("[DIRECT-BOOT] Copied: setup=" + setup_size + " kernel=" + kernel_size + " initrd=" + initrdLen + " to guest RAM");
-              // Set CPU state for real-mode kernel entry
-              // CS = 0x1020, base = 0x10200 → entry at offset 0x200 in vmlinuz
-              wr16(S_CS + SEG_SEL, 4128);
-              wr64(S_CS + SEG_BASE, 66048);
-              wr32(S_CS + SEG_LIMIT, 65535);
-              wr32(S_CS + SEG_ATTR, 155);
-              const dataSegs = [ S_DS, S_ES, S_SS, S_FS, S_GS ];
-              for (let si = 0; si < dataSegs.length; si++) {
-                wr16(dataSegs[si] + SEG_SEL, 4096);
-                wr64(dataSegs[si] + SEG_BASE, 65536);
-                wr32(dataSegs[si] + SEG_LIMIT, 65535);
-                wr32(dataSegs[si] + SEG_ATTR, 147);
-              }
-              wr32(R_IP, 0);
-              wr32(R_SP, 65520);
-              wr32(R_FLAGS, 2);
-              wr32(R_AX, 0);
-              wr32(R_BX, 0);
-              wr32(R_CX, 0);
-              wr32(R_DX, 0);
-              wr32(R_SI, 0);
-              wr32(R_DI, 0);
-              wr32(R_BP, 0);
-              // Clear magic so we don't re-trigger
-              guestWb(1292, 0);
-              // Set CR2 to magic value so CPUMGetGuestCpuId injects LM
-              // in CPUID leaf 0x80000001 for IEM (protected mode CPUID).
-              // CR2 is unused in real mode (no paging → no page faults)
-              // and the BIOS/ISOLINUX never modify it.
-              wr32(R_CR2, 3235822174);
-              console.log("[DIRECT-BOOT] CPU state set: CS=1020 IP=0000 → phys 0x10200");
-              // Return immediately — must NOT fall through to wrIP(ip)/wr32(R_FLAGS)
-              // which would overwrite our CPU state with the old HLT location.
-              // Return 1 so IEM re-reads CPUMCTX and finds CS=1020 IP=0000.
-              return 1;
-            }
           }
         }
         lastBailOp = b;

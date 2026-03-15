@@ -101,12 +101,15 @@ static DECLCALLBACK(int) vboxWasmCfgmConstructor(PUVM pUVM, PVM pVM, PCVMMR3VTAB
     INSERT_INTEGER(pHm, "FallbackToNEM", 0);
 
     /*
-     * CPUM — 64-bit guest support is NOT enabled here.
-     * Enable64bit=1 causes GuestFeatures.fLongMode=1 which triggers
-     * side effects in PGM/etc. that crash ISOLINUX. Instead, the JIT
-     * handles CPUID leaf 0x80000001 directly after direct boot injects
-     * the kernel, and the EFER override in CPUMAllMsrs.cpp allows
-     * LME/NXE/SCE writes regardless of CPUID.
+     * CPUM — 64-bit guest support is NOT enabled via Enable64bit=1.
+     * That config sets GuestFeatures.fLongMode=1 which causes side effects
+     * in PGM and other subsystems.  Instead, LM/NX/SYSCALL are injected
+     * dynamically:
+     *  - JIT (jit-pre.js): injects LM in CPUID leaf 0x80000001 when
+     *    CS >= 0x1000 (kernel setup code), hides it from BIOS/ISOLINUX
+     *  - CPUMGetGuestCpuId (CPUMAllRegs.cpp): injects LM when CR2 has
+     *    magic 0xC0DEBA5E (set by JIT on first kernel CPUID)
+     *  - CPUMAllMsrs.cpp: always allows LME/NXE/SCE in EFER
      */
 
     /*

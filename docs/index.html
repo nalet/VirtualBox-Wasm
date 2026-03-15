@@ -611,12 +611,16 @@
       // Streaming compilation with cache
       instantiateWasm(imports, successCallback) {
         const wasmUrl = 'vbox-wasm.wasm';
+        // Cache key includes a build version so new deploys invalidate old cache.
+        // The JS file changes on each build, so use a hash of the JS URL's
+        // last-modified or just use the script element's src with a version.
+        const wasmCacheKey = wasmUrl + '?v=cs-cpuid-1';
         appendLine('Loading WebAssembly module...', 'info');
         const t0 = performance.now();
 
         (async () => {
           try {
-            const cached = await getCachedModule(wasmUrl);
+            const cached = await getCachedModule(wasmCacheKey);
             if (cached) {
               appendLine('Using cached compiled module (' + Math.round(performance.now() - t0) + 'ms)', 'info');
               const instance = await WebAssembly.instantiate(cached, imports);
@@ -629,7 +633,7 @@
               const module = await WebAssembly.compileStreaming(fetch(wasmUrl));
               const instance = await WebAssembly.instantiate(module, imports);
               appendLine('Compiled in ' + Math.round(performance.now() - t0) + 'ms', 'info');
-              setCachedModule(wasmUrl, module);
+              setCachedModule(wasmCacheKey, module);
               successCallback(instance, module);
             } else {
               const resp = await fetch(wasmUrl);
@@ -637,7 +641,7 @@
               const module = await WebAssembly.compile(bytes);
               const instance = await WebAssembly.instantiate(module, imports);
               appendLine('Compiled in ' + Math.round(performance.now() - t0) + 'ms', 'info');
-              setCachedModule(wasmUrl, module);
+              setCachedModule(wasmCacheKey, module);
               successCallback(instance, module);
             }
           } catch (e) {

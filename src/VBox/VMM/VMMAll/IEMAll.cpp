@@ -1222,11 +1222,32 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                         static uint32_t s_cStuckCount = 0;
                         if (rip == s_uLastDiagRip)
                         {
-                            if (++s_cStuckCount == 3)
+                            if (++s_cStuckCount >= 3 && (s_cStuckCount % 50) == 3)
                             {
                                 uint8_t abCode[16];
-                                RTGCPHYS GCPhys = rip; /* simplified: works for identity-mapped or flat code */
-                                PGMPhysRead(pVM, GCPhys, abCode, sizeof(abCode), PGMACCESSORIGIN_IEM);
+                                RT_ZERO(abCode);
+                                /* Walk page table to get physical address (paging is on) */
+                                RTGCPHYS GCPhys = 0;
+                                uint32_t cr3 = pVCpu->cpum.GstCtx.cr3 & ~UINT32_C(0xFFF);
+                                uint32_t pdeIdx = (uint32_t)(rip >> 22) & 0x3FF;
+                                uint32_t pteIdx = (uint32_t)(rip >> 12) & 0x3FF;
+                                uint32_t pde = 0, pte = 0;
+                                PGMPhysRead(pVM, (RTGCPHYS)(cr3 + pdeIdx * 4), &pde, 4, PGMACCESSORIGIN_IEM);
+                                if (pde & 1) /* present */
+                                {
+                                    if (pde & 0x80) /* 4MB page (PSE) */
+                                        GCPhys = (pde & 0xFFC00000) | ((uint32_t)rip & 0x003FFFFF);
+                                    else
+                                    {
+                                        PGMPhysRead(pVM, (RTGCPHYS)((pde & ~UINT32_C(0xFFF)) + pteIdx * 4), &pte, 4, PGMACCESSORIGIN_IEM);
+                                        if (pte & 1)
+                                            GCPhys = (pte & ~UINT32_C(0xFFF)) | ((uint32_t)rip & 0xFFF);
+                                    }
+                                }
+                                if (GCPhys)
+                                    PGMPhysRead(pVM, GCPhys, abCode, sizeof(abCode), PGMACCESSORIGIN_IEM);
+                                RTPrintf("[CPU-STUCK] virt=%08llx phys=%08llx PDE=%08x PTE=%08x\n",
+                                         (unsigned long long)rip, (unsigned long long)GCPhys, pde, pte);
                                 RTPrintf("[CPU-STUCK] EIP=%08llx bytes: %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x\n",
                                          (unsigned long long)rip,
                                          abCode[0], abCode[1], abCode[2], abCode[3],

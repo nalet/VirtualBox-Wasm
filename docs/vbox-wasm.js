@@ -4847,8 +4847,8 @@ globalThis.VBoxJIT = (function() {
                 wr64(S_CS + SEG_BASE, ENTRY_SEG << 4);
                 wr32(S_CS + SEG_LIMIT, 65535);
                 wr32(S_CS + SEG_ATTR, 155);
-                // IP = 0
-                wr16(R_IP, 0);
+                // IP = 0 (clear full 64-bit RIP)
+                wr64(R_IP, 0);
                 // DS = ES = FS = GS = SS = setup segment
                 const dataSegs = [ S_DS, S_ES, S_FS, S_GS, S_SS ];
                 for (let si = 0; si < dataSegs.length; si++) {
@@ -4857,8 +4857,8 @@ globalThis.VBoxJIT = (function() {
                   wr32(dataSegs[si] + SEG_LIMIT, 65535);
                   wr32(dataSegs[si] + SEG_ATTR, 147);
                 }
-                // SP
-                wr32(R_SP, 65532);
+                // SP (clear full 64-bit RSP)
+                wr64(R_SP, 65532);
                 // RFLAGS: reserved bit 1 only, IF cleared
                 wr32(R_FLAGS, 2);
                 // Clear GP registers
@@ -5000,6 +5000,24 @@ globalThis.VBoxJIT = (function() {
     }
     const fA20 = globalThis.VBoxJIT._a20;
     statTotalCalls++;
+    // Write heartbeat to guest RAM at 0x7020 (main thread monitors this)
+    {
+      const rb = Number(ramB);
+      const m = new Uint8Array(wasmMemory.buffer);
+      const c = statTotalCalls;
+      m[rb + 28704] = c & 255;
+      m[rb + 28705] = (c >> 8) & 255;
+      m[rb + 28706] = (c >> 16) & 255;
+      m[rb + 28707] = (c >> 24) & 255;
+      // Also write current CS and IP for diagnostics
+      const dvL = new DataView(wasmMemory.buffer);
+      const cs16 = dvL.getUint16(Number(cpuP) + S_CS + SEG_SEL, true);
+      const ip32 = dvL.getUint32(Number(cpuP) + R_IP, true);
+      const cr0 = dvL.getUint32(Number(cpuP) + R_CR0, true);
+      dvL.setUint16(rb + 28708, cs16, true);
+      dvL.setUint32(rb + 28710, ip32, true);
+      dvL.setUint32(rb + 28714, cr0, true);
+    }
     // Per-call diagnostics for first 20 calls, then every 100000
     if (statTotalCalls <= 20 || (statTotalCalls % 1e5) === 0) {
       const cpuN = Number(cpuP), ramN = Number(ramB);

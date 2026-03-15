@@ -614,7 +614,7 @@
         // Cache key includes a build version so new deploys invalidate old cache.
         // The JS file changes on each build, so use a hash of the JS URL's
         // last-modified or just use the script element's src with a version.
-        const wasmCacheKey = wasmUrl + '?v=direct-boot-256m';
+        const wasmCacheKey = wasmUrl + '?v=direct-boot-hb2';
         appendLine('Loading WebAssembly module...', 'info');
         const t0 = performance.now();
 
@@ -990,7 +990,19 @@
           const w = Number(Module._wasmDisplayGetWidth());
           const h = Number(Module._wasmDisplayGetHeight());
           const secs = postMonitorCount * 5;
-          console.log(`[POST] ${secs}s: refresh=${refreshes} updateRect=${updates} ${w}x${h}`);
+          // Read JIT heartbeat from guest RAM at 0x7020
+          let hbInfo = '';
+          try {
+            const ram = Number(Module._wasmJitGetGuestRAM());
+            const mem = new Uint8Array(wasmMemory.buffer);
+            const dv = new DataView(wasmMemory.buffer);
+            const calls = mem[ram+0x7020] | (mem[ram+0x7021]<<8) | (mem[ram+0x7022]<<16) | ((mem[ram+0x7023]<<24)>>>0);
+            const cs = dv.getUint16(ram+0x7024, true);
+            const ip = dv.getUint32(ram+0x7026, true);
+            const cr0 = dv.getUint32(ram+0x702A, true);
+            hbInfo = ` jit=${calls} CS=${cs.toString(16)} IP=${ip.toString(16)} CR0=${cr0.toString(16)}`;
+          } catch(e) {}
+          console.log(`[POST] ${secs}s: refresh=${refreshes} updateRect=${updates} ${w}x${h}${hbInfo}`);
           if (updates > lastUpdateRectCount) {
             appendLine(`VGA device output detected! (updateRect=${updates}, ${w}x${h})`, 'info');
             statusEl.textContent = `VM running — VGA ${w}x${h}`;

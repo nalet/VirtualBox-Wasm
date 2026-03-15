@@ -3524,8 +3524,8 @@ function execBlock(cpuP, ramB, maxInsn) {
               wr32(S_CS + SEG_LIMIT, 0xFFFF);
               wr32(S_CS + SEG_ATTR, 0x009B);
 
-              // IP = 0
-              wr16(R_IP, 0);
+              // IP = 0 (clear full 64-bit RIP)
+              wr64(R_IP, 0);
 
               // DS = ES = FS = GS = SS = setup segment
               const dataSegs = [S_DS, S_ES, S_FS, S_GS, S_SS];
@@ -3536,8 +3536,8 @@ function execBlock(cpuP, ramB, maxInsn) {
                 wr32(dataSegs[si] + SEG_ATTR, 0x0093);
               }
 
-              // SP
-              wr32(R_SP, 0xFFFC);
+              // SP (clear full 64-bit RSP)
+              wr64(R_SP, 0xFFFC);
               // RFLAGS: reserved bit 1 only, IF cleared
               wr32(R_FLAGS, 0x0002);
               // Clear GP registers
@@ -3686,6 +3686,24 @@ function execBlockWrapped(cpuP, ramB, maxInsn, highRamP, highRamSz) {
   }
   const fA20 = globalThis.VBoxJIT._a20;
   statTotalCalls++;
+  // Write heartbeat to guest RAM at 0x7020 (main thread monitors this)
+  {
+    const rb = Number(ramB);
+    const m = new Uint8Array(wasmMemory.buffer);
+    const c = statTotalCalls;
+    m[rb + 0x7020] = c & 0xFF;
+    m[rb + 0x7021] = (c >> 8) & 0xFF;
+    m[rb + 0x7022] = (c >> 16) & 0xFF;
+    m[rb + 0x7023] = (c >> 24) & 0xFF;
+    // Also write current CS and IP for diagnostics
+    const dvL = new DataView(wasmMemory.buffer);
+    const cs16 = dvL.getUint16(Number(cpuP) + S_CS + SEG_SEL, true);
+    const ip32 = dvL.getUint32(Number(cpuP) + R_IP, true);
+    const cr0 = dvL.getUint32(Number(cpuP) + R_CR0, true);
+    dvL.setUint16(rb + 0x7024, cs16, true);
+    dvL.setUint32(rb + 0x7026, ip32, true);
+    dvL.setUint32(rb + 0x702A, cr0, true);
+  }
   // Per-call diagnostics for first 20 calls, then every 100000
   if (statTotalCalls <= 20 || (statTotalCalls % 100000) === 0) {
     const cpuN = Number(cpuP), ramN = Number(ramB);

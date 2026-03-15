@@ -3549,7 +3549,7 @@ function execBlock(cpuP, ramB, maxInsn) {
                 highRamPtr + (INITRD_GPA - 0x100000));
 
               // Write kernel command line at guest 0x20000
-              const cmdline = 'console=tty0 loglevel=7 auto\0';
+              const cmdline = 'console=tty0 loglevel=7 noapic nolapic auto\0';
               for (let ci = 0; ci < cmdline.length; ci++)
                 mem8[ramBase + CMDLINE_GPA + ci] = cmdline.charCodeAt(ci);
 

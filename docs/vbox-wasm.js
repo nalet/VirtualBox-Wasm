@@ -4849,7 +4849,7 @@ globalThis.VBoxJIT = (function() {
                 // Copy initrd to end of RAM
                 mem8.set(mem8.subarray(stageBase + vmlinuzLen, stageBase + vmlinuzLen + initrdLen), highRamPtr + (INITRD_GPA - 1048576));
                 // Write kernel command line at guest 0x20000
-                const cmdline = "console=tty0 loglevel=7 auto\0";
+                const cmdline = "console=tty0 loglevel=7 noapic nolapic auto\0";
                 for (let ci = 0; ci < cmdline.length; ci++) mem8[ramBase + CMDLINE_GPA + ci] = cmdline.charCodeAt(ci);
                 // Set boot params in setup header
                 const bp = ramBase + SETUP_GPA;

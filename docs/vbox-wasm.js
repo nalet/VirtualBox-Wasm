@@ -4088,6 +4088,41 @@ globalThis.VBoxJIT = (function() {
               break;
             }
 
+           // ──── CPUID (0x0F 0xA2) ────
+            case 162:
+            {
+              if (!_directBootDone) {
+                // Before direct boot: bail to IEM so BIOS/ISOLINUX get
+                // the real CPUID values (no LM → ISOLINUX won't crash)
+                lastBailOp = 3840 | b2;
+                iter = maxInsn;
+                break;
+              }
+              // After direct boot: handle CPUID in JS.
+              // Inject LM/NX/SYSCALL so the Linux kernel detects a 64-bit CPU.
+              const leaf = rd32(R_AX) >>> 0;
+              if (leaf === 2147483648) {
+                // Max extended CPUID leaf
+                wr32(R_AX, 2147483656);
+                wr32(R_BX, 0);
+                wr32(R_CX, 0);
+                wr32(R_DX, 0);
+              } else if (leaf === 2147483649) {
+                // Extended feature flags — inject LM, NX, SYSCALL, RDTSCP
+                wr32(R_AX, 0);
+                wr32(R_BX, 0);
+                wr32(R_CX, 1);
+                // LAHF/SAHF
+                wr32(R_DX, (1 << 29) | (1 << 20) | (1 << 11) | (1 << 27));
+              } else {
+                // All other leaves: bail to IEM
+                lastBailOp = 3840 | b2;
+                iter = maxInsn;
+                break;
+              }
+              break;
+            }
+
            default:
             // Unsupported 0x0F opcode — fallback
             lastBailOp = 3840 | b2;

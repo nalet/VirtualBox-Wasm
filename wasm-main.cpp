@@ -101,13 +101,13 @@ static DECLCALLBACK(int) vboxWasmCfgmConstructor(PUVM pUVM, PVM pVM, PCVMMR3VTAB
     INSERT_INTEGER(pHm, "FallbackToNEM", 0);
 
     /*
-     * CPUM — enable 64-bit guest support (LM, NX, SYSCALL in CPUID).
-     * This uses VBox's official API to set GuestFeatures flags properly,
-     * which also updates CPUID leaves via CPUMR3SetGuestCpuIdFeature.
+     * CPUM — 64-bit guest support is NOT enabled here.
+     * Enable64bit=1 causes GuestFeatures.fLongMode=1 which triggers
+     * side effects in PGM/etc. that crash ISOLINUX. Instead, the JIT
+     * handles CPUID leaf 0x80000001 directly after direct boot injects
+     * the kernel, and the EFER override in CPUMAllMsrs.cpp allows
+     * LME/NXE/SCE writes regardless of CPUID.
      */
-    PCFGMNODE pCpum;
-    INSERT_NODE(pRoot, "CPUM", &pCpum);
-    INSERT_INTEGER(pCpum, "Enable64bit", 1);
 
     /*
      * NEM — disable native execution manager (no KVM in Wasm).

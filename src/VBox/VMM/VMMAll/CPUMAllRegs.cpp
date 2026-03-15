@@ -1012,7 +1012,14 @@ VMMDECL(void) CPUMGetGuestCpuId(PVMCPUCC pVCpu, uint32_t uLeaf, uint32_t uSubLea
                unconditional override in CPUMAllMsrs.cpp. */
             if (uLeaf == UINT32_C(0x80000001))
             {
-                if ((uint32_t)pVCpu->cpum.s.Guest.cr2 == UINT32_C(0xC0DEBA5E))
+                /* Latch: once CR2 magic is set, keep injecting LM forever.
+                   Page faults in paged mode overwrite CR2, so we can't
+                   rely on it being 0xC0DEBA5E after paging is enabled. */
+                static bool s_fLmInjectionActive = false;
+                if (!s_fLmInjectionActive
+                    && (uint32_t)pVCpu->cpum.s.Guest.cr2 == UINT32_C(0xC0DEBA5E))
+                    s_fLmInjectionActive = true;
+                if (s_fLmInjectionActive)
                 {
                     *pEdx |= X86_CPUID_EXT_FEATURE_EDX_LONG_MODE
                            | X86_CPUID_EXT_FEATURE_EDX_NX

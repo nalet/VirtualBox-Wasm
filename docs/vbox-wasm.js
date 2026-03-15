@@ -870,6 +870,8 @@ globalThis.VBoxJIT = (function() {
   // ── 32-bit paging support ──
   let _pagingOn = false;
   let _directBootDone = false;
+  let _lastBailOp = -1;
+  let _pendingCpuidLeaf = -1;
   // Direct-mapped TLB: 1024 entries for fast virtual-to-physical lookup
   const TLB_SIZE = 1024;
   const TLB_MASK = TLB_SIZE - 1;
@@ -4882,6 +4884,7 @@ globalThis.VBoxJIT = (function() {
     // preserve TF/IF/DF (bits 8-10)
     wr32(R_FLAGS, newFlags);
     // Track bail opcode if we exited early
+    _lastBailOp = lastBailOp;
     if (lastBailOp >= 0) {
       fallbackOpcodes.set(lastBailOp, (fallbackOpcodes.get(lastBailOp) || 0) + 1);
     }
@@ -5080,6 +5083,23 @@ globalThis.VBoxJIT = (function() {
         console.log("[JIT-PROT] === END PROTECTED MODE DIAGNOSTIC ===");
       }
     }
+    // Post-IEM CPUID override: if previous call bailed on CPUID and IEM
+    // has now executed it, override the results with LM/NX/SYSCALL.
+    if (_pendingCpuidLeaf >= 0) {
+      refreshViews();
+      const leaf = _pendingCpuidLeaf;
+      _pendingCpuidLeaf = -1;
+      if (leaf === 2147483649) { // 0x80000001
+        wr32(R_AX, 0);
+        wr32(R_BX, 0);
+        wr32(R_CX, 1); // LAHF/SAHF
+        wr32(R_DX, 739248128); // 0x2C100800: LM|RDTSCP|FXSR|NX|SYSCALL
+      } else if (leaf === 2147483648) { // 0x80000000
+        wr32(R_AX, 2147483656); // 0x80000008
+        wr32(R_BX, 0); wr32(R_CX, 0); wr32(R_DX, 0);
+      }
+    }
+
     let n = 0;
     try {
       n = execBlock(cpuP, ramB, maxInsn);
@@ -5092,6 +5112,13 @@ globalThis.VBoxJIT = (function() {
       statTotalInsns += n;
     } else {
       statFallbacks++;
+    }
+
+    // If execBlock bailed on CPUID (0x0FA2) and direct boot is done,
+    // save the leaf (EAX) for override on next call.
+    if (_lastBailOp === 4002 && _directBootDone) { // 0x0FA2 = 4002
+      refreshViews();
+      _pendingCpuidLeaf = rr32(R_AX);
     }
     // Stuck-detection: if we stay in the same 32-byte IP range for >50000 calls, dump full state
     {

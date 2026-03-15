@@ -579,6 +579,9 @@ let _pagingOn = false;
 
 // ── Direct boot flag — set after kernel staging, used for CPUID faking ──
 let _directBootDone = false;
+// ── Last bail opcode from execBlock, for post-IEM CPUID override ──
+let _lastBailOp = -1;
+let _pendingCpuidLeaf = -1;
 
 // Direct-mapped TLB: 1024 entries for fast virtual-to-physical lookup
 const TLB_SIZE = 1024;
@@ -3549,6 +3552,7 @@ function execBlock(cpuP, ramB, maxInsn) {
   wr32(R_FLAGS, newFlags);
 
   // Track bail opcode if we exited early
+  _lastBailOp = lastBailOp;
   if (lastBailOp >= 0) {
     fallbackOpcodes.set(lastBailOp, (fallbackOpcodes.get(lastBailOp) || 0) + 1);
   }
@@ -3783,6 +3787,25 @@ function execBlockWrapped(cpuP, ramB, maxInsn, highRamP, highRamSz) {
     }
   }
 
+  // ── Post-IEM CPUID override: if previous call bailed on CPUID and
+  // IEM has now executed it, override the results with LM/NX/SYSCALL.
+  // This avoids adding code to execBlock's hot loop (which triggers V8
+  // deoptimization and causes triple faults due to function size).
+  if (_pendingCpuidLeaf >= 0) {
+    refreshViews();
+    const leaf = _pendingCpuidLeaf;
+    _pendingCpuidLeaf = -1;
+    if (leaf === 0x80000001) {
+      wr32(R_AX, 0x00000000);  // EAX
+      wr32(R_BX, 0x00000000);  // EBX
+      wr32(R_CX, 0x00000001);  // ECX: LAHF/SAHF
+      wr32(R_DX, 0x2C100800);  // EDX: LM|RDTSCP|FXSR|NX|SYSCALL
+    } else if (leaf === 0x80000000) {
+      wr32(R_AX, 0x80000008);  // report extended leaves up to 0x80000008
+      wr32(R_BX, 0); wr32(R_CX, 0); wr32(R_DX, 0);
+    }
+  }
+
   let n = 0;
   try {
     n = execBlock(cpuP, ramB, maxInsn);
@@ -3796,6 +3819,13 @@ function execBlockWrapped(cpuP, ramB, maxInsn, highRamP, highRamSz) {
     statTotalInsns += n;
   } else {
     statFallbacks++;
+  }
+
+  // If execBlock bailed on CPUID (0x0F 0xA2 = 0x0FA2) and direct boot is done,
+  // save the leaf (EAX) for override on next call (after IEM handles the CPUID).
+  if (_lastBailOp === 0x0FA2 && _directBootDone) {
+    refreshViews();
+    _pendingCpuidLeaf = rr32(R_AX); // EAX has the leaf number (not yet overwritten by IEM)
   }
 
   // Stuck-detection: if we stay in the same 32-byte IP range for >50000 calls, dump full state

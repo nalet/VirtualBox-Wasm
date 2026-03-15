@@ -1193,6 +1193,40 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                  * Do the decoding and emulation.
                  */
 #ifdef __EMSCRIPTEN__
+                /* Delay loop fast-forward: detect __delay() pattern (dec rax; jnz -5)
+                 * and zero RAX to skip. This is critical for calibrate_delay() which
+                 * would otherwise spin for billions of instructions under IEM.
+                 * Only check every 4096 iterations to minimize overhead. */
+                {
+                    static uint32_t s_cDelayCheck = 0;
+                    if (++s_cDelayCheck >= 4096
+                        && (pVCpu->cpum.GstCtx.msrEFER & MSR_K6_EFER_LMA))
+                    {
+                        s_cDelayCheck = 0;
+                        uint64_t rip = pVCpu->cpum.GstCtx.rip;
+                        /* Read 5 bytes at current EIP to check for dec rax; jnz -5 */
+                        uint8_t abOp[5];
+                        int rc2 = PGMPhysSimpleReadGCPtr(pVCpu, abOp, rip, sizeof(abOp));
+                        if (RT_SUCCESS(rc2)
+                            && abOp[0] == 0x48 && abOp[1] == 0xff && abOp[2] == 0xc8  /* dec rax */
+                            && abOp[3] == 0x75 && abOp[4] == 0xfb)                     /* jnz -5  */
+                        {
+                            if (pVCpu->cpum.GstCtx.rax > 1)
+                            {
+                                static bool s_fLogged = false;
+                                if (!s_fLogged)
+                                {
+                                    RTPrintf("[DELAY-FF] Fast-forwarding __delay() at RIP=%016llx RAX=%016llx\n",
+                                             (unsigned long long)rip, (unsigned long long)pVCpu->cpum.GstCtx.rax);
+                                    RTStrmFlush(g_pStdOut);
+                                    s_fLogged = true;
+                                }
+                                pVCpu->cpum.GstCtx.rax = 1; /* will exit loop after one more dec */
+                            }
+                        }
+                    }
+                }
+
                 /* JIT fast path: try JS interpreter before IEM decode.
                  *
                  * s_cIemAfterJitBail: after the JIT bails on an I/O instruction (returns 0),

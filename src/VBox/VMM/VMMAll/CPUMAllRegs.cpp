@@ -1000,21 +1000,26 @@ VMMDECL(void) CPUMGetGuestCpuId(PVMCPUCC pVCpu, uint32_t uLeaf, uint32_t uSubLea
                     || pVM->cpum.s.GuestFeatures.enmCpuVendor == CPUMCPUVENDOR_SHANGHAI /*?*/ ) )
                 *pEdx &= ~X86_CPUID_EXT_FEATURE_EDX_SYSCALL;
 
-#if 0 /* disabled — causes BIOS triple fault at eip=0e6b0c05 */
 #ifdef __EMSCRIPTEN__
-            /* Wasm: inject LM/NX/SYSCALL/FXSR/RDTSCP into extended leaf 0x80000001
-               so Linux kernels detect a 64-bit capable CPU. We inject at runtime
-               rather than using Enable64bit to avoid changing GuestFeatures flags
-               which affect PGM and other subsystems. */
-            if (uLeaf == UINT32_C(0x80000001))
+            /* Wasm: Enable64bit=1 sets LM/NX/SYSCALL in the CPUID database,
+               but ISOLINUX crashes in protected mode when it detects a 64-bit CPU.
+               Suppress LM until the JIT's direct boot code writes a flag byte
+               (0xAA) to guest physical address 0x510, signaling that the kernel
+               has been staged and it's safe to report 64-bit capability. */
+            if (uLeaf == UINT32_C(0x80000001)
+                && (*pEdx & X86_CPUID_EXT_FEATURE_EDX_LONG_MODE))
             {
-                *pEdx |= X86_CPUID_EXT_FEATURE_EDX_LONG_MODE
-                       | X86_CPUID_EXT_FEATURE_EDX_NX
-                       | X86_CPUID_EXT_FEATURE_EDX_SYSCALL
-                       | X86_CPUID_EXT_FEATURE_EDX_RDTSCP;
-                *pEcx |= X86_CPUID_EXT_FEATURE_ECX_LAHF_SAHF;
+                uint8_t bDirectBootFlag = 0;
+                PGMPhysSimpleReadGCPhys(pVM, &bDirectBootFlag, (RTGCPHYS)0x510, sizeof(bDirectBootFlag));
+                if (bDirectBootFlag != 0xAA)
+                {
+                    *pEdx &= ~(  X86_CPUID_EXT_FEATURE_EDX_LONG_MODE
+                               | X86_CPUID_EXT_FEATURE_EDX_NX
+                               | X86_CPUID_EXT_FEATURE_EDX_SYSCALL
+                               | X86_CPUID_EXT_FEATURE_EDX_RDTSCP);
+                    *pEcx &= ~X86_CPUID_EXT_FEATURE_ECX_LAHF_SAHF;
+                }
             }
-#endif
 #endif
 
         }

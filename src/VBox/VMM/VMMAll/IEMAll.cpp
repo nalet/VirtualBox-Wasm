@@ -1201,6 +1201,7 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                  * This avoids calling the JIT just for 2-3 instructions between consecutive
                  * IN instructions, saving significant overhead during ATA BSY polling. */
                 static uint32_t s_cIemAfterJitBail = 0;
+                static bool     s_fJitDisabledForBoot = false;
                 /* Periodic CPU state diagnostic — counter-based (RTTimeNanoTS
                    doesn't advance during synchronous JS execution in Wasm workers) */
                 {
@@ -1255,7 +1256,7 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                    18.2 Hz which would kill JIT throughput entirely. */
                 int cKbdDrained = wasmKbdDrainQueue();
                 if (s_pvJitRAM && s_cIemAfterJitBail == 0
-                    && cKbdDrained == 0)
+                    && !s_fJitDisabledForBoot && cKbdDrained == 0)
                 {
                     uint32_t cBatch = RT_MIN(cMaxInstructionsGccStupidity, 4096);
                     wasmJitSetA20(PGMPhysIsA20Enabled(pVCpu) ? 1 : 0);
@@ -1401,6 +1402,10 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
 
                                 /* EFLAGS: reserved bit 1 only, IF=0 (interrupts disabled) */
                                 pCtx->rflags.u = 0x00000002;
+
+                                /* Permanently disable the JIT — it's for real-mode BIOS code,
+                                   not kernel PM.  IEM handles PM correctly. */
+                                s_fJitDisabledForBoot = true;
 
                                 /* Log entry state and first 16 bytes of code */
                                 uint8_t abCode[16];

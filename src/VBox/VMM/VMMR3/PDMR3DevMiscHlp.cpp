@@ -45,6 +45,8 @@
 #include <VBox/msi.h>
 #include <iprt/asm.h>
 #include <iprt/assert.h>
+#include <iprt/stream.h>
+#include <iprt/string.h>
 #include <iprt/thread.h>
 
 
@@ -74,7 +76,10 @@ static DECLCALLBACK(void) pdmR3PicHlp_SetInterruptFF(PPDMDEVINS pDevIns)
         {
             static uint32_t s_cApicPath = 0;
             if (++s_cApicPath <= 5)
-                LogRel(("[PIC-FF] APIC path #%u (Ic.pDevInsR3=%p)\n", s_cApicPath, pVM->pdm.s.Ic.pDevInsR3));
+            {
+                RTPrintf("[PIC-FF] APIC path #%u (Ic.pDevInsR3=%p)\n", s_cApicPath, pVM->pdm.s.Ic.pDevInsR3);
+                RTStrmFlush(g_pStdOut);
+            }
         }
 #endif
         PDMApicSetLocalInterrupt(pVCpu, 0 /* u8Pin */, 1 /* u8Level */, VINF_SUCCESS /* rcRZ */);
@@ -85,7 +90,10 @@ static DECLCALLBACK(void) pdmR3PicHlp_SetInterruptFF(PPDMDEVINS pDevIns)
         {
             static uint32_t s_cPicPath = 0;
             if (++s_cPicPath <= 5 || (s_cPicPath % 100) == 0)
-                LogRel(("[PIC-FF] SET VMCPU_FF_INTERRUPT_PIC #%u\n", s_cPicPath));
+            {
+                RTPrintf("[PIC-FF] SET VMCPU_FF_INTERRUPT_PIC #%u\n", s_cPicPath);
+                RTStrmFlush(g_pStdOut);
+            }
         }
 #endif
         VMCPU_FF_SET(pVCpu, VMCPU_FF_INTERRUPT_PIC);
@@ -116,7 +124,10 @@ static DECLCALLBACK(void) pdmR3PicHlp_ClearInterruptFF(PPDMDEVINS pDevIns)
         {
             static uint32_t s_cPicClear = 0;
             if (++s_cPicClear <= 5 || (s_cPicClear % 100) == 0)
-                LogRel(("[PIC-FF] CLEAR VMCPU_FF_INTERRUPT_PIC #%u\n", s_cPicClear));
+            {
+                RTPrintf("[PIC-FF] CLEAR VMCPU_FF_INTERRUPT_PIC #%u\n", s_cPicClear);
+                RTStrmFlush(g_pStdOut);
+            }
         }
 #endif
         VMCPU_FF_CLEAR(pVCpu, VMCPU_FF_INTERRUPT_PIC);

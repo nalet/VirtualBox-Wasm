@@ -50,6 +50,13 @@
 #include <iprt/asm.h>
 #include <iprt/asm-math.h>
 
+#ifdef __EMSCRIPTEN__
+/** Global instruction counter updated from IEM execution loop.
+ * Used to drive the virtual clock under Emscripten where RTTimeSystemNanoTS()
+ * doesn't advance during synchronous Wasm execution in worker threads. */
+volatile uint64_t g_cWasmVirtualInstructions = 0;
+#endif
+
 
 
 /**
@@ -235,7 +242,17 @@ DECLCALLBACK(DECLEXPORT(uint64_t)) tmVirtualNanoTSBadCpuIndex(PRTTIMENANOTSDATA 
  */
 DECLINLINE(uint64_t) tmVirtualGetRawNanoTS(PVMCC pVM)
 {
-#ifdef IN_RING3
+#ifdef __EMSCRIPTEN__
+    /* Under Emscripten, RTTimeSystemNanoTS() doesn't advance during synchronous
+     * Wasm execution in worker threads.  Drive virtual time from the IEM
+     * instruction counter instead: 100 ns per instruction ≈ 10 MHz effective
+     * virtual clock.  This makes RDTSC (= cInstructions * 100) appear as a
+     * 1 GHz TSC, which is what the Linux kernel will measure during
+     * calibrate_delay() when comparing TSC against the PIT timer. */
+    extern volatile uint64_t g_cWasmVirtualInstructions;
+    uint64_t u64 = g_cWasmVirtualInstructions * 100; /* 100 ns per instruction */
+    RT_NOREF(pVM);
+#elif defined(IN_RING3)
     uint64_t u64 = pVM->tm.s.pfnVirtualGetRaw(&pVM->tm.s.VirtualGetRawData, NULL /*pExtra*/);
 #elif defined(IN_RING0)
     uint32_t cPrevSteps = pVM->tmr0.s.VirtualGetRawData.c1nsSteps;
@@ -255,19 +272,27 @@ DECLINLINE(uint64_t) tmVirtualGetRawNanoTS(PVMCC pVM)
  */
 DECLINLINE(uint64_t) tmVirtualGetRawNanoTSEx(PVMCC pVM, uint64_t *puTscNow)
 {
+#ifdef __EMSCRIPTEN__
+    extern volatile uint64_t g_cWasmVirtualInstructions;
+    uint64_t u64 = g_cWasmVirtualInstructions * 100;
+    if (puTscNow)
+        *puTscNow = g_cWasmVirtualInstructions * 100; /* match RDTSC */
+    RT_NOREF(pVM);
+#else
     RTITMENANOTSEXTRA Extra;
-#ifdef IN_RING3
+# ifdef IN_RING3
     uint64_t u64 = pVM->tm.s.pfnVirtualGetRaw(&pVM->tm.s.VirtualGetRawData, &Extra);
-#elif defined(IN_RING0)
+# elif defined(IN_RING0)
     uint32_t cPrevSteps = pVM->tmr0.s.VirtualGetRawData.c1nsSteps;
     uint64_t u64 = pVM->tmr0.s.pfnVirtualGetRaw(&pVM->tmr0.s.VirtualGetRawData, &Extra);
     if (cPrevSteps != pVM->tmr0.s.VirtualGetRawData.c1nsSteps)
         VMCPU_FF_SET(VMMGetCpu(pVM), VMCPU_FF_TO_R3);
-#else
-# error "unsupported context"
-#endif
+# else
+#  error "unsupported context"
+# endif
     if (puTscNow)
         *puTscNow = Extra.uTSCValue;
+#endif
     /*DBGFTRACE_POS_U64(pVM, u64);*/
     return u64;
 }

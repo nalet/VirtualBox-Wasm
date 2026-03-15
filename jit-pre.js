@@ -2985,38 +2985,27 @@ function execBlock(cpuP, ramB, maxInsn) {
           const s = pop16(ssBase); wr16(S_GS + SEG_SEL, s); wr64(S_GS + SEG_BASE, s << 4); break;
         }
 
-        // ──── CPUID (0x0F 0xA2) — fake long mode support ────
+        // ──── CPUID (0x0F 0xA2) — fake long mode for kernel ────
         case 0xA2: {
+          // Only intercept AFTER direct boot has fired (kernel setup).
+          // During BIOS POST, bail to IEM for accurate CPUID values.
+          if (!execBlock._directBootDone) {
+            lastBailOp = 0x0F00 | b2; iter = maxInsn; break;
+          }
           const leaf = gr32(0); // EAX = leaf
-          // Fake CPUID results for leaves the 64-bit kernel checks.
-          // We only handle this in real mode (kernel setup code).
-          // In protected/long mode, bail to IEM for accurate results.
-          if (!realMode) { lastBailOp = 0x0F00 | b2; iter = maxInsn; break; }
-          if (leaf === 0) {
-            // Vendor: "GenuineIntel", max leaf = 0x16
-            sr32(0, 0x16);       // EAX = max standard leaf
-            sr32(3, 0x756E6547); // EBX = "Genu"
-            sr32(1, 0x6C65746E); // ECX = "ntel"
-            sr32(2, 0x49656E69); // EDX = "ineI"
-          } else if (leaf === 1) {
-            // Family 6 Model 94 Stepping 3 (Skylake-like)
-            sr32(0, 0x000506E3); // EAX
-            sr32(3, 0x00010800); // EBX
-            sr32(1, 0x04D82209); // ECX: SSE3, SSSE3, SSE4.1, SSE4.2, POPCNT, etc.
-            sr32(2, 0x178BFBFF); // EDX: FPU, VME, DE, PSE, TSC, MSR, PAE, MCE, CX8, SEP, MTRR, PGE, MCA, CMOV, PAT, PSE36, CLFSH, MMX, FXSR, SSE, SSE2
-          } else if (leaf === 0x80000000) {
-            // Max extended leaf
-            sr32(0, 0x80000008); // EAX = max ext leaf
-            sr32(3, 0); sr32(1, 0); sr32(2, 0);
-          } else if (leaf === 0x80000001) {
-            // Extended features — THIS IS THE KEY LEAF
-            sr32(0, 0x00000000); // EAX
-            sr32(3, 0x00000000); // EBX
+          if (leaf === 0x80000001) {
+            // Inject LM, NX, SYSCALL bits for 64-bit kernel
+            sr32(0, 0x00000000);
+            sr32(3, 0x00000000);
             sr32(1, 0x00000001); // ECX: LAHF/SAHF
-            sr32(2, 0x2C100800); // EDX: bit 29 = LM, bit 27 = RDTSCP, bit 25 = FXSR, bit 20 = NX, bit 11 = SYSCALL
+            sr32(2, 0x2C100800); // EDX: LM(29) RDTSCP(27) FXSR(25) NX(20) SYSCALL(11)
+          } else if (leaf === 0x80000000) {
+            // Report extended leaves up to 0x80000008
+            sr32(0, 0x80000008);
+            sr32(3, 0); sr32(1, 0); sr32(2, 0);
           } else {
-            // Unknown leaf — return zeros
-            sr32(0, 0); sr32(3, 0); sr32(1, 0); sr32(2, 0);
+            // All other leaves — bail to IEM for real values
+            lastBailOp = 0x0F00 | b2; iter = maxInsn; break;
           }
           break;
         }

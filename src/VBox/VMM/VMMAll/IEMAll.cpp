@@ -1205,7 +1205,7 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                    doesn't advance during synchronous JS execution in Wasm workers) */
                 {
                     static uint32_t s_cDiagCounter = 0;
-                    if (++s_cDiagCounter >= 5000)
+                    if (++s_cDiagCounter >= 500000)
                     {
                         s_cDiagCounter = 0;
                         uint16_t cs = pVCpu->cpum.GstCtx.cs.Sel;
@@ -1483,8 +1483,8 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                             RTStrmFlush(g_pStdOut);
                             s_uLastCS = uCS;
                         }
-                        /* Periodic progress every 50K instructions */
-                        if (s_cBootInsns - s_cLastReport >= 50000)
+                        /* Periodic progress every 1M instructions */
+                        if (s_cBootInsns - s_cLastReport >= 1000000)
                         {
                             s_cLastReport = s_cBootInsns;
                             uint64_t cr3 = pVCpu->cpum.GstCtx.cr3;

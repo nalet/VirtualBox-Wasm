@@ -4872,15 +4872,19 @@ globalThis.VBoxJIT = (function() {
       highRamSize = highRamSz;
       highRamEnd = 1048576 + highRamSz;
       console.log("[JIT] High RAM set: ptr=0x" + highRamP.toString(16) + " size=" + (highRamSz >> 20) + "MB range=0x100000-0x" + highRamEnd.toString(16));
-      // Write highRamPtr to guest RAM at 0x7010 so main thread can read it
+    }
+    // Write highRamPtr to guest RAM at 0x7010 so main thread can read it
+    // (closure variables are thread-local in Emscripten pthreads)
+    if (highRamPtr && statTotalCalls === 0) {
       const rb = Number(ramB);
-      mem8[rb + 0x7010] = highRamP & 0xFF;
-      mem8[rb + 0x7011] = (highRamP >> 8) & 0xFF;
-      mem8[rb + 0x7012] = (highRamP >> 16) & 0xFF;
-      mem8[rb + 0x7013] = (highRamP >> 24) & 0xFF;
-      mem8[rb + 0x7014] = 0; mem8[rb + 0x7015] = 0;
-      mem8[rb + 0x7016] = 0; mem8[rb + 0x7017] = 0;
-      console.log("[JIT] Wrote highRamPtr to guest RAM at 0x7010 for main thread");
+      const m = new Uint8Array(wasmMemory.buffer);
+      m[rb + 0x7010] = highRamPtr & 0xFF;
+      m[rb + 0x7011] = (highRamPtr >> 8) & 0xFF;
+      m[rb + 0x7012] = (highRamPtr >> 16) & 0xFF;
+      m[rb + 0x7013] = (highRamPtr >> 24) & 0xFF;
+      m[rb + 0x7014] = 0; m[rb + 0x7015] = 0;
+      m[rb + 0x7016] = 0; m[rb + 0x7017] = 0;
+      console.log("[JIT] Wrote highRamPtr=0x" + highRamPtr.toString(16) + " to guest RAM at 0x7010 for main thread");
     }
     const fA20 = globalThis.VBoxJIT._a20;
     statTotalCalls++;

@@ -3388,6 +3388,12 @@ function execBlock(cpuP, ramB, maxInsn) {
       loadFlags(flags);
       // Bail if TF was set by IRET — IEM must handle #DB on next instruction
       if (flags & 0x100) { wrIP(ip); wr32(R_FLAGS, (flags & 0xFFFFF700) | flagsToWord()); executed++; iter = maxInsn; ilen = 0; continue; }
+      // Log ALL IRETss during boot phase to debug cascade
+      if (!execBlock._iretAllCnt) execBlock._iretAllCnt = 0;
+      if (++execBlock._iretAllCnt <= 100)
+        console.log('[IRET] →' + iretCS.toString(16) + ':' + iretIP.toString(16) +
+          ' FL=' + iretFlags.toString(16) + ' SP=' + gr16(4).toString(16) +
+          ' #' + execBlock._iretAllCnt);
       // Log IRET returns to kernel setup segment
       if ((iretCS === 0x1020 || iretCS === 0x1000) && !(flags & 0x100)) {
         if (!execBlock._kernelIretCnt) execBlock._kernelIretCnt = 0;

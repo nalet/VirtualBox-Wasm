@@ -4721,6 +4721,9 @@ globalThis.VBoxJIT = (function() {
             ilen = 0;
             continue;
           }
+          // Log ALL IRETss during boot phase to debug cascade
+          if (!execBlock._iretAllCnt) execBlock._iretAllCnt = 0;
+          if (++execBlock._iretAllCnt <= 100) console.log("[IRET] →" + iretCS.toString(16) + ":" + iretIP.toString(16) + " FL=" + iretFlags.toString(16) + " SP=" + gr16(4).toString(16) + " #" + execBlock._iretAllCnt);
           // Log IRET returns to kernel setup segment
           if ((iretCS === 4128 || iretCS === 4096) && !(flags & 256)) {
             if (!execBlock._kernelIretCnt) execBlock._kernelIretCnt = 0;

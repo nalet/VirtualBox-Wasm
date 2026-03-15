@@ -3560,6 +3560,16 @@ function execBlockWrapped(cpuP, ramB, maxInsn, highRamP, highRamSz) {
     highRamEnd = 0x100000 + highRamSz;
     console.log('[JIT] High RAM set: ptr=0x' + highRamP.toString(16) +
       ' size=' + (highRamSz >> 20) + 'MB range=0x100000-0x' + highRamEnd.toString(16));
+    // Write highRamPtr to guest RAM at 0x7010 so main thread can read it
+    // (closure variables are thread-local in Emscripten pthreads)
+    const rb = Number(ramB);
+    mem8[rb + 0x7010] = highRamP & 0xFF;
+    mem8[rb + 0x7011] = (highRamP >> 8) & 0xFF;
+    mem8[rb + 0x7012] = (highRamP >> 16) & 0xFF;
+    mem8[rb + 0x7013] = (highRamP >> 24) & 0xFF;
+    mem8[rb + 0x7014] = 0; mem8[rb + 0x7015] = 0;
+    mem8[rb + 0x7016] = 0; mem8[rb + 0x7017] = 0;
+    console.log('[JIT] Wrote highRamPtr to guest RAM at 0x7010 for main thread');
   }
   const fA20 = globalThis.VBoxJIT._a20;
   statTotalCalls++;

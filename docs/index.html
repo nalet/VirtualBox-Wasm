@@ -924,27 +924,24 @@
             const INITRD_ADDR = 0x1800000; // 24 MB
             const CMDLINE_ADDR = 0x20000;
 
-            // We need highRamPtr for addresses >= 0x100000
-            // Check if highRamPtr is available by testing a read
-            // The JIT sets highRamPtr via setHighRAM() — we can check by
-            // trying to read from the wasmMemory at known offsets.
-            // Instead, just use the global VBoxJIT accessor if available.
-            if (typeof globalThis.VBoxJIT !== 'undefined' &&
-                globalThis.VBoxJIT._getHighRAM) {
-              const hr = globalThis.VBoxJIT._getHighRAM();
-              if (!hr.ptr) return; // not ready yet
-
+            // Read highRamPtr from guest RAM at 0x7010 (written by JIT worker thread)
+            // JIT closure variables are thread-local in Emscripten pthreads,
+            // so we use SharedArrayBuffer to share the pointer.
+            const highRamP = mem[ramPtr + 0x7010] | (mem[ramPtr + 0x7011] << 8) |
+                             (mem[ramPtr + 0x7012] << 16) | ((mem[ramPtr + 0x7013] << 24) >>> 0);
+            if (!highRamP) return; // JIT hasn't set it yet
+            {
               // Copy setup code to 0x10000 (low RAM)
               mem.set(directBootVmlinuz.subarray(0, setup_size),
                       ramPtr + SETUP_ADDR);
 
               // Copy PM kernel to 0x100000 (high RAM)
               mem.set(directBootVmlinuz.subarray(setup_size),
-                      hr.ptr + 0); // highRamPtr maps GCPhys 0x100000
+                      highRamP + 0); // highRamPtr maps GCPhys 0x100000
 
               // Copy initrd to 0x1800000 (high RAM)
               const initrdHighOff = INITRD_ADDR - 0x100000;
-              mem.set(directBootInitrd, hr.ptr + initrdHighOff);
+              mem.set(directBootInitrd, highRamP + initrdHighOff);
 
               // Write command line at 0x20000 (low RAM)
               const cmdline = 'pmedia=cd\0';
@@ -987,7 +984,8 @@
               kernelPreloaded = true;
               console.log('[DIRECT-BOOT] Kernel preloaded: setup=' + setup_size +
                 ' kernel=' + kernel_size + ' initrd=' + irs +
-                ' version=0x' + version.toString(16));
+                ' version=0x' + version.toString(16) +
+                ' highRamP=0x' + highRamP.toString(16));
               appendLine('Direct boot: kernel preloaded into guest RAM', 'info');
               directBootVmlinuz = null;
               directBootInitrd = null;

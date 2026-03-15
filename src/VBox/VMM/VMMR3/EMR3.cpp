@@ -1978,7 +1978,18 @@ int emR3ForcedActions(PVM pVM, PVMCPU pVCpu, int rc)
                         rc2 = VINF_SUCCESS;
                     }
                     else if (   VMCPU_FF_IS_ANY_SET(pVCpu, VMCPU_FF_INTERRUPT_APIC | VMCPU_FF_INTERRUPT_PIC)
-                             && CPUMIsGuestPhysIntrEnabled(pVCpu))
+                             && CPUMIsGuestPhysIntrEnabled(pVCpu)
+#ifdef __EMSCRIPTEN__
+                             /* Suppress external interrupt injection during kernel
+                                direct-boot phase (CR2 magic).  The PIT timer fires
+                                continuously and injecting IRQs here creates an infinite
+                                timer-ISR cascade that prevents the kernel setup code
+                                from ever completing.  Once the kernel enables paging,
+                                CR2 gets overwritten by a page-fault address and normal
+                                interrupt delivery resumes. */
+                             && pVCpu->cpum.GstCtx.cr2 != UINT64_C(0xC0DEBA5E)
+#endif
+                            )
                     {
                         Assert(pVCpu->em.s.enmState != EMSTATE_WAIT_SIPI);
                         if (fInVmxNonRootMode)

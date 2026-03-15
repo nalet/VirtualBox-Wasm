@@ -7091,7 +7091,15 @@ IEM_CIMPL_DEF_0(iemCImpl_rdtsc)
     /*
      * Do the job.
      */
+#ifdef __EMSCRIPTEN__
+    /* Wasm: RTTimeNanoTS doesn't advance during synchronous Wasm execution,
+       so TMCpuTickGet returns a constant. Use instruction count as TSC source
+       to make calibrate_delay() and other timing code work.
+       ~100 ticks/insn ≈ virtual 300 MHz CPU (enough for calibration). */
+    uint64_t uTicks = pVCpu->iem.s.cInstructions * 100;
+#else
     uint64_t uTicks = TMCpuTickGet(pVCpu);
+#endif
 #if defined(VBOX_WITH_NESTED_HWVIRT_SVM) || defined(VBOX_WITH_NESTED_HWVIRT_VMX)
     uTicks = CPUMApplyNestedGuestTscOffset(pVCpu, uTicks);
 #endif
@@ -7158,7 +7166,11 @@ IEM_CIMPL_DEF_0(iemCImpl_rdtscp)
         /* Low dword of the TSC_AUX msr only. */
         pVCpu->cpum.GstCtx.rcx &= UINT32_C(0xffffffff);
 
+#ifdef __EMSCRIPTEN__
+        uint64_t uTicks = pVCpu->iem.s.cInstructions * 100;
+#else
         uint64_t uTicks = TMCpuTickGet(pVCpu);
+#endif
 #if defined(VBOX_WITH_NESTED_HWVIRT_SVM) || defined(VBOX_WITH_NESTED_HWVIRT_VMX)
         uTicks = CPUMApplyNestedGuestTscOffset(pVCpu, uTicks);
 #endif

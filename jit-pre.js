@@ -3530,10 +3530,11 @@ function execBlock(cpuP, ramB, maxInsn) {
             // Clear magic so we don't re-trigger
             guestWb(0x50C, 0);
 
-            // Set direct-boot flag at guest phys 0x510 = 0xAA so that
-            // CPUMGetGuestCpuId reports LM in CPUID leaf 0x80000001.
-            // During BIOS/ISOLINUX the flag is 0 → LM suppressed.
-            guestWb(0x510, 0xAA);
+            // Set CR2 to magic value so CPUMGetGuestCpuId injects LM
+            // in CPUID leaf 0x80000001 for IEM (protected mode CPUID).
+            // CR2 is unused in real mode (no paging → no page faults)
+            // and the BIOS/ISOLINUX never modify it.
+            wr32(R_CR2, 0xC0DEBA5E);
 
             console.log('[DIRECT-BOOT] CPU state set: CS=1020 IP=0000 → phys 0x10200');
             // Return immediately — must NOT fall through to wrIP(ip)/wr32(R_FLAGS)

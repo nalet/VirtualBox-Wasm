@@ -1002,18 +1002,17 @@ VMMDECL(void) CPUMGetGuestCpuId(PVMCPUCC pVCpu, uint32_t uLeaf, uint32_t uSubLea
 
 #ifdef __EMSCRIPTEN__
             /* Wasm: inject LM/NX/SYSCALL into CPUID leaf 0x80000001 ONLY after
-               the JIT's direct boot code has staged the kernel and written the
-               flag byte 0xAA to guest physical address 0x510.
-               During BIOS/ISOLINUX the flag is 0 → no injection → no crash.
-               After direct boot → flag=0xAA → injection → kernel sees 64-bit CPU.
+               the JIT's direct boot code has written the magic value 0xC0DEBA5E
+               to CR2.  CR2 is unused in real mode (no paging → no page faults)
+               and the BIOS/ISOLINUX never modify it, so this is a reliable flag.
+               During BIOS/ISOLINUX: CR2=0 → no injection → no PM crash.
+               After direct boot: CR2=0xC0DEBA5E → inject → kernel sees 64-bit CPU.
                Note: Enable64bit=1 is NOT used because its GuestFeatures side
                effects cause crashes. EFER.LME writes are allowed by the
                unconditional override in CPUMAllMsrs.cpp. */
             if (uLeaf == UINT32_C(0x80000001))
             {
-                uint8_t bDirectBootFlag = 0;
-                PGMPhysSimpleReadGCPhys(pVM, &bDirectBootFlag, (RTGCPHYS)0x510, sizeof(bDirectBootFlag));
-                if (bDirectBootFlag == 0xAA)
+                if ((uint32_t)pVCpu->cpum.s.Guest.cr2 == UINT32_C(0xC0DEBA5E))
                 {
                     *pEdx |= X86_CPUID_EXT_FEATURE_EDX_LONG_MODE
                            | X86_CPUID_EXT_FEATURE_EDX_NX

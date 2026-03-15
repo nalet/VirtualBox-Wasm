@@ -59,6 +59,7 @@
 #include <VBox/vmm/pdmdev.h>
 #include <VBox/log.h>
 #include <iprt/assert.h>
+#include <iprt/stream.h>
 #include <iprt/string.h>
 
 #include "VBoxDD.h"
@@ -347,6 +348,20 @@ static int pic_update_irq(PPDMDEVINS pDevIns, PDEVPIC pThis, PDEVPICCC pThisCC)
     else
     {
         Log(("pic_update_irq: no interrupt is pending!!\n"));
+
+#ifdef __EMSCRIPTEN__
+        {
+            static uint32_t s_cPicNoPending = 0;
+            if (++s_cPicNoPending <= 5 || (s_cPicNoPending % 500) == 0)
+            {
+                RTPrintf("[PIC-STATE] no_pending #%u master: irr=%02x imr=%02x isr=%02x  slave: irr=%02x imr=%02x isr=%02x\n",
+                         s_cPicNoPending,
+                         pThis->aPics[0].irr, pThis->aPics[0].imr, pThis->aPics[0].isr,
+                         pThis->aPics[1].irr, pThis->aPics[1].imr, pThis->aPics[1].isr);
+                RTStrmFlush(g_pStdOut);
+            }
+        }
+#endif
 
         /* we must clear the interrupt ff flag */
         pThisCC->pPicHlp->pfnClearInterruptFF(pDevIns);

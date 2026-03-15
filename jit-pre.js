@@ -3562,8 +3562,10 @@ function execBlockWrapped(cpuP, ramB, maxInsn, highRamP, highRamSz) {
       ' size=' + (highRamSz >> 20) + 'MB range=0x100000-0x' + highRamEnd.toString(16));
   }
   // Write highRamPtr to guest RAM at 0x7010 so main thread can read it
-  // (closure variables are thread-local in Emscripten pthreads)
-  if (highRamPtr && statTotalCalls === 0) {
+  // (closure variables are thread-local in Emscripten pthreads;
+  // use one-shot flag since highRamPtr may be set after first call)
+  if (highRamPtr && !execBlockWrapped._highRamShared) {
+    execBlockWrapped._highRamShared = true;
     const rb = Number(ramB);
     const m = new Uint8Array(wasmMemory.buffer);
     m[rb + 0x7010] = highRamPtr & 0xFF;

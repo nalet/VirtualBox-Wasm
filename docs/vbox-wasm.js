@@ -4875,7 +4875,8 @@ globalThis.VBoxJIT = (function() {
     }
     // Write highRamPtr to guest RAM at 0x7010 so main thread can read it
     // (closure variables are thread-local in Emscripten pthreads)
-    if (highRamPtr && statTotalCalls === 0) {
+    if (highRamPtr && !execBlockWrapped._highRamShared) {
+      execBlockWrapped._highRamShared = true;
       const rb = Number(ramB);
       const m = new Uint8Array(wasmMemory.buffer);
       m[rb + 0x7010] = highRamPtr & 0xFF;

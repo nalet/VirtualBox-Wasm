@@ -869,7 +869,9 @@ globalThis.VBoxJIT = (function() {
   }
   // ── 32-bit paging support ──
   let _pagingOn = false;
+  // ── Direct boot flag — set after kernel staging, used for CPUID faking ──
   let _directBootDone = false;
+  // ── Last bail opcode from execBlock, for post-IEM CPUID override ──
   let _lastBailOp = -1;
   let _pendingCpuidLeaf = -1;
   // Direct-mapped TLB: 1024 entries for fast virtual-to-physical lookup
@@ -5083,25 +5085,6 @@ globalThis.VBoxJIT = (function() {
         console.log("[JIT-PROT] === END PROTECTED MODE DIAGNOSTIC ===");
       }
     }
-    // Post-IEM CPUID override: if previous call bailed on CPUID and IEM
-    // has now executed it, override the results with LM/NX/SYSCALL.
-    if (_pendingCpuidLeaf >= 0) {
-      refreshViews();
-      const leaf = _pendingCpuidLeaf;
-      _pendingCpuidLeaf = -1;
-      console.log("[CPUID-OVERRIDE] Applying override for leaf=0x" + leaf.toString(16) +
-        " current EAX=0x" + rr32(R_AX).toString(16));
-      if (leaf === 2147483649) { // 0x80000001
-        wr32(R_AX, 0);
-        wr32(R_BX, 0);
-        wr32(R_CX, 1); // LAHF/SAHF
-        wr32(R_DX, 739248128); // 0x2C100800: LM|RDTSCP|FXSR|NX|SYSCALL
-      } else if (leaf === 2147483648) { // 0x80000000
-        wr32(R_AX, 2147483656); // 0x80000008
-        wr32(R_BX, 0); wr32(R_CX, 0); wr32(R_DX, 0);
-      }
-    }
-
     let n = 0;
     try {
       n = execBlock(cpuP, ramB, maxInsn);
@@ -5115,23 +5098,7 @@ globalThis.VBoxJIT = (function() {
     } else {
       statFallbacks++;
     }
-
-    // Log 0x0F-prefix bails after direct boot
-    if (_directBootDone && _lastBailOp >= 3840) { // >= 0x0F00
-      if (!execBlockWrapped._0fBailLog) execBlockWrapped._0fBailLog = 0;
-      if (execBlockWrapped._0fBailLog++ < 20) {
-        refreshViews();
-        console.log("[CPUID-DBG] 0x0F bail: op=0x" + _lastBailOp.toString(16) +
-          " EAX=0x" + rr32(R_AX).toString(16) + " IP=0x" + rr32(R_IP).toString(16));
-      }
-    }
-    // If execBlock bailed on CPUID (0x0FA2) and direct boot is done,
-    // save the leaf (EAX) for override on next call.
-    if (_lastBailOp === 4002 && _directBootDone) { // 0x0FA2 = 4002
-      refreshViews();
-      _pendingCpuidLeaf = rr32(R_AX);
-      console.log("[CPUID-OVERRIDE] Detected CPUID bail, leaf=0x" + _pendingCpuidLeaf.toString(16));
-    }
+    // If execBlock bailed on CPUID (0x0F 0xA2 = 0x0FA2) and direct boot is done,
     // Stuck-detection: if we stay in the same 32-byte IP range for >50000 calls, dump full state
     {
       const curIP = rr32(R_IP);

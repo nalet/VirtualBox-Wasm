@@ -1010,7 +1010,6 @@ VMMDECL(void) CPUMGetGuestCpuId(PVMCPUCC pVCpu, uint32_t uLeaf, uint32_t uSubLea
                 *pEdx |= X86_CPUID_EXT_FEATURE_EDX_LONG_MODE
                        | X86_CPUID_EXT_FEATURE_EDX_NX
                        | X86_CPUID_EXT_FEATURE_EDX_SYSCALL
-                       | X86_CPUID_EXT_FEATURE_EDX_FXSR
                        | X86_CPUID_EXT_FEATURE_EDX_RDTSCP;
                 *pEcx |= X86_CPUID_EXT_FEATURE_ECX_LAHF_SAHF;
             }

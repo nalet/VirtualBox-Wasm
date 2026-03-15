@@ -1226,28 +1226,72 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                             {
                                 uint8_t abCode[16];
                                 RT_ZERO(abCode);
-                                /* Walk page table to get physical address (paging is on) */
                                 RTGCPHYS GCPhys = 0;
-                                uint32_t cr3 = pVCpu->cpum.GstCtx.cr3 & ~UINT32_C(0xFFF);
-                                uint32_t pdeIdx = (uint32_t)(rip >> 22) & 0x3FF;
-                                uint32_t pteIdx = (uint32_t)(rip >> 12) & 0x3FF;
-                                uint32_t pde = 0, pte = 0;
-                                PGMPhysRead(pVM, (RTGCPHYS)(cr3 + pdeIdx * 4), &pde, 4, PGMACCESSORIGIN_IEM);
-                                if (pde & 1) /* present */
+                                uint64_t efer = pVCpu->cpum.GstCtx.msrEFER;
+                                uint64_t cr3v = pVCpu->cpum.GstCtx.cr3;
+                                if (efer & MSR_K6_EFER_LMA)
                                 {
-                                    if (pde & 0x80) /* 4MB page (PSE) */
-                                        GCPhys = (pde & 0xFFC00000) | ((uint32_t)rip & 0x003FFFFF);
-                                    else
+                                    /* 4-level page walk for 64-bit long mode */
+                                    uint64_t pml4Base = cr3v & ~UINT64_C(0xFFF);
+                                    uint64_t pml4e = 0, pdpe = 0, pde64 = 0, pte64 = 0;
+                                    unsigned pml4Idx = (rip >> 39) & 0x1FF;
+                                    unsigned pdpIdx  = (rip >> 30) & 0x1FF;
+                                    unsigned pdIdx   = (rip >> 21) & 0x1FF;
+                                    unsigned ptIdx   = (rip >> 12) & 0x1FF;
+                                    PGMPhysRead(pVM, pml4Base + pml4Idx * 8, &pml4e, 8, PGMACCESSORIGIN_IEM);
+                                    if (pml4e & 1)
                                     {
-                                        PGMPhysRead(pVM, (RTGCPHYS)((pde & ~UINT32_C(0xFFF)) + pteIdx * 4), &pte, 4, PGMACCESSORIGIN_IEM);
-                                        if (pte & 1)
-                                            GCPhys = (pte & ~UINT32_C(0xFFF)) | ((uint32_t)rip & 0xFFF);
+                                        PGMPhysRead(pVM, (pml4e & UINT64_C(0x000FFFFFFFFFF000)) + pdpIdx * 8, &pdpe, 8, PGMACCESSORIGIN_IEM);
+                                        if (pdpe & 1)
+                                        {
+                                            if (pdpe & 0x80) /* 1GB page */
+                                                GCPhys = (pdpe & UINT64_C(0x000FFFFFC0000000)) | (rip & UINT64_C(0x3FFFFFFF));
+                                            else
+                                            {
+                                                PGMPhysRead(pVM, (pdpe & UINT64_C(0x000FFFFFFFFFF000)) + pdIdx * 8, &pde64, 8, PGMACCESSORIGIN_IEM);
+                                                if (pde64 & 1)
+                                                {
+                                                    if (pde64 & 0x80) /* 2MB page */
+                                                        GCPhys = (pde64 & UINT64_C(0x000FFFFFFFE00000)) | (rip & UINT64_C(0x1FFFFF));
+                                                    else
+                                                    {
+                                                        PGMPhysRead(pVM, (pde64 & UINT64_C(0x000FFFFFFFFFF000)) + ptIdx * 8, &pte64, 8, PGMACCESSORIGIN_IEM);
+                                                        if (pte64 & 1)
+                                                            GCPhys = (pte64 & UINT64_C(0x000FFFFFFFFFF000)) | (rip & 0xFFF);
+                                                    }
+                                                }
+                                            }
+                                        }
                                     }
+                                    RTPrintf("[CPU-STUCK] virt=%016llx phys=%016llx PML4E=%016llx PDPE=%016llx PDE=%016llx PTE=%016llx\n",
+                                             (unsigned long long)rip, (unsigned long long)GCPhys,
+                                             (unsigned long long)pml4e, (unsigned long long)pdpe,
+                                             (unsigned long long)pde64, (unsigned long long)pte64);
+                                }
+                                else
+                                {
+                                    /* 32-bit page walk */
+                                    uint32_t pde = 0, pte = 0;
+                                    uint32_t cr3_32 = (uint32_t)cr3v & ~UINT32_C(0xFFF);
+                                    uint32_t pdeIdx = (uint32_t)(rip >> 22) & 0x3FF;
+                                    uint32_t pteIdx = (uint32_t)(rip >> 12) & 0x3FF;
+                                    PGMPhysRead(pVM, (RTGCPHYS)(cr3_32 + pdeIdx * 4), &pde, 4, PGMACCESSORIGIN_IEM);
+                                    if (pde & 1)
+                                    {
+                                        if (pde & 0x80)
+                                            GCPhys = (pde & 0xFFC00000) | ((uint32_t)rip & 0x003FFFFF);
+                                        else
+                                        {
+                                            PGMPhysRead(pVM, (RTGCPHYS)((pde & ~UINT32_C(0xFFF)) + pteIdx * 4), &pte, 4, PGMACCESSORIGIN_IEM);
+                                            if (pte & 1)
+                                                GCPhys = (pte & ~UINT32_C(0xFFF)) | ((uint32_t)rip & 0xFFF);
+                                        }
+                                    }
+                                    RTPrintf("[CPU-STUCK] virt=%08llx phys=%08llx PDE=%08x PTE=%08x\n",
+                                             (unsigned long long)rip, (unsigned long long)GCPhys, pde, pte);
                                 }
                                 if (GCPhys)
                                     PGMPhysRead(pVM, GCPhys, abCode, sizeof(abCode), PGMACCESSORIGIN_IEM);
-                                RTPrintf("[CPU-STUCK] virt=%08llx phys=%08llx PDE=%08x PTE=%08x\n",
-                                         (unsigned long long)rip, (unsigned long long)GCPhys, pde, pte);
                                 RTPrintf("[CPU-STUCK] EIP=%08llx bytes: %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x\n",
                                          (unsigned long long)rip,
                                          abCode[0], abCode[1], abCode[2], abCode[3],

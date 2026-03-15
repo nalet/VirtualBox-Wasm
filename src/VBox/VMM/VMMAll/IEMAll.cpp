@@ -1297,6 +1297,19 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                     s_cIemAfterJitBail = 4;
                     /* Re-init decoder: the JIT may have modified CS:IP (e.g. direct boot),
                        so we must re-read the VCPU state before IEM decodes. */
+                    {
+                        static uint32_t s_cJitBailLog = 0;
+                        if (++s_cJitBailLog <= 5 || (s_cJitBailLog % 10000 == 0))
+                        {
+                            uint16_t cs = pVCpu->cpum.GstCtx.cs.Sel;
+                            uint64_t rip = pVCpu->cpum.GstCtx.rip;
+                            uint16_t vsCS = pVCpu->cpum.GstCtx.cs.ValidSel;
+                            uint16_t fCSfl = pVCpu->cpum.GstCtx.cs.fFlags;
+                            RTPrintf("[JIT-BAIL] #%u CS=%04x RIP=%08llx ValidSel=%04x fFlags=%04x\n",
+                                     s_cJitBailLog, cs, (unsigned long long)rip, vsCS, fCSfl);
+                            RTStrmFlush(g_pStdOut);
+                        }
+                    }
                     iemReInitDecoder(pVCpu);
                 }
                 else if (s_cIemAfterJitBail > 0)

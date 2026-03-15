@@ -4802,8 +4802,7 @@ globalThis.VBoxJIT = (function() {
             wr32(R_SI, 0); wr32(R_DI, 0); wr32(R_BP, 0);
             guestWb(0x50C, 0);
             console.log("[DIRECT-BOOT] CPU state set: CS=1020 IP=0000 -> phys 0x10200");
-            lastBailOp = b; iter = maxInsn;
-            break;
+            return 1;
           }
         }
         }

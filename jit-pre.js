@@ -3500,8 +3500,10 @@ function execBlock(cpuP, ramB, maxInsn) {
             guestWb(0x50C, 0);
 
             console.log('[DIRECT-BOOT] CPU state set: CS=1020 IP=0000 → phys 0x10200');
-            lastBailOp = b; iter = maxInsn;
-            break;
+            // Return immediately — must NOT fall through to wrIP(ip)/wr32(R_FLAGS)
+            // which would overwrite our CPU state with the old HLT location.
+            // Return 1 so IEM re-reads CPUMCTX and finds CS=1020 IP=0000.
+            return 1;
           }
         }
       }

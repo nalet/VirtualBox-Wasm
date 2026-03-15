@@ -1201,7 +1201,6 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                  * This avoids calling the JIT just for 2-3 instructions between consecutive
                  * IN instructions, saving significant overhead during ATA BSY polling. */
                 static uint32_t s_cIemAfterJitBail = 0;
-                static bool     s_fJitDisabledForBoot = false;
                 /* Periodic CPU state diagnostic — counter-based (RTTimeNanoTS
                    doesn't advance during synchronous JS execution in Wasm workers) */
                 {
@@ -1256,7 +1255,8 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                    18.2 Hz which would kill JIT throughput entirely. */
                 int cKbdDrained = wasmKbdDrainQueue();
                 if (s_pvJitRAM && s_cIemAfterJitBail == 0
-                    && !s_fJitDisabledForBoot && cKbdDrained == 0)
+                    && !(pVCpu->cpum.GstCtx.cr0 & X86_CR0_PE) /* skip JIT in PM */
+                    && cKbdDrained == 0)
                 {
                     uint32_t cBatch = RT_MIN(cMaxInstructionsGccStupidity, 4096);
                     wasmJitSetA20(PGMPhysIsA20Enabled(pVCpu) ? 1 : 0);
@@ -1316,17 +1316,20 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                         static bool s_fDirectBootDetected = false;
                         if (!s_fDirectBootDetected && pVCpu->cpum.GstCtx.cr2 == UINT64_C(0xC0DEBA5E))
                         {
-                            s_fDirectBootDetected = true;
-
-                            /* Read metadata from guest RAM at 0x7000 */
+                            /* Read metadata from guest RAM at 0x7000.
+                             * CR2 magic can be set by the CPUID LM injection (before
+                             * direct boot writes metadata), so only proceed when the
+                             * DBOOT magic is present.  Don't set s_fDirectBootDetected
+                             * until then, so we retry on subsequent JIT bails.
+                             * Also skip if the kernel already entered PM on its own. */
                             uint8_t abMeta[8];
                             PGMPhysRead(pVM, (RTGCPHYS)0x7000, abMeta, sizeof(abMeta), PGMACCESSORIGIN_IEM);
                             uint32_t uMagic = *(uint32_t *)&abMeta[4];
 
-                            RTPrintf("[DIRECT-BOOT-CPP] CR2 magic detected! magic=0x%08x — using 32-bit boot protocol\n", uMagic);
-
-                            if (uMagic == 0x44424F4F)
+                            if (uMagic == 0x44424F4F && !(pVCpu->cpum.GstCtx.cr0 & X86_CR0_PE))
                             {
+                                s_fDirectBootDetected = true;
+                                RTPrintf("[DIRECT-BOOT-CPP] CR2 magic + DBOOT metadata ready — 32-bit boot protocol\n");
                                 PCPUMCTX pCtx = &pVCpu->cpum.GstCtx;
 
                                 /* ── 32-bit boot protocol ──
@@ -1403,10 +1406,6 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                                 /* EFLAGS: reserved bit 1 only, IF=0 (interrupts disabled) */
                                 pCtx->rflags.u = 0x00000002;
 
-                                /* Permanently disable the JIT — it's for real-mode BIOS code,
-                                   not kernel PM.  IEM handles PM correctly. */
-                                s_fJitDisabledForBoot = true;
-
                                 /* Log entry state and first 16 bytes of code */
                                 uint8_t abCode[16];
                                 PGMPhysRead(pVM, (RTGCPHYS)uCode32Start, abCode, sizeof(abCode), PGMACCESSORIGIN_IEM);
@@ -1423,11 +1422,17 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                                          abCode[12], abCode[13], abCode[14], abCode[15]);
                                 RTStrmFlush(g_pStdOut);
                             }
-                            else
+                            else if (pVCpu->cpum.GstCtx.cr0 & X86_CR0_PE)
                             {
-                                RTPrintf("[DIRECT-BOOT-CPP] ERROR: bad metadata magic=0x%08x\n", uMagic);
+                                /* Kernel already entered PM on its own (via real-mode setup path).
+                                   The CPUID LM injection + IEM FF bypass prevented the timer cascade. */
+                                s_fDirectBootDetected = true;
+                                RTPrintf("[DIRECT-BOOT-CPP] Kernel already in PM (CR0=%08x) — skipping 32-bit boot\n",
+                                         (unsigned)pVCpu->cpum.GstCtx.cr0);
                                 RTStrmFlush(g_pStdOut);
                             }
+                            /* else: metadata not ready yet (premature CR2 from CPUID LM injection).
+                               Don't set s_fDirectBootDetected — retry on next JIT bail. */
                         }
                     }
                     iemReInitDecoder(pVCpu);

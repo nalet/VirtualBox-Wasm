@@ -519,6 +519,19 @@ static VBOXSTRICTRC pic_ioport_write(PPDMDEVINS pDevIns, PDEVPIC pThis, PDEVPICC
         if (val & 0x10)
         {
             /* init */
+#ifdef __EMSCRIPTEN__
+            {
+                static uint32_t s_cIcw1 = 0;
+                if (++s_cIcw1 <= 20)
+                {
+                    RTPrintf("[PIC-ICW1] #%u %s: val=0x%02x (re-init, old imr=0x%02x)\n",
+                             s_cIcw1,
+                             (pPic == &pThis->aPics[0]) ? "master" : "slave",
+                             val, pPic->imr);
+                    RTStrmFlush(g_pStdOut);
+                }
+            }
+#endif
             pic_reset(pPic);
             /* deassert a pending interrupt */
             pThisCC->pPicHlp->pfnClearInterruptFF(pDevIns);
@@ -610,6 +623,22 @@ static VBOXSTRICTRC pic_ioport_write(PPDMDEVINS pDevIns, PDEVPIC pThis, PDEVPICC
         {
             case 0:
                 /* normal mode */
+#ifdef __EMSCRIPTEN__
+                {
+                    static uint32_t s_cImrWrite = 0;
+                    uint8_t oldImr = pPic->imr;
+                    if (++s_cImrWrite <= 50 || (s_cImrWrite % 500) == 0 || (oldImr & 1) != (val & 1))
+                    {
+                        RTPrintf("[PIC-IMR] #%u %s: old=0x%02x new=0x%02x (IRQ0 %s→%s)\n",
+                                 s_cImrWrite,
+                                 (pPic == &pThis->aPics[0]) ? "master" : "slave",
+                                 oldImr, val,
+                                 (oldImr & 1) ? "MASKED" : "unmasked",
+                                 (val & 1) ? "MASKED" : "unmasked");
+                        RTStrmFlush(g_pStdOut);
+                    }
+                }
+#endif
                 pPic->imr = val;
                 rc = pic_update_irq(pDevIns, pThis, pThisCC);
                 Assert(rc == VINF_SUCCESS);

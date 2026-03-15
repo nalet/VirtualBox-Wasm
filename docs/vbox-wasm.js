@@ -4721,6 +4721,11 @@ globalThis.VBoxJIT = (function() {
             ilen = 0;
             continue;
           }
+          // Log IRET returns to kernel setup segment
+          if ((iretCS === 4128 || iretCS === 4096) && !(flags & 256)) {
+            if (!execBlock._kernelIretCnt) execBlock._kernelIretCnt = 0;
+            if (++execBlock._kernelIretCnt <= 50) console.log("[IRET→KRNL] CS=" + iretCS.toString(16) + ":" + iretIP.toString(16) + " FL=" + iretFlags.toString(16) + " SP=" + gr16(4).toString(16) + " #" + execBlock._kernelIretCnt);
+          }
           // Log IRET returns to ISOLINUX segment (CS=0003) to trace INT 13h results
           if (iretCS === 3) {
             if (!execBlock._iretLog) execBlock._iretLog = {
@@ -5001,6 +5006,25 @@ globalThis.VBoxJIT = (function() {
         const sp16 = rr16(R_SP);
         const ss16 = rr16(S_SS + SEG_SEL);
         console.log("[JIT-ISOL] #" + il.count + " CS=" + curCS.toString(16) + " IP=" + ip.toString(16).padStart(4, "0") + " exec=" + executed + " bail=" + (lastBailOp >= 0 ? "0x" + lastBailOp.toString(16) : "none") + " code=" + cb + " AX=0x" + gr16(0).toString(16).padStart(4, "0") + " DX=0x" + gr16(2).toString(16).padStart(4, "0") + " SS:SP=" + ss16.toString(16) + ":" + sp16.toString(16).padStart(4, "0"));
+      }
+    }
+    // Track kernel execution: log final CS/IP after each JIT block
+    // to detect if kernel code is actually being reached after IRET
+    {
+      const endCS = rr16(S_CS);
+      if (!execBlock._krnlStats) execBlock._krnlStats = {
+        total: 0,
+        krnl: 0,
+        logCnt: 0
+      };
+      const ks = execBlock._krnlStats;
+      ks.total++;
+      if (endCS === 4128 || endCS === 4096) ks.krnl++;
+      if (ks.total % 5e3 === 0) {
+        ks.logCnt++;
+        if (ks.logCnt <= 50) {
+          console.log("[JIT-KPROG] calls=" + ks.total + " krnl=" + ks.krnl + " endCS=" + endCS.toString(16) + ":" + ip.toString(16) + " exec=" + executed + " bail=" + (lastBailOp >= 0 ? "0x" + lastBailOp.toString(16) : "none"));
+        }
       }
     }
     return executed;

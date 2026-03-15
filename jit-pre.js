@@ -2989,19 +2989,6 @@ function execBlock(cpuP, ramB, maxInsn) {
         }
 
         default:
-          // CPUID (0xA2) — fake LM after direct boot, bail otherwise
-          if (b2 === 0xA2 && _directBootDone) {
-            const leaf = gr32(0);
-            if (leaf === 0x80000001) {
-              sr32(0, 0); sr32(3, 0);
-              sr32(1, 0x00000001); // ECX: LAHF/SAHF
-              sr32(2, 0x2C100800); // EDX: LM|RDTSCP|FXSR|NX|SYSCALL
-              break;
-            } else if (leaf === 0x80000000) {
-              sr32(0, 0x80000008); sr32(3, 0); sr32(1, 0); sr32(2, 0);
-              break;
-            }
-          }
           // Unsupported 0x0F opcode — fallback
           lastBailOp = 0x0F00 | b2; iter = maxInsn;
           break;

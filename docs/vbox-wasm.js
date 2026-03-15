@@ -871,9 +871,6 @@ globalThis.VBoxJIT = (function() {
   let _pagingOn = false;
   // ── Direct boot flag — set after kernel staging, used for CPUID faking ──
   let _directBootDone = false;
-  // ── Last bail opcode from execBlock, for post-IEM CPUID override ──
-  let _lastBailOp = -1;
-  let _pendingCpuidLeaf = -1;
   // Direct-mapped TLB: 1024 entries for fast virtual-to-physical lookup
   const TLB_SIZE = 1024;
   const TLB_MASK = TLB_SIZE - 1;
@@ -4886,7 +4883,6 @@ globalThis.VBoxJIT = (function() {
     // preserve TF/IF/DF (bits 8-10)
     wr32(R_FLAGS, newFlags);
     // Track bail opcode if we exited early
-    _lastBailOp = lastBailOp;
     if (lastBailOp >= 0) {
       fallbackOpcodes.set(lastBailOp, (fallbackOpcodes.get(lastBailOp) || 0) + 1);
     }
@@ -5098,7 +5094,6 @@ globalThis.VBoxJIT = (function() {
     } else {
       statFallbacks++;
     }
-    // If execBlock bailed on CPUID (0x0F 0xA2 = 0x0FA2) and direct boot is done,
     // Stuck-detection: if we stay in the same 32-byte IP range for >50000 calls, dump full state
     {
       const curIP = rr32(R_IP);

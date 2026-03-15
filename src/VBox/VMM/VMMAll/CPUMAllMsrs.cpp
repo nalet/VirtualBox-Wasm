@@ -6520,19 +6520,12 @@ VMMDECL(uint64_t) CPUMGetGuestEferMsrValidMask(PVM pVM)
     uint64_t const  fIgnoreMask  = MSR_K6_EFER_LMA;
 
     /* Filter out those bits the guest is allowed to change. (e.g. LMA is read-only) */
-#ifdef __EMSCRIPTEN__
-    /* Wasm: always allow LME/NXE/SCE regardless of CPUID — the JIT fakes
-       CPUID LM for the kernel, but VBox CPUID leaves are not modified
-       (Enable64bit causes a BIOS triple fault in Wasm). */
-    fMask |= MSR_K6_EFER_NXE | MSR_K6_EFER_LME | MSR_K6_EFER_SCE;
-#else
     if (fExtFeatures & X86_CPUID_EXT_FEATURE_EDX_NX)
         fMask |= MSR_K6_EFER_NXE;
     if (fExtFeatures & X86_CPUID_EXT_FEATURE_EDX_LONG_MODE)
         fMask |= MSR_K6_EFER_LME;
     if (fExtFeatures & X86_CPUID_EXT_FEATURE_EDX_SYSCALL)
         fMask |= MSR_K6_EFER_SCE;
-#endif
     if (fExtFeatures & X86_CPUID_AMD_FEATURE_EDX_FFXSR)
         fMask |= MSR_K6_EFER_FFXSR;
     if (pVM->cpum.s.GuestFeatures.fSvm)

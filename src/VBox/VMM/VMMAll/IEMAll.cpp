@@ -138,6 +138,7 @@
 # include <VBox/vmm/hmvmxinline.h>
 #endif
 #include <VBox/vmm/tm.h>
+#include <VBox/vmm/cfgm.h>
 #include <VBox/vmm/dbgf.h>
 #include <VBox/vmm/dbgftrace.h>
 #include "IEMInternal.h"
@@ -282,7 +283,18 @@ static void iemJitEnsureInit(PVMCC pVM)
         if (RT_SUCCESS(rc) && pv)
         {
             s_pvJitHighRAM = pv;
-            s_cbJitHighRAM = (32U * _1M) - 0x100000;
+            /* Probe how far contiguous RAM extends above 1MB by trying to
+               map a page near the configured RamSize. Read RamSize from CFGM. */
+            uint64_t cbRamSize = 0;
+            PCFGMNODE pRoot = CFGMR3GetRoot(pVM);
+            if (pRoot)
+                CFGMR3QueryU64Def(pRoot, "RamSize", &cbRamSize, 32U * _1M);
+            if (cbRamSize > 0x100000)
+                s_cbJitHighRAM = (uint32_t)(cbRamSize - 0x100000);
+            else
+                s_cbJitHighRAM = (32U * _1M) - 0x100000;
+            RTPrintf("[JIT-INIT] High RAM: ptr=%p size=%u MB (RamSize=%llu MB)\n",
+                     pv, s_cbJitHighRAM >> 20, (unsigned long long)(cbRamSize >> 20));
         }
     }
 
@@ -1283,6 +1295,9 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                        (ISOLINUX trampoline) safely bails on re-entry.  A short cooldown
                        keeps flat PM responsive for I/O bails (IN/OUT, INT). */
                     s_cIemAfterJitBail = 4;
+                    /* Re-init decoder: the JIT may have modified CS:IP (e.g. direct boot),
+                       so we must re-read the VCPU state before IEM decodes. */
+                    iemReInitDecoder(pVCpu);
                 }
                 else if (s_cIemAfterJitBail > 0)
                     s_cIemAfterJitBail--;

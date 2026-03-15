@@ -1348,11 +1348,21 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                                 pCtx->rax = 0; pCtx->rbx = 0; pCtx->rcx = 0; pCtx->rdx = 0;
                                 pCtx->rsi = 0; pCtx->rdi = 0; pCtx->rbp = 0;
 
+                                /* Also read the first 16 bytes of code at the target */
+                                uint8_t abCode[16];
+                                RTGCPHYS GCPhysCode = pCtx->cs.u64Base + pCtx->rip;
+                                PGMPhysRead(pVM, GCPhysCode, abCode, sizeof(abCode), PGMACCESSORIGIN_IEM);
                                 RTPrintf("[DIRECT-BOOT-CPP] VCPU state set: CS=%04x:%016llx RIP=%016llx RSP=%04llx FL=%08llx\n",
                                          pCtx->cs.Sel, (unsigned long long)pCtx->cs.u64Base,
                                          (unsigned long long)pCtx->rip,
                                          (unsigned long long)pCtx->rsp,
                                          (unsigned long long)pCtx->rflags.u);
+                                RTPrintf("[DIRECT-BOOT-CPP] code@%08llx: %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x\n",
+                                         (unsigned long long)GCPhysCode,
+                                         abCode[0], abCode[1], abCode[2], abCode[3],
+                                         abCode[4], abCode[5], abCode[6], abCode[7],
+                                         abCode[8], abCode[9], abCode[10], abCode[11],
+                                         abCode[12], abCode[13], abCode[14], abCode[15]);
                                 RTStrmFlush(g_pStdOut);
                             }
                             else
@@ -1369,6 +1379,26 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                     s_cIemAfterJitBail--;
 #endif
                 rcStrict = iemExecDecodeAndInterpretTargetInstruction(pVCpu);
+#ifdef __EMSCRIPTEN__
+                /* Log first instruction after direct boot */
+                {
+                    static bool s_fLoggedPostBoot = false;
+                    if (!s_fLoggedPostBoot && pVCpu->cpum.GstCtx.cr2 == UINT64_C(0xC0DEBA5E))
+                    {
+                        s_fLoggedPostBoot = true;
+                        uint64_t fCpuDbg = pVCpu->fLocalForcedActions;
+                        uint64_t fVmDbg  = pVM->fGlobalForcedActions;
+                        RTPrintf("[DIRECT-BOOT-CPP] after 1st insn: rc=%d CS=%04x IP=%08llx FL=%08llx fCpuFF=%016llx fVmFF=%016llx\n",
+                                 (int)rcStrict,
+                                 pVCpu->cpum.GstCtx.cs.Sel,
+                                 (unsigned long long)pVCpu->cpum.GstCtx.rip,
+                                 (unsigned long long)pVCpu->cpum.GstCtx.rflags.u,
+                                 (unsigned long long)fCpuDbg,
+                                 (unsigned long long)fVmDbg);
+                        RTStrmFlush(g_pStdOut);
+                    }
+                }
+#endif
 #if defined(VBOX_STRICT) && defined(VBOX_VMM_TARGET_X86)
                 CPUMAssertGuestRFlagsCookie(pVM, pVCpu);
 #endif

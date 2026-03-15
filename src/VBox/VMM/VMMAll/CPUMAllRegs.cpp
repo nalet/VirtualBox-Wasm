@@ -1001,32 +1001,21 @@ VMMDECL(void) CPUMGetGuestCpuId(PVMCPUCC pVCpu, uint32_t uLeaf, uint32_t uSubLea
                 *pEdx &= ~X86_CPUID_EXT_FEATURE_EDX_SYSCALL;
 
 #ifdef __EMSCRIPTEN__
-            /* Wasm: inject LM/NX/SYSCALL into CPUID leaf 0x80000001 ONLY after
-               the JIT's direct boot code has written the magic value 0xC0DEBA5E
-               to CR2.  CR2 is unused in real mode (no paging → no page faults)
-               and the BIOS/ISOLINUX never modify it, so this is a reliable flag.
-               During BIOS/ISOLINUX: CR2=0 → no injection → no PM crash.
-               After direct boot: CR2=0xC0DEBA5E → inject → kernel sees 64-bit CPU.
+            /* Wasm: always inject LM/NX/SYSCALL into CPUID leaf 0x80000001.
+               The JIT handles CPUID in real mode (never reaching CPUM), so the
+               old CR2-magic latch never fired. Safe to inject unconditionally:
+               PCBIOS/ISOLINUX ignore LM, and JIT PM crashes are prevented by
+               the CR0.PE check in IEMAll.cpp.
                Note: Enable64bit=1 is NOT used because its GuestFeatures side
                effects cause crashes. EFER.LME writes are allowed by the
                unconditional override in CPUMAllMsrs.cpp. */
             if (uLeaf == UINT32_C(0x80000001))
             {
-                /* Latch: once CR2 magic is set, keep injecting LM forever.
-                   Page faults in paged mode overwrite CR2, so we can't
-                   rely on it being 0xC0DEBA5E after paging is enabled. */
-                static bool s_fLmInjectionActive = false;
-                if (!s_fLmInjectionActive
-                    && (uint32_t)pVCpu->cpum.s.Guest.cr2 == UINT32_C(0xC0DEBA5E))
-                    s_fLmInjectionActive = true;
-                if (s_fLmInjectionActive)
-                {
-                    *pEdx |= X86_CPUID_EXT_FEATURE_EDX_LONG_MODE
-                           | X86_CPUID_EXT_FEATURE_EDX_NX
-                           | X86_CPUID_EXT_FEATURE_EDX_SYSCALL
-                           | X86_CPUID_EXT_FEATURE_EDX_RDTSCP;
-                    *pEcx |= X86_CPUID_EXT_FEATURE_ECX_LAHF_SAHF;
-                }
+                *pEdx |= X86_CPUID_EXT_FEATURE_EDX_LONG_MODE
+                       | X86_CPUID_EXT_FEATURE_EDX_NX
+                       | X86_CPUID_EXT_FEATURE_EDX_SYSCALL
+                       | X86_CPUID_EXT_FEATURE_EDX_RDTSCP;
+                *pEcx |= X86_CPUID_EXT_FEATURE_ECX_LAHF_SAHF;
             }
 #endif
 

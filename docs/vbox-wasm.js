@@ -4086,40 +4086,6 @@ globalThis.VBoxJIT = (function() {
               break;
             }
 
-           // ──── CPUID (0x0F 0xA2) — fake long mode for kernel ────
-            case 162:
-            {
-              // Only intercept AFTER direct boot has fired (kernel setup).
-              // During BIOS POST, bail to IEM for accurate CPUID values.
-              if (!execBlock._directBootDone) {
-                lastBailOp = 3840 | b2;
-                iter = maxInsn;
-                break;
-              }
-              const leaf = gr32(0);
-              // EAX = leaf
-              if (leaf === 2147483649) {
-                // Inject LM, NX, SYSCALL bits for 64-bit kernel
-                sr32(0, 0);
-                sr32(3, 0);
-                sr32(1, 1);
-                // ECX: LAHF/SAHF
-                sr32(2, 739248128);
-              } else if (leaf === 2147483648) {
-                // Report extended leaves up to 0x80000008
-                sr32(0, 2147483656);
-                sr32(3, 0);
-                sr32(1, 0);
-                sr32(2, 0);
-              } else {
-                // All other leaves — bail to IEM for real values
-                lastBailOp = 3840 | b2;
-                iter = maxInsn;
-                break;
-              }
-              break;
-            }
-
            default:
             // Unsupported 0x0F opcode — fallback
             lastBailOp = 3840 | b2;

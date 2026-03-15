@@ -4794,8 +4794,12 @@ globalThis.VBoxJIT = (function() {
           // ── Direct Kernel Boot ──
           // When the BIOS is stuck in its HLT loop (CD-ROM read never completes),
           // bypass ISOLINUX by loading the pre-staged kernel directly into guest RAM.
-          // Trigger: 30K+ HLTs at BIOS halt_forever (f000:709c) + KRNL magic present.
-          if (hltCnt >= 3e4 && hltCS === 61440 && ip === 28828 && !execBlock._directBootDone) {
+          // Trigger: HLTs at BIOS halt_forever (f000:709c) with SP >= 0xFF00
+          // (post-POST halt loop), NOT during memory init (SP=0x7b58).
+          // The SP check distinguishes the final halt loop from BIOS POST HLTs
+          // at the same address during memory initialization.
+          const hltSP = gr16(4);
+          if (hltCnt >= 3e4 && hltCS === 61440 && ip === 28828 && hltSP >= 65280 && !execBlock._directBootDone) {
             const md = ramBase + 1280;
             if (mem8[md + 12] === 75 && mem8[md + 13] === 82 && mem8[md + 14] === 78 && mem8[md + 15] === 76) {
               // "KRNL" magic
@@ -4804,7 +4808,7 @@ globalThis.VBoxJIT = (function() {
               const stageBase = (mem8[md] | (mem8[md + 1] << 8) | (mem8[md + 2] << 16) | (mem8[md + 3] << 24)) >>> 0;
               const vmlinuzLen = (mem8[md + 4] | (mem8[md + 5] << 8) | (mem8[md + 6] << 16) | (mem8[md + 7] << 24)) >>> 0;
               const initrdLen = (mem8[md + 8] | (mem8[md + 9] << 8) | (mem8[md + 10] << 16) | (mem8[md + 11] << 24)) >>> 0;
-              console.log("[DIRECT-BOOT] Triggered at HLT #" + hltCnt + " stage=0x" + stageBase.toString(16) + " vmlinuz=" + vmlinuzLen + " initrd=" + initrdLen);
+              console.log("[DIRECT-BOOT] Triggered at HLT #" + hltCnt + " SP=0x" + hltSP.toString(16) + " stage=0x" + stageBase.toString(16) + " vmlinuz=" + vmlinuzLen + " initrd=" + initrdLen);
               // Parse bzImage header
               const setup_sects = mem8[stageBase + 497] || 4;
               const hdrSig = String.fromCharCode(mem8[stageBase + 514], mem8[stageBase + 515], mem8[stageBase + 516], mem8[stageBase + 517]);

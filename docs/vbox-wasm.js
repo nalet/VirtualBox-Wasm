@@ -4086,6 +4086,63 @@ globalThis.VBoxJIT = (function() {
               break;
             }
 
+           // ──── CPUID (0x0F 0xA2) — fake long mode support ────
+            case 162:
+            {
+              const leaf = gr32(0);
+              // EAX = leaf
+              // Fake CPUID results for leaves the 64-bit kernel checks.
+              // We only handle this in real mode (kernel setup code).
+              // In protected/long mode, bail to IEM for accurate results.
+              if (!realMode) {
+                lastBailOp = 3840 | b2;
+                iter = maxInsn;
+                break;
+              }
+              if (leaf === 0) {
+                // Vendor: "GenuineIntel", max leaf = 0x16
+                sr32(0, 22);
+                // EAX = max standard leaf
+                sr32(3, 1970169159);
+                // EBX = "Genu"
+                sr32(1, 1818588270);
+                // ECX = "ntel"
+                sr32(2, 1231384169);
+              } else if (leaf === 1) {
+                // Family 6 Model 94 Stepping 3 (Skylake-like)
+                sr32(0, 329443);
+                // EAX
+                sr32(3, 67584);
+                // EBX
+                sr32(1, 81273353);
+                // ECX: SSE3, SSSE3, SSE4.1, SSE4.2, POPCNT, etc.
+                sr32(2, 395049983);
+              } else if (leaf === 2147483648) {
+                // Max extended leaf
+                sr32(0, 2147483656);
+                // EAX = max ext leaf
+                sr32(3, 0);
+                sr32(1, 0);
+                sr32(2, 0);
+              } else if (leaf === 2147483649) {
+                // Extended features — THIS IS THE KEY LEAF
+                sr32(0, 0);
+                // EAX
+                sr32(3, 0);
+                // EBX
+                sr32(1, 1);
+                // ECX: LAHF/SAHF
+                sr32(2, 739248128);
+              } else {
+                // Unknown leaf — return zeros
+                sr32(0, 0);
+                sr32(3, 0);
+                sr32(1, 0);
+                sr32(2, 0);
+              }
+              break;
+            }
+
            default:
             // Unsupported 0x0F opcode — fallback
             lastBailOp = 3840 | b2;

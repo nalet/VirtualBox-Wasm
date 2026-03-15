@@ -86,19 +86,11 @@ static DECLCALLBACK(int) vboxWasmCfgmConstructor(PUVM pUVM, PVM pVM, PCVMMR3VTAB
      * VM properties.
      */
     INSERT_STRING(pRoot, "Name", "VBoxWasm");
-    INSERT_INTEGER(pRoot, "RamSize",      (uint64_t)32 * _1M);
+    INSERT_INTEGER(pRoot, "RamSize",      (uint64_t)128 * _1M);
     INSERT_INTEGER(pRoot, "RamHoleSize",  (uint64_t)512 * _1M);
     INSERT_INTEGER(pRoot, "EnablePAE",    1);
     INSERT_INTEGER(pRoot, "TimerMillies", 10);
     INSERT_INTEGER(pRoot, "NumCPUs",      1);
-
-    /*
-     * CPUM — enable 64-bit guest support (long mode, NX, PAE, SYSCALL).
-     * Required so CPUID reports LM bit and 64-bit kernels agree to boot.
-     */
-    PCFGMNODE pCpum;
-    INSERT_NODE(pRoot, "CPUM", &pCpum);
-    INSERT_INTEGER(pCpum, "Enable64bit", 1);
 
     /*
      * HM — force IEM-only execution (no hardware virtualization).

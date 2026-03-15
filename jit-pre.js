@@ -3589,9 +3589,37 @@ function execBlock(cpuP, ramB, maxInsn) {
               wr32(R_CR2, 0xC0DEBA5E);
               _directBootDone = true;
 
+              // Verify writes took effect by reading back
+              const verCS = rr16(S_CS + SEG_SEL);
+              const verCSBase = rr64(S_CS + SEG_BASE);
+              const verIP = rr64(R_IP);
+              const verSP = rr64(R_SP);
+              const verFL = rr32(R_FLAGS);
+              const verCR2 = rr32(R_CR2);
               console.log('[DIRECT-BOOT] Kernel loaded! CS=' +
                 ENTRY_SEG.toString(16) + ':0000 initrd@0x' +
                 INITRD_GPA.toString(16) + ' (' + (initrdLen>>10) + 'KB)');
+              console.log('[DIRECT-BOOT] VERIFY: CS.sel=0x' + verCS.toString(16) +
+                ' CS.base=0x' + verCSBase.toString(16) +
+                ' RIP=0x' + verIP.toString(16) +
+                ' RSP=0x' + verSP.toString(16) +
+                ' FL=0x' + verFL.toString(16) +
+                ' CR2=0x' + verCR2.toString(16) +
+                ' cpuPtr=0x' + cpuPtr.toString(16) +
+                ' S_CS=0x' + S_CS.toString(16));
+
+              // Write verification to guest RAM at 0x7030 for main thread monitoring
+              // (console.log from worker threads not captured by Playwright)
+              {
+                const rb = ramBase;
+                dv.setUint16(rb + 0x7030, verCS, true);          // verified CS
+                dv.setUint32(rb + 0x7032, verCSBase, true);      // verified CS base
+                dv.setUint32(rb + 0x7036, verIP & 0xFFFFFFFF, true); // verified RIP
+                dv.setUint32(rb + 0x703A, verSP & 0xFFFFFFFF, true); // verified RSP
+                dv.setUint32(rb + 0x703E, verFL, true);          // verified FLAGS
+                dv.setUint32(rb + 0x7042, verCR2, true);         // verified CR2
+                mem8[rb + 0x7046] = 0xDB; // marker: direct boot verification written
+              }
 
               // Return immediately — IEM picks up from new CS:IP
               return executed;

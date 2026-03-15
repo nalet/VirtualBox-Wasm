@@ -614,7 +614,7 @@
         // Cache key includes a build version so new deploys invalidate old cache.
         // The JS file changes on each build, so use a hash of the JS URL's
         // last-modified or just use the script element's src with a version.
-        const wasmCacheKey = wasmUrl + '?v=512m-e820';
+        const wasmCacheKey = wasmUrl + '?v=512m-e820-diag';
         appendLine('Loading WebAssembly module...', 'info');
         const t0 = performance.now();
 
@@ -1001,6 +1001,17 @@
             const ip = dv.getUint32(ram+0x7026, true);
             const cr0 = dv.getUint32(ram+0x702A, true);
             hbInfo = ` jit=${calls} CS=${cs.toString(16)} IP=${ip.toString(16)} CR0=${cr0.toString(16)}`;
+            // Check direct-boot verification at 0x7030
+            if (mem[ram+0x7046] === 0xDB) {
+              const vCS = dv.getUint16(ram+0x7030, true);
+              const vBase = dv.getUint32(ram+0x7032, true);
+              const vIP = dv.getUint32(ram+0x7036, true);
+              const vSP = dv.getUint32(ram+0x703A, true);
+              const vFL = dv.getUint32(ram+0x703E, true);
+              const vCR2 = dv.getUint32(ram+0x7042, true);
+              hbInfo += ` DBOOT-VERIFY:CS=0x${vCS.toString(16)} base=0x${vBase.toString(16)} IP=0x${vIP.toString(16)} SP=0x${vSP.toString(16)} FL=0x${vFL.toString(16)} CR2=0x${vCR2.toString(16)}`;
+              mem[ram+0x7046] = 0; // only log once
+            }
           } catch(e) {}
           console.log(`[POST] ${secs}s: refresh=${refreshes} updateRect=${updates} ${w}x${h}${hbInfo}`);
           if (updates > lastUpdateRectCount) {

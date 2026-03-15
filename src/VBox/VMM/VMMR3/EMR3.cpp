@@ -1981,13 +1981,13 @@ int emR3ForcedActions(PVM pVM, PVMCPU pVCpu, int rc)
                              && CPUMIsGuestPhysIntrEnabled(pVCpu)
 #ifdef __EMSCRIPTEN__
                              /* Suppress external interrupt injection during kernel
-                                direct-boot phase (CR2 magic).  The PIT timer fires
-                                continuously and injecting IRQs here creates an infinite
-                                timer-ISR cascade that prevents the kernel setup code
-                                from ever completing.  Once the kernel enables paging,
-                                CR2 gets overwritten by a page-fault address and normal
-                                interrupt delivery resumes. */
-                             && pVCpu->cpum.GstCtx.cr2 != UINT64_C(0xC0DEBA5E)
+                                direct-boot phase (CR2 magic) but ONLY when executing
+                                kernel setup code (CS=1020/1000).  Allow IRQs during
+                                BIOS INT handlers (CS=f000) so HLT wake-up and BIOS
+                                services work normally. */
+                             && !(   pVCpu->cpum.GstCtx.cr2 == UINT64_C(0xC0DEBA5E)
+                                  && (   pVCpu->cpum.GstCtx.cs.Sel == 0x1020
+                                      || pVCpu->cpum.GstCtx.cs.Sel == 0x1000))
 #endif
                             )
                     {

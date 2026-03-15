@@ -1411,14 +1411,27 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                     {
                         s_cBootInsns++;
                         uint16_t uCS = pVCpu->cpum.GstCtx.cs.Sel;
+                        /* Detailed trace: first 500 IEM instructions after boot */
+                        if (s_cBootInsns <= 500)
+                        {
+                            uint64_t rip = pVCpu->cpum.GstCtx.rip;
+                            uint32_t efl = pVCpu->cpum.GstCtx.eflags.u;
+                            uint16_t sp  = (uint16_t)pVCpu->cpum.GstCtx.rsp;
+                            uint16_t ax  = (uint16_t)pVCpu->cpum.GstCtx.rax;
+                            RTPrintf("[DBOOT-INSN] #%llu CS=%04x IP=%04llx FL=%04x SP=%04x AX=%04x\n",
+                                     (unsigned long long)s_cBootInsns, uCS,
+                                     (unsigned long long)rip, efl, sp, ax);
+                            if (s_cBootInsns % 50 == 0) RTStrmFlush(g_pStdOut);
+                        }
                         /* Log CS changes (segment transitions, PM entry, INT calls) */
                         if (uCS != s_uLastCS)
                         {
-                            RTPrintf("[DBOOT] CS change: %04x→%04x at insn #%llu IP=%04llx CR0=%08llx FL=%08llx\n",
+                            RTPrintf("[DBOOT] CS change: %04x→%04x at insn #%llu IP=%04llx CR0=%08llx FL=%08llx SP=%04x\n",
                                      s_uLastCS, uCS, (unsigned long long)s_cBootInsns,
                                      (unsigned long long)pVCpu->cpum.GstCtx.rip,
                                      (unsigned long long)pVCpu->cpum.GstCtx.cr0,
-                                     (unsigned long long)pVCpu->cpum.GstCtx.rflags.u);
+                                     (unsigned long long)pVCpu->cpum.GstCtx.rflags.u,
+                                     (uint16_t)pVCpu->cpum.GstCtx.rsp);
                             RTStrmFlush(g_pStdOut);
                             s_uLastCS = uCS;
                             /* Protected mode entry (CR0.PE set) — kernel is past setup */
@@ -1431,14 +1444,16 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                                 s_fBootActive = false; /* stop monitoring */
                             }
                         }
-                        /* Periodic progress every 100K instructions */
-                        if (s_cBootInsns - s_cLastReport >= 100000)
+                        /* Periodic progress every 10K instructions (was 100K) */
+                        if (s_cBootInsns - s_cLastReport >= 10000)
                         {
                             s_cLastReport = s_cBootInsns;
-                            RTPrintf("[DBOOT] Progress: %lluK insns CS=%04x IP=%04llx CR0=%08llx\n",
+                            RTPrintf("[DBOOT] Progress: %lluK insns CS=%04x IP=%04llx CR0=%08llx FL=%08x SP=%04x\n",
                                      (unsigned long long)(s_cBootInsns / 1000), uCS,
                                      (unsigned long long)pVCpu->cpum.GstCtx.rip,
-                                     (unsigned long long)pVCpu->cpum.GstCtx.cr0);
+                                     (unsigned long long)pVCpu->cpum.GstCtx.cr0,
+                                     pVCpu->cpum.GstCtx.eflags.u,
+                                     (uint16_t)pVCpu->cpum.GstCtx.rsp);
                             RTStrmFlush(g_pStdOut);
                         }
                     }

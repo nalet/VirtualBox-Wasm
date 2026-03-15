@@ -1979,16 +1979,10 @@ int emR3ForcedActions(PVM pVM, PVMCPU pVCpu, int rc)
                     }
                     else if (   VMCPU_FF_IS_ANY_SET(pVCpu, VMCPU_FF_INTERRUPT_APIC | VMCPU_FF_INTERRUPT_PIC)
                              && CPUMIsGuestPhysIntrEnabled(pVCpu)
-#ifdef __EMSCRIPTEN__
-                             /* Suppress external interrupt injection during kernel
-                                direct-boot phase (CR2 magic) but ONLY when executing
-                                kernel setup code (CS=1020/1000).  Allow IRQs during
-                                BIOS INT handlers (CS=f000) so HLT wake-up and BIOS
-                                services work normally. */
-                             && !(   pVCpu->cpum.GstCtx.cr2 == UINT64_C(0xC0DEBA5E)
-                                  && (   pVCpu->cpum.GstCtx.cs.Sel == 0x1020
-                                      || pVCpu->cpum.GstCtx.cs.Sel == 0x1000))
-#endif
+                             /* 32-bit boot protocol: IF=0 on entry, so
+                                CPUMIsGuestPhysIntrEnabled blocks injection naturally.
+                                When the kernel enables IF, it has its own IDT and
+                                timer handler — no BIOS cascade possible. */
                             )
                     {
                         Assert(pVCpu->em.s.enmState != EMSTATE_WAIT_SIPI);

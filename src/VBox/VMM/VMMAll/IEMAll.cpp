@@ -1308,9 +1308,9 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                        keeps flat PM responsive for I/O bails (IN/OUT, INT). */
                     s_cIemAfterJitBail = 4;
                     /* Direct boot: JIT copied kernel/initrd/boot_params to guest RAM
-                       and set CR2 = 0xC0DEBA5E.  We set VCPU registers here in C++
-                       because JS DataView writes to CPUMSELREG struct fields are not
-                       visible from C++ (Emscripten MEMORY64 SharedArrayBuffer issue). */
+                       and set CR2 = 0xC0DEBA5E.  We use the 32-bit boot protocol:
+                       enter the kernel at code32_start in protected mode with flat
+                       segments, bypassing all real-mode BIOS calls. */
                     {
                         static bool s_fDirectBootDetected = false;
                         if (!s_fDirectBootDetected && pVCpu->cpum.GstCtx.cr2 == UINT64_C(0xC0DEBA5E))
@@ -1320,57 +1320,98 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                             /* Read metadata from guest RAM at 0x7000 */
                             uint8_t abMeta[8];
                             PGMPhysRead(pVM, (RTGCPHYS)0x7000, abMeta, sizeof(abMeta), PGMACCESSORIGIN_IEM);
-                            uint16_t uEntrySeg = *(uint16_t *)&abMeta[0];
-                            uint16_t uSetupSeg = *(uint16_t *)&abMeta[2];
-                            uint32_t uMagic    = *(uint32_t *)&abMeta[4];
+                            uint32_t uMagic = *(uint32_t *)&abMeta[4];
 
-                            RTPrintf("[DIRECT-BOOT-CPP] CR2 magic detected! entrySeg=0x%04x setupSeg=0x%04x magic=0x%08x\n",
-                                     uEntrySeg, uSetupSeg, uMagic);
+                            RTPrintf("[DIRECT-BOOT-CPP] CR2 magic detected! magic=0x%08x — using 32-bit boot protocol\n", uMagic);
 
-                            if (uMagic == 0x44424F4F && uEntrySeg != 0)
+                            if (uMagic == 0x44424F4F)
                             {
                                 PCPUMCTX pCtx = &pVCpu->cpum.GstCtx;
 
-                                /* CS = entry segment (setup + 0x20, past boot sector) */
-                                pCtx->cs.Sel      = uEntrySeg;
-                                pCtx->cs.ValidSel = uEntrySeg;
+                                /* ── 32-bit boot protocol ──
+                                 * Enter kernel at code32_start (protected-mode entry) with
+                                 * flat segments, bypassing all real-mode setup code and BIOS
+                                 * INT calls that cause the timer interrupt cascade. */
+
+                                /* Read code32_start from boot header at guest 0x10000+0x214 */
+                                uint32_t uCode32Start = 0;
+                                PGMPhysRead(pVM, (RTGCPHYS)0x10214, &uCode32Start, sizeof(uCode32Start), PGMACCESSORIGIN_IEM);
+                                if (uCode32Start == 0)
+                                    uCode32Start = 0x100000; /* fallback: default PM entry */
+                                RTPrintf("[DIRECT-BOOT-CPP] code32_start = 0x%08x\n", uCode32Start);
+
+                                /* Write GDT at guest 0x7100:
+                                 *   0x00: NULL descriptor  (selector 0x00)
+                                 *   0x08: unused           (selector 0x08)
+                                 *   0x10: flat code 32-bit (selector 0x10)
+                                 *   0x18: flat data 32-bit (selector 0x18) */
+                                uint8_t abGdt[32];
+                                RT_ZERO(abGdt);
+                                /* Flat code (0x10): base=0 limit=4GB code/readable/accessed 32-bit */
+                                abGdt[16] = 0xFF; abGdt[17] = 0xFF; /* limit 15:0 */
+                                abGdt[20] = 0x00;                    /* base 23:16 */
+                                abGdt[21] = 0x9B;                    /* P=1 DPL=0 S=1 type=1011 */
+                                abGdt[22] = 0xCF;                    /* G=1 D=1 limit 19:16=F */
+                                abGdt[23] = 0x00;                    /* base 31:24 */
+                                /* Flat data (0x18): base=0 limit=4GB data/writable/accessed 32-bit */
+                                abGdt[24] = 0xFF; abGdt[25] = 0xFF;
+                                abGdt[29] = 0x93;                    /* P=1 DPL=0 S=1 type=0011 */
+                                abGdt[30] = 0xCF;
+                                PGMPhysWrite(pVM, (RTGCPHYS)0x7100, abGdt, sizeof(abGdt), PGMACCESSORIGIN_IEM);
+
+                                /* GDTR: base=0x7100, limit=31 (4 entries × 8 - 1) */
+                                pCtx->gdtr.pGdt  = 0x7100;
+                                pCtx->gdtr.cbGdt = sizeof(abGdt) - 1;
+
+                                /* Enable protected mode, paging OFF */
+                                pCtx->cr0 = (pCtx->cr0 | X86_CR0_PE) & ~X86_CR0_PG;
+
+                                /* CS = selector 0x10 (flat code, 32-bit) */
+                                pCtx->cs.Sel      = 0x10;
+                                pCtx->cs.ValidSel = 0x10;
                                 pCtx->cs.fFlags   = CPUMSELREG_FLAGS_VALID;
-                                pCtx->cs.u64Base  = (uint64_t)uEntrySeg << 4;
-                                pCtx->cs.u32Limit = 0xFFFF;
-                                pCtx->cs.Attr.u   = 0x009B; /* code, readable, accessed */
+                                pCtx->cs.u64Base  = 0;
+                                pCtx->cs.u32Limit = UINT32_MAX;
+                                pCtx->cs.Attr.u   = 0xC09B; /* G=1 D=1 P=1 DPL=0 S=1 code/r/a */
 
-                                /* RIP = 0 */
-                                pCtx->rip = 0;
-
-                                /* DS = ES = FS = GS = SS = setup segment */
+                                /* DS=ES=SS=FS=GS = selector 0x18 (flat data, 32-bit) */
                                 PCPUMSELREG apDataSegs[] = { &pCtx->ds, &pCtx->es, &pCtx->fs, &pCtx->gs, &pCtx->ss };
                                 for (unsigned i = 0; i < RT_ELEMENTS(apDataSegs); i++)
                                 {
-                                    apDataSegs[i]->Sel      = uSetupSeg;
-                                    apDataSegs[i]->ValidSel = uSetupSeg;
+                                    apDataSegs[i]->Sel      = 0x18;
+                                    apDataSegs[i]->ValidSel = 0x18;
                                     apDataSegs[i]->fFlags   = CPUMSELREG_FLAGS_VALID;
-                                    apDataSegs[i]->u64Base  = (uint64_t)uSetupSeg << 4;
-                                    apDataSegs[i]->u32Limit = 0xFFFF;
-                                    apDataSegs[i]->Attr.u   = 0x0093; /* data, writable, accessed */
+                                    apDataSegs[i]->u64Base  = 0;
+                                    apDataSegs[i]->u32Limit = UINT32_MAX;
+                                    apDataSegs[i]->Attr.u   = 0xC093; /* G=1 D=1 P=1 DPL=0 S=1 data/w/a */
                                 }
 
-                                /* RSP, RFLAGS, GP regs */
-                                pCtx->rsp    = 0xFFFC;
-                                pCtx->rflags.u = 0x0002; /* reserved bit 1 only, IF=0 */
-                                pCtx->rax = 0; pCtx->rbx = 0; pCtx->rcx = 0; pCtx->rdx = 0;
-                                pCtx->rsi = 0; pCtx->rdi = 0; pCtx->rbp = 0;
+                                /* EIP = code32_start (PM kernel entry point) */
+                                pCtx->rip = uCode32Start;
 
-                                /* Also read the first 16 bytes of code at the target */
+                                /* ESI = boot_params address (Linux 32-bit boot protocol) */
+                                pCtx->rsi = 0x10000;
+
+                                /* GP regs: zero everything else */
+                                pCtx->rax = 0; pCtx->rbx = 0; pCtx->rcx = 0; pCtx->rdx = 0;
+                                pCtx->rdi = 0; pCtx->rbp = 0;
+
+                                /* ESP: top of conventional memory */
+                                pCtx->rsp = 0x9FFC0;
+
+                                /* EFLAGS: reserved bit 1 only, IF=0 (interrupts disabled) */
+                                pCtx->rflags.u = 0x00000002;
+
+                                /* Log entry state and first 16 bytes of code */
                                 uint8_t abCode[16];
-                                RTGCPHYS GCPhysCode = pCtx->cs.u64Base + pCtx->rip;
-                                PGMPhysRead(pVM, GCPhysCode, abCode, sizeof(abCode), PGMACCESSORIGIN_IEM);
-                                RTPrintf("[DIRECT-BOOT-CPP] VCPU state set: CS=%04x:%016llx RIP=%016llx RSP=%04llx FL=%08llx\n",
-                                         pCtx->cs.Sel, (unsigned long long)pCtx->cs.u64Base,
-                                         (unsigned long long)pCtx->rip,
-                                         (unsigned long long)pCtx->rsp,
-                                         (unsigned long long)pCtx->rflags.u);
-                                RTPrintf("[DIRECT-BOOT-CPP] code@%08llx: %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x\n",
-                                         (unsigned long long)GCPhysCode,
+                                PGMPhysRead(pVM, (RTGCPHYS)uCode32Start, abCode, sizeof(abCode), PGMACCESSORIGIN_IEM);
+                                RTPrintf("[DIRECT-BOOT-CPP] 32-bit PM: CS=%04x EIP=%08x ESP=%08x ESI=%08x CR0=%08x GDTR=%08x:%04x\n",
+                                         pCtx->cs.Sel, (unsigned)pCtx->rip,
+                                         (unsigned)pCtx->rsp, (unsigned)pCtx->rsi,
+                                         (unsigned)pCtx->cr0,
+                                         (unsigned)pCtx->gdtr.pGdt, (unsigned)pCtx->gdtr.cbGdt);
+                                RTPrintf("[DIRECT-BOOT-CPP] code@%08x: %02x %02x %02x %02x %02x %02x %02x %02x  %02x %02x %02x %02x %02x %02x %02x %02x\n",
+                                         uCode32Start,
                                          abCode[0], abCode[1], abCode[2], abCode[3],
                                          abCode[4], abCode[5], abCode[6], abCode[7],
                                          abCode[8], abCode[9], abCode[10], abCode[11],
@@ -1379,8 +1420,7 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                             }
                             else
                             {
-                                RTPrintf("[DIRECT-BOOT-CPP] ERROR: bad metadata magic=0x%08x entrySeg=0x%04x\n",
-                                         uMagic, uEntrySeg);
+                                RTPrintf("[DIRECT-BOOT-CPP] ERROR: bad metadata magic=0x%08x\n", uMagic);
                                 RTStrmFlush(g_pStdOut);
                             }
                         }
@@ -1402,7 +1442,7 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                     {
                         s_fBootActive = true;
                         s_uLastCS = pVCpu->cpum.GstCtx.cs.Sel;
-                        RTPrintf("[DBOOT] Kernel boot active, CS=%04x IP=%04llx CR0=%08llx\n",
+                        RTPrintf("[DBOOT] Kernel boot active (32-bit PM), CS=%04x EIP=%08llx CR0=%08llx\n",
                                  s_uLastCS, (unsigned long long)pVCpu->cpum.GstCtx.rip,
                                  (unsigned long long)pVCpu->cpum.GstCtx.cr0);
                         RTStrmFlush(g_pStdOut);
@@ -1411,49 +1451,39 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                     {
                         s_cBootInsns++;
                         uint16_t uCS = pVCpu->cpum.GstCtx.cs.Sel;
-                        /* Detailed trace: first 500 IEM instructions after boot */
-                        if (s_cBootInsns <= 500)
+                        /* Detailed trace: first 200 IEM instructions after boot */
+                        if (s_cBootInsns <= 200)
                         {
-                            uint64_t rip = pVCpu->cpum.GstCtx.rip;
-                            uint32_t efl = pVCpu->cpum.GstCtx.eflags.u;
-                            uint16_t sp  = (uint16_t)pVCpu->cpum.GstCtx.rsp;
-                            uint16_t ax  = (uint16_t)pVCpu->cpum.GstCtx.rax;
-                            RTPrintf("[DBOOT-INSN] #%llu CS=%04x IP=%04llx FL=%04x SP=%04x AX=%04x\n",
+                            RTPrintf("[DBOOT-INSN] #%llu CS=%04x EIP=%08llx FL=%08x ESP=%08x EAX=%08x\n",
                                      (unsigned long long)s_cBootInsns, uCS,
-                                     (unsigned long long)rip, efl, sp, ax);
+                                     (unsigned long long)pVCpu->cpum.GstCtx.rip,
+                                     pVCpu->cpum.GstCtx.eflags.u,
+                                     (unsigned)pVCpu->cpum.GstCtx.rsp,
+                                     (unsigned)pVCpu->cpum.GstCtx.rax);
                             if (s_cBootInsns % 50 == 0) RTStrmFlush(g_pStdOut);
                         }
-                        /* Log CS changes (segment transitions, PM entry, INT calls) */
+                        /* Log CS changes */
                         if (uCS != s_uLastCS)
                         {
-                            RTPrintf("[DBOOT] CS change: %04x→%04x at insn #%llu IP=%04llx CR0=%08llx FL=%08llx SP=%04x\n",
+                            RTPrintf("[DBOOT] CS change: %04x->%04x at insn #%llu EIP=%08llx CR0=%08llx FL=%08x\n",
                                      s_uLastCS, uCS, (unsigned long long)s_cBootInsns,
                                      (unsigned long long)pVCpu->cpum.GstCtx.rip,
                                      (unsigned long long)pVCpu->cpum.GstCtx.cr0,
-                                     (unsigned long long)pVCpu->cpum.GstCtx.rflags.u,
-                                     (uint16_t)pVCpu->cpum.GstCtx.rsp);
+                                     pVCpu->cpum.GstCtx.eflags.u);
                             RTStrmFlush(g_pStdOut);
                             s_uLastCS = uCS;
-                            /* Protected mode entry (CR0.PE set) — kernel is past setup */
-                            if (pVCpu->cpum.GstCtx.cr0 & 1)
-                            {
-                                RTPrintf("[DBOOT] Protected mode entered! CS=%04x IP=%04llx insns=%llu\n",
-                                         uCS, (unsigned long long)pVCpu->cpum.GstCtx.rip,
-                                         (unsigned long long)s_cBootInsns);
-                                RTStrmFlush(g_pStdOut);
-                                s_fBootActive = false; /* stop monitoring */
-                            }
                         }
-                        /* Periodic progress every 10K instructions (was 100K) */
-                        if (s_cBootInsns - s_cLastReport >= 10000)
+                        /* Periodic progress every 50K instructions */
+                        if (s_cBootInsns - s_cLastReport >= 50000)
                         {
                             s_cLastReport = s_cBootInsns;
-                            RTPrintf("[DBOOT] Progress: %lluK insns CS=%04x IP=%04llx CR0=%08llx FL=%08x SP=%04x\n",
+                            uint64_t cr3 = pVCpu->cpum.GstCtx.cr3;
+                            RTPrintf("[DBOOT] Progress: %lluK insns CS=%04x EIP=%08llx CR0=%08llx CR3=%08llx FL=%08x\n",
                                      (unsigned long long)(s_cBootInsns / 1000), uCS,
                                      (unsigned long long)pVCpu->cpum.GstCtx.rip,
                                      (unsigned long long)pVCpu->cpum.GstCtx.cr0,
-                                     pVCpu->cpum.GstCtx.eflags.u,
-                                     (uint16_t)pVCpu->cpum.GstCtx.rsp);
+                                     (unsigned long long)cr3,
+                                     pVCpu->cpum.GstCtx.eflags.u);
                             RTStrmFlush(g_pStdOut);
                         }
                     }

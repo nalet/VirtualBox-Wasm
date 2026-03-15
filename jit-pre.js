@@ -3586,6 +3586,12 @@ function execBlock(cpuP, ramB, maxInsn) {
               e820idx++;
               mem8[bp + 0x1E8] = e820idx;
 
+              // ── ext_mem_k (offset 0x02) — extended memory above 1MB in KB ──
+              const extMemK = ((TOTAL_RAM - 0x100000) >>> 10);
+              dv.setUint16(bp + 0x02, Math.min(extMemK, 0xFFFF), true);
+              // alt_mem_k (offset 0x1E0) — same but 32-bit
+              dv.setUint32(bp + 0x1E0, extMemK, true);
+
               // ── screen_info (offset 0x00) — basic VGA text mode ──
               mem8[bp + 0x06] = 3;     // orig_video_mode = 3 (80x25 text)
               mem8[bp + 0x07] = 80;    // orig_video_cols

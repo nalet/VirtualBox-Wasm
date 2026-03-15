@@ -1305,8 +1305,12 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                             uint64_t rip = pVCpu->cpum.GstCtx.rip;
                             uint16_t vsCS = pVCpu->cpum.GstCtx.cs.ValidSel;
                             uint16_t fCSfl = pVCpu->cpum.GstCtx.cs.fFlags;
-                            RTPrintf("[JIT-BAIL] #%u CS=%04x RIP=%08llx ValidSel=%04x fFlags=%04x\n",
-                                     s_cJitBailLog, cs, (unsigned long long)rip, vsCS, fCSfl);
+                            /* Verify: compare address of GstCtx with what JIT received */
+                            uintptr_t pGstCtx = (uintptr_t)&pVCpu->cpum.GstCtx;
+                            size_t csOff = RT_UOFFSETOF(CPUMCTX, cs);
+                            RTPrintf("[JIT-BAIL] #%u CS=%04x RIP=%08llx ValidSel=%04x fFlags=%04x pGstCtx=%p cs_off=%zu\n",
+                                     s_cJitBailLog, cs, (unsigned long long)rip, vsCS, fCSfl,
+                                     (void*)pGstCtx, csOff);
                             RTStrmFlush(g_pStdOut);
                         }
                     }

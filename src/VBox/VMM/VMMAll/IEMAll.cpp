@@ -1298,19 +1298,22 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                     /* Re-init decoder: the JIT may have modified CS:IP (e.g. direct boot),
                        so we must re-read the VCPU state before IEM decodes. */
                     {
-                        static uint32_t s_cJitBailLog = 0;
-                        if (++s_cJitBailLog <= 5 || (s_cJitBailLog % 10000 == 0))
+                        /* Check if JIT just did a direct boot (CR2 == 0xC0DEBA5E magic) */
+                        static bool s_fDirectBootDetected = false;
+                        if (!s_fDirectBootDetected && pVCpu->cpum.GstCtx.cr2 == UINT64_C(0xC0DEBA5E))
                         {
-                            uint16_t cs = pVCpu->cpum.GstCtx.cs.Sel;
-                            uint64_t rip = pVCpu->cpum.GstCtx.rip;
-                            uint16_t vsCS = pVCpu->cpum.GstCtx.cs.ValidSel;
-                            uint16_t fCSfl = pVCpu->cpum.GstCtx.cs.fFlags;
-                            /* Verify: compare address of GstCtx with what JIT received */
-                            uintptr_t pGstCtx = (uintptr_t)&pVCpu->cpum.GstCtx;
-                            size_t csOff = RT_UOFFSETOF(CPUMCTX, cs);
-                            RTPrintf("[JIT-BAIL] #%u CS=%04x RIP=%08llx ValidSel=%04x fFlags=%04x pGstCtx=%p cs_off=%zu\n",
-                                     s_cJitBailLog, cs, (unsigned long long)rip, vsCS, fCSfl,
-                                     (void*)pGstCtx, csOff);
+                            s_fDirectBootDetected = true;
+                            /* Read raw bytes at the CS offset to see what's really there */
+                            uint8_t *pRaw = (uint8_t *)&pVCpu->cpum.GstCtx;
+                            uint16_t rawCS = *(uint16_t *)(pRaw + 0x98);
+                            uint16_t rawVS = *(uint16_t *)(pRaw + 0x9C); /* ValidSel at +4 */
+                            uint64_t rawBase = *(uint64_t *)(pRaw + 0xA0); /* Base at +8 */
+                            uint64_t rawRIP = *(uint64_t *)(pRaw + 0x140);
+                            RTPrintf("[DIRECT-BOOT-CPP] Detected! structCS=%04x rawCS@0x98=%04x rawVS@0x9C=%04x rawBase@0xA0=%016llx rawRIP@0x140=%016llx cr2=%016llx\n",
+                                     pVCpu->cpum.GstCtx.cs.Sel, rawCS, rawVS,
+                                     (unsigned long long)rawBase,
+                                     (unsigned long long)rawRIP,
+                                     (unsigned long long)pVCpu->cpum.GstCtx.cr2);
                             RTStrmFlush(g_pStdOut);
                         }
                     }

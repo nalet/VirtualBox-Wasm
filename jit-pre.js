@@ -3555,78 +3555,33 @@ function execBlock(cpuP, ramB, maxInsn) {
               console.log('[DIRECT-BOOT] e820: ' + e820idx + ' entries, RAM=' +
                 (TOTAL_RAM >> 20) + 'MB');
 
-              // ── CPU state for kernel entry ──
+              // Signal C++ to set VCPU registers for kernel entry.
+              // JS DataView writes to CPUMSELREG fields are not visible to C++
+              // (Emscripten MEMORY64 SharedArrayBuffer issue), so we only set
+              // CR2 magic here and let C++ do the actual register setup.
+              // The boot_params at guest 0x10000 have setup_sects so C++ can
+              // compute ENTRY_SEG. We also write the setup_sects value to
+              // guest RAM at 0x7000 as metadata for C++.
               const SETUP_SEG = SETUP_GPA >>> 4; // 0x1000
               const ENTRY_SEG = SETUP_SEG + 0x20; // 0x1020
 
-              // CS = entry segment (past 512-byte boot sector)
-              wr16(S_CS + SEG_SEL, ENTRY_SEG);
-              wr16(S_CS + SEG_VALIDSEL, ENTRY_SEG);
-              wr16(S_CS + SEG_FLAGS, 0x0001); // CPUMSELREG_FLAGS_VALID
-              wr64(S_CS + SEG_BASE, ENTRY_SEG << 4);
-              wr32(S_CS + SEG_LIMIT, 0xFFFF);
-              wr32(S_CS + SEG_ATTR, 0x009B);
+              // Write direct-boot metadata at guest 0x7000 for C++ to read
+              dv.setUint16(ramBase + 0x7000, ENTRY_SEG, true);   // CS selector
+              dv.setUint16(ramBase + 0x7002, SETUP_SEG, true);   // DS/ES/SS selector
+              dv.setUint32(ramBase + 0x7004, 0x44424F4F, true);  // "DBOOT" magic (little-endian "BOOT" + 'D')
 
-              // IP = 0 (clear full 64-bit RIP)
-              wr64(R_IP, 0);
-
-              // DS = ES = FS = GS = SS = setup segment
-              const dataSegs = [S_DS, S_ES, S_FS, S_GS, S_SS];
-              for (let si = 0; si < dataSegs.length; si++) {
-                wr16(dataSegs[si] + SEG_SEL, SETUP_SEG);
-                wr16(dataSegs[si] + SEG_VALIDSEL, SETUP_SEG);
-                wr16(dataSegs[si] + SEG_FLAGS, 0x0001); // CPUMSELREG_FLAGS_VALID
-                wr64(dataSegs[si] + SEG_BASE, SETUP_SEG << 4);
-                wr32(dataSegs[si] + SEG_LIMIT, 0xFFFF);
-                wr32(dataSegs[si] + SEG_ATTR, 0x0093);
-              }
-
-              // SP (clear full 64-bit RSP)
-              wr64(R_SP, 0xFFFC);
-              // RFLAGS: reserved bit 1 only, IF cleared
-              wr32(R_FLAGS, 0x0002);
-              // Clear GP registers
-              wr32(R_AX, 0); wr32(R_BX, 0); wr32(R_CX, 0); wr32(R_DX, 0);
-              wr32(R_SI, 0); wr32(R_DI, 0); wr32(R_BP, 0);
-
-              // CR2 magic for CPUMGetGuestCpuId LM injection
+              // CR2 magic — this DataView write IS visible to C++
               wr32(R_CR2, 0xC0DEBA5E);
               _directBootDone = true;
 
-              // Verify writes took effect by reading back
-              const verCS = rr16(S_CS + SEG_SEL);
-              const verCSBase = rr64(S_CS + SEG_BASE);
-              const verIP = rr64(R_IP);
-              const verSP = rr64(R_SP);
-              const verFL = rr32(R_FLAGS);
-              const verCR2 = rr32(R_CR2);
-              console.log('[DIRECT-BOOT] Kernel loaded! CS=' +
-                ENTRY_SEG.toString(16) + ':0000 initrd@0x' +
-                INITRD_GPA.toString(16) + ' (' + (initrdLen>>10) + 'KB)');
-              console.log('[DIRECT-BOOT] VERIFY: CS.sel=0x' + verCS.toString(16) +
-                ' CS.base=0x' + verCSBase.toString(16) +
-                ' RIP=0x' + verIP.toString(16) +
-                ' RSP=0x' + verSP.toString(16) +
-                ' FL=0x' + verFL.toString(16) +
-                ' CR2=0x' + verCR2.toString(16) +
-                ' cpuPtr=0x' + cpuPtr.toString(16) +
-                ' S_CS=0x' + S_CS.toString(16));
+              console.log('[DIRECT-BOOT] Kernel loaded! entrySeg=0x' +
+                ENTRY_SEG.toString(16) + ' setupSeg=0x' +
+                SETUP_SEG.toString(16) + ' initrd@0x' +
+                INITRD_GPA.toString(16) + ' (' + (initrdLen>>10) +
+                'KB) — C++ will set VCPU regs');
 
-              // Write verification to guest RAM at 0x7030 for main thread monitoring
-              // (console.log from worker threads not captured by Playwright)
-              {
-                const rb = ramBase;
-                dv.setUint16(rb + 0x7030, verCS, true);          // verified CS
-                dv.setUint32(rb + 0x7032, verCSBase, true);      // verified CS base
-                dv.setUint32(rb + 0x7036, verIP & 0xFFFFFFFF, true); // verified RIP
-                dv.setUint32(rb + 0x703A, verSP & 0xFFFFFFFF, true); // verified RSP
-                dv.setUint32(rb + 0x703E, verFL, true);          // verified FLAGS
-                dv.setUint32(rb + 0x7042, verCR2, true);         // verified CR2
-                mem8[rb + 0x7046] = 0xDB; // marker: direct boot verification written
-              }
-
-              // Return immediately — IEM picks up from new CS:IP
-              return executed;
+              // Return 0 (bail to IEM) so C++ can intercept via CR2 magic
+              return 0;
             } else {
               console.error('[DIRECT-BOOT] Bad header or no high RAM!');
             }

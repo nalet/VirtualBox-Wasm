@@ -1295,26 +1295,72 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                        (ISOLINUX trampoline) safely bails on re-entry.  A short cooldown
                        keeps flat PM responsive for I/O bails (IN/OUT, INT). */
                     s_cIemAfterJitBail = 4;
-                    /* Re-init decoder: the JIT may have modified CS:IP (e.g. direct boot),
-                       so we must re-read the VCPU state before IEM decodes. */
+                    /* Direct boot: JIT copied kernel/initrd/boot_params to guest RAM
+                       and set CR2 = 0xC0DEBA5E.  We set VCPU registers here in C++
+                       because JS DataView writes to CPUMSELREG struct fields are not
+                       visible from C++ (Emscripten MEMORY64 SharedArrayBuffer issue). */
                     {
-                        /* Check if JIT just did a direct boot (CR2 == 0xC0DEBA5E magic) */
                         static bool s_fDirectBootDetected = false;
                         if (!s_fDirectBootDetected && pVCpu->cpum.GstCtx.cr2 == UINT64_C(0xC0DEBA5E))
                         {
                             s_fDirectBootDetected = true;
-                            /* Read raw bytes at the CS offset to see what's really there */
-                            uint8_t *pRaw = (uint8_t *)&pVCpu->cpum.GstCtx;
-                            uint16_t rawCS = *(uint16_t *)(pRaw + 0x98);
-                            uint16_t rawVS = *(uint16_t *)(pRaw + 0x9C); /* ValidSel at +4 */
-                            uint64_t rawBase = *(uint64_t *)(pRaw + 0xA0); /* Base at +8 */
-                            uint64_t rawRIP = *(uint64_t *)(pRaw + 0x140);
-                            RTPrintf("[DIRECT-BOOT-CPP] Detected! structCS=%04x rawCS@0x98=%04x rawVS@0x9C=%04x rawBase@0xA0=%016llx rawRIP@0x140=%016llx cr2=%016llx\n",
-                                     pVCpu->cpum.GstCtx.cs.Sel, rawCS, rawVS,
-                                     (unsigned long long)rawBase,
-                                     (unsigned long long)rawRIP,
-                                     (unsigned long long)pVCpu->cpum.GstCtx.cr2);
-                            RTStrmFlush(g_pStdOut);
+
+                            /* Read metadata from guest RAM at 0x7000 */
+                            uint8_t abMeta[8];
+                            PGMPhysRead(pVM, (RTGCPHYS)0x7000, abMeta, sizeof(abMeta), PGMACCESSORIGIN_IEM);
+                            uint16_t uEntrySeg = *(uint16_t *)&abMeta[0];
+                            uint16_t uSetupSeg = *(uint16_t *)&abMeta[2];
+                            uint32_t uMagic    = *(uint32_t *)&abMeta[4];
+
+                            RTPrintf("[DIRECT-BOOT-CPP] CR2 magic detected! entrySeg=0x%04x setupSeg=0x%04x magic=0x%08x\n",
+                                     uEntrySeg, uSetupSeg, uMagic);
+
+                            if (uMagic == 0x44424F4F && uEntrySeg != 0)
+                            {
+                                PCPUMCTX pCtx = &pVCpu->cpum.GstCtx;
+
+                                /* CS = entry segment (setup + 0x20, past boot sector) */
+                                pCtx->cs.Sel      = uEntrySeg;
+                                pCtx->cs.ValidSel = uEntrySeg;
+                                pCtx->cs.fFlags   = CPUMSELREG_FLAGS_VALID;
+                                pCtx->cs.u64Base  = (uint64_t)uEntrySeg << 4;
+                                pCtx->cs.u32Limit = 0xFFFF;
+                                pCtx->cs.Attr.u   = 0x009B; /* code, readable, accessed */
+
+                                /* RIP = 0 */
+                                pCtx->rip = 0;
+
+                                /* DS = ES = FS = GS = SS = setup segment */
+                                PCPUMSELREG apDataSegs[] = { &pCtx->ds, &pCtx->es, &pCtx->fs, &pCtx->gs, &pCtx->ss };
+                                for (unsigned i = 0; i < RT_ELEMENTS(apDataSegs); i++)
+                                {
+                                    apDataSegs[i]->Sel      = uSetupSeg;
+                                    apDataSegs[i]->ValidSel = uSetupSeg;
+                                    apDataSegs[i]->fFlags   = CPUMSELREG_FLAGS_VALID;
+                                    apDataSegs[i]->u64Base  = (uint64_t)uSetupSeg << 4;
+                                    apDataSegs[i]->u32Limit = 0xFFFF;
+                                    apDataSegs[i]->Attr.u   = 0x0093; /* data, writable, accessed */
+                                }
+
+                                /* RSP, RFLAGS, GP regs */
+                                pCtx->rsp    = 0xFFFC;
+                                pCtx->rflags.u = 0x0002; /* reserved bit 1 only, IF=0 */
+                                pCtx->rax = 0; pCtx->rbx = 0; pCtx->rcx = 0; pCtx->rdx = 0;
+                                pCtx->rsi = 0; pCtx->rdi = 0; pCtx->rbp = 0;
+
+                                RTPrintf("[DIRECT-BOOT-CPP] VCPU state set: CS=%04x:%016llx RIP=%016llx RSP=%04llx FL=%08llx\n",
+                                         pCtx->cs.Sel, (unsigned long long)pCtx->cs.u64Base,
+                                         (unsigned long long)pCtx->rip,
+                                         (unsigned long long)pCtx->rsp,
+                                         (unsigned long long)pCtx->rflags.u);
+                                RTStrmFlush(g_pStdOut);
+                            }
+                            else
+                            {
+                                RTPrintf("[DIRECT-BOOT-CPP] ERROR: bad metadata magic=0x%08x entrySeg=0x%04x\n",
+                                         uMagic, uEntrySeg);
+                                RTStrmFlush(g_pStdOut);
+                            }
                         }
                     }
                     iemReInitDecoder(pVCpu);

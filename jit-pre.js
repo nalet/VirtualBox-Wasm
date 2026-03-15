@@ -3437,16 +3437,128 @@ function execBlock(cpuP, ramB, maxInsn) {
           console.log('[CODE-DUMP] around ' + codeBase.toString(16) + ': ' + codeDump);
         }
 
-        // ── Direct Kernel Boot: DISABLED ──
-        // Previously intercepted HLTs at f000:709c to bypass ISOLINUX by
-        // copying a staged kernel directly to guest RAM. Disabled because:
-        // 1) The HLT counter (hltCnt) counts ALL HLTs, not just halt_forever,
-        //    so it fires during normal BIOS POST timer waits
-        // 2) Setting CR2 magic here caused premature LM injection, making
-        //    ISOLINUX crash when it detected a 64-bit CPU
-        // Now using CS-based CPUID injection: ISOLINUX (CS < 0x1000) doesn't
-        // see LM, kernel setup code (CS >= 0x1000) does. ISOLINUX boots the
-        // kernel normally from CD-ROM.
+        // ── Direct Kernel Boot ──
+        // When the BIOS is stuck in its HLT loop (CD-ROM read never completes),
+        // bypass ISOLINUX by loading the pre-staged kernel directly into guest RAM.
+        // Trigger: 30K+ HLTs at BIOS halt_forever (f000:709c) + KRNL magic present.
+        if (hltCnt >= 30000 && hltCS === 0xF000 && ip === 0x709c &&
+            !execBlock._directBootDone) {
+          const md = ramBase + 0x500;
+          if (mem8[md+12] === 0x4B && mem8[md+13] === 0x52 &&
+              mem8[md+14] === 0x4E && mem8[md+15] === 0x4C) { // "KRNL" magic
+            execBlock._directBootDone = true;
+
+            // Read staging metadata (written by main thread)
+            const stageBase = (mem8[md] | (mem8[md+1]<<8) | (mem8[md+2]<<16) | (mem8[md+3]<<24)) >>> 0;
+            const vmlinuzLen = (mem8[md+4] | (mem8[md+5]<<8) | (mem8[md+6]<<16) | (mem8[md+7]<<24)) >>> 0;
+            const initrdLen = (mem8[md+8] | (mem8[md+9]<<8) | (mem8[md+10]<<16) | (mem8[md+11]<<24)) >>> 0;
+
+            console.log('[DIRECT-BOOT] Triggered at HLT #' + hltCnt +
+              ' stage=0x' + stageBase.toString(16) +
+              ' vmlinuz=' + vmlinuzLen + ' initrd=' + initrdLen);
+
+            // Parse bzImage header
+            const setup_sects = mem8[stageBase + 0x1F1] || 4;
+            const hdrSig = String.fromCharCode(
+              mem8[stageBase+0x202], mem8[stageBase+0x203],
+              mem8[stageBase+0x204], mem8[stageBase+0x205]);
+            const protoVer = mem8[stageBase+0x206] | (mem8[stageBase+0x207]<<8);
+
+            console.log('[DIRECT-BOOT] header=' + hdrSig + ' proto=0x' +
+              protoVer.toString(16) + ' setup_sects=' + setup_sects);
+
+            if (hdrSig === 'HdrS' && highRamPtr) {
+              const setupSize = (setup_sects + 1) * 512;
+              const pmKernelOff = setupSize;
+              const pmKernelSize = vmlinuzLen - pmKernelOff;
+
+              // Guest physical addresses
+              const SETUP_GPA = 0x10000;
+              const KERNEL_GPA = 0x100000;
+              const CMDLINE_GPA = 0x20000;
+              // Place initrd at end of RAM, page-aligned
+              const INITRD_GPA = ((0x100000 + highRamSize - initrdLen) & ~0xFFF) >>> 0;
+
+              console.log('[DIRECT-BOOT] Copying: setup=' + setupSize +
+                ' @0x' + SETUP_GPA.toString(16) +
+                ' kernel=' + pmKernelSize + ' @0x' + KERNEL_GPA.toString(16) +
+                ' initrd=' + initrdLen + ' @0x' + INITRD_GPA.toString(16));
+
+              // Copy setup code to guest 0x10000 (conventional memory)
+              mem8.set(
+                mem8.subarray(stageBase, stageBase + setupSize),
+                ramBase + SETUP_GPA);
+
+              // Copy protected-mode kernel to guest 0x100000 (high RAM)
+              mem8.set(
+                mem8.subarray(stageBase + pmKernelOff, stageBase + vmlinuzLen),
+                highRamPtr);
+
+              // Copy initrd to end of RAM
+              mem8.set(
+                mem8.subarray(stageBase + vmlinuzLen, stageBase + vmlinuzLen + initrdLen),
+                highRamPtr + (INITRD_GPA - 0x100000));
+
+              // Write kernel command line at guest 0x20000
+              const cmdline = 'console=tty0 loglevel=7 auto\0';
+              for (let ci = 0; ci < cmdline.length; ci++)
+                mem8[ramBase + CMDLINE_GPA + ci] = cmdline.charCodeAt(ci);
+
+              // Set boot params in setup header
+              const bp = ramBase + SETUP_GPA;
+              mem8[bp + 0x210] = 0xFF; // type_of_loader
+              mem8[bp + 0x211] |= 0x81; // loadflags: LOADED_HIGH + CAN_USE_HEAP
+              mem8[bp + 0x1FA] = 0xFF; mem8[bp + 0x1FB] = 0xFF; // vid_mode: normal
+              mem8[bp + 0x224] = 0x00; mem8[bp + 0x225] = 0xFE; // heap_end_ptr
+              dv.setUint32(ramBase + SETUP_GPA + 0x228, CMDLINE_GPA, true); // cmd_line_ptr
+              dv.setUint32(ramBase + SETUP_GPA + 0x218, INITRD_GPA, true); // ramdisk_image
+              dv.setUint32(ramBase + SETUP_GPA + 0x21C, initrdLen, true);  // ramdisk_size
+
+              // ── CPU state for kernel entry ──
+              const SETUP_SEG = SETUP_GPA >>> 4; // 0x1000
+              const ENTRY_SEG = SETUP_SEG + 0x20; // 0x1020
+
+              // CS = entry segment (past 512-byte boot sector)
+              wr16(S_CS + SEG_SEL, ENTRY_SEG);
+              wr64(S_CS + SEG_BASE, ENTRY_SEG << 4);
+              wr32(S_CS + SEG_LIMIT, 0xFFFF);
+              wr32(S_CS + SEG_ATTR, 0x009B);
+
+              // IP = 0
+              wr16(R_IP, 0);
+
+              // DS = ES = FS = GS = SS = setup segment
+              const dataSegs = [S_DS, S_ES, S_FS, S_GS, S_SS];
+              for (let si = 0; si < dataSegs.length; si++) {
+                wr16(dataSegs[si] + SEG_SEL, SETUP_SEG);
+                wr64(dataSegs[si] + SEG_BASE, SETUP_SEG << 4);
+                wr32(dataSegs[si] + SEG_LIMIT, 0xFFFF);
+                wr32(dataSegs[si] + SEG_ATTR, 0x0093);
+              }
+
+              // SP
+              wr32(R_SP, 0xFFFC);
+              // RFLAGS: reserved bit 1 only, IF cleared
+              wr32(R_FLAGS, 0x0002);
+              // Clear GP registers
+              wr32(R_AX, 0); wr32(R_BX, 0); wr32(R_CX, 0); wr32(R_DX, 0);
+              wr32(R_SI, 0); wr32(R_DI, 0); wr32(R_BP, 0);
+
+              // CR2 magic for CPUMGetGuestCpuId LM injection
+              wr32(R_CR2, 0xC0DEBA5E);
+              _directBootDone = true;
+
+              console.log('[DIRECT-BOOT] Kernel loaded! CS=' +
+                ENTRY_SEG.toString(16) + ':0000 initrd@0x' +
+                INITRD_GPA.toString(16) + ' (' + (initrdLen>>10) + 'KB)');
+
+              // Return immediately — IEM picks up from new CS:IP
+              return executed;
+            } else {
+              console.error('[DIRECT-BOOT] Bad header or no high RAM!');
+            }
+          }
+        }
       }
       lastBailOp = b; iter = maxInsn;
       break;

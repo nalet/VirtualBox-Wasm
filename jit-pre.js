@@ -190,6 +190,11 @@ function guestRd(addr) {
   if (off < 0) return 0xFFFFFFFF;
   return dv.getUint32(off, true);
 }
+function guestWb(addr, v) {
+  const off = resolvePhysW(addr);
+  if (off < 0) return;
+  mem8[off] = v;
+}
 
 // Read CPU register (64-bit, return as Number — safe for 32-bit values)
 function rr64(off) { return Number(dv.getBigUint64(cpuPtr + off, true)); }
@@ -3395,6 +3400,58 @@ function execBlock(cpuP, ramB, maxInsn) {
           }
           console.log('[CODE-DUMP] around ' + codeBase.toString(16) + ': ' + codeDump);
         }
+
+        // ── Direct Kernel Boot: detect halt_forever and jump to kernel ──
+        // When the BIOS invalid opcode handler enters halt_forever (HLT loop
+        // at f000:709c), check if the main thread has preloaded the Linux
+        // kernel into guest RAM. If so, set CPU state to boot the kernel
+        // directly, bypassing the crashed ISOLINUX bootloader.
+        if (hltCS === 0xF000 && ip === 0x709C &&
+            !execBlock._directBootDone && hltCnt >= 100) {
+          // Check magic flag at guest physical 0x7000
+          const m0 = guestRb(0x7000), m1 = guestRb(0x7001),
+                m2 = guestRb(0x7002), m3 = guestRb(0x7003);
+          if (m0 === 0x4F && m1 === 0x42 && m2 === 0x4D && m3 === 0x56) {
+            execBlock._directBootDone = true;
+            console.log('[DIRECT-BOOT] Kernel preloaded, switching CPU to kernel setup');
+
+            // Set segment registers for real-mode kernel entry:
+            // CS = 0x1020, base = 0x10200 → entry at offset 0x200 in vmlinuz
+            wr16(S_CS + SEG_SEL, 0x1020);
+            wr64(S_CS + SEG_BASE, 0x10200);
+            wr32(S_CS + SEG_LIMIT, 0xFFFF);
+            wr32(S_CS + SEG_ATTR, 0x009B);
+
+            // DS = ES = SS = FS = GS = 0x1000, base = 0x10000
+            const dataSegs = [S_DS, S_ES, S_SS, S_FS, S_GS];
+            for (let si = 0; si < dataSegs.length; si++) {
+              wr16(dataSegs[si] + SEG_SEL, 0x1000);
+              wr64(dataSegs[si] + SEG_BASE, 0x10000);
+              wr32(dataSegs[si] + SEG_LIMIT, 0xFFFF);
+              wr32(dataSegs[si] + SEG_ATTR, 0x0093);
+            }
+
+            // IP = 0 (CS base 0x10200 + IP 0 = physical 0x10200)
+            wr32(R_IP, 0);
+            // SP = top of setup segment heap
+            wr32(R_SP, 0xFFF0);
+            // FLAGS: IF=0, clear DF
+            wr32(R_FLAGS, 0x0002);
+            // Clear general-purpose registers
+            wr32(R_AX, 0); wr32(R_BX, 0); wr32(R_CX, 0); wr32(R_DX, 0);
+            wr32(R_SI, 0); wr32(R_DI, 0); wr32(R_BP, 0);
+            // CR0: keep real mode (PE=0)
+
+            // Clear the magic flag so we don't re-trigger
+            guestWb(0x7000, 0);
+
+            console.log('[DIRECT-BOOT] CPU state set: CS=1020 IP=0000 → phys 0x10200');
+
+            // Break out and let IEM pick up the new CPU state
+            lastBailOp = b; iter = maxInsn;
+            break;
+          }
+        }
       }
       lastBailOp = b; iter = maxInsn;
       break;
@@ -3756,7 +3813,8 @@ return {
   setRomBuffer: setRomBuffer,
   setHighRAM: setHighRAM,
   setPortIO: function(inFn, outFn) { portInFn = inFn; portOutFn = outFn; },
-  getStats: function() { return { totalInsns: statTotalInsns, totalCalls: statTotalCalls, fallbacks: statFallbacks }; }
+  getStats: function() { return { totalInsns: statTotalInsns, totalCalls: statTotalCalls, fallbacks: statFallbacks }; },
+  _getHighRAM: function() { return { ptr: highRamPtr, size: highRamSize, end: highRamEnd }; }
 };
 
 })(); // end VBoxJIT IIFE

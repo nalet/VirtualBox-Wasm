@@ -788,6 +788,38 @@
         Module.FS.writeFile('/cdrom.iso', diskImageData);
         appendLine('ISO written to /cdrom.iso', 'info');
 
+        // ── Direct Kernel Boot: extract vmlinuz + initrd from ISO ──
+        // ISOLINUX's 32-bit core gets corrupted during decompression under
+        // IEM/Wasm, so we bypass it entirely by preloading the kernel and
+        // initrd into guest RAM and jumping directly to the kernel setup code.
+        const VMLINUZ_SECTOR = 191639, VMLINUZ_SIZE = 6575264;
+        const INITRD_SECTOR = 141554, INITRD_SIZE = 1372644;
+        const ISO_SECTOR = 2048;
+        var directBootVmlinuz = null, directBootInitrd = null;
+        try {
+          directBootVmlinuz = diskImageData.slice(
+            VMLINUZ_SECTOR * ISO_SECTOR,
+            VMLINUZ_SECTOR * ISO_SECTOR + VMLINUZ_SIZE);
+          directBootInitrd = diskImageData.slice(
+            INITRD_SECTOR * ISO_SECTOR,
+            INITRD_SECTOR * ISO_SECTOR + INITRD_SIZE);
+          // Verify vmlinuz has valid Linux boot header
+          const hdrMagic = String.fromCharCode(
+            directBootVmlinuz[0x202], directBootVmlinuz[0x203],
+            directBootVmlinuz[0x204], directBootVmlinuz[0x205]);
+          if (hdrMagic === 'HdrS') {
+            appendLine('Direct boot: extracted vmlinuz (' +
+              (VMLINUZ_SIZE/1024/1024).toFixed(1) + ' MB) + initrd (' +
+              (INITRD_SIZE/1024).toFixed(0) + ' KB)', 'info');
+          } else {
+            appendLine('Direct boot: invalid kernel header, disabled', 'warn');
+            directBootVmlinuz = null; directBootInitrd = null;
+          }
+        } catch(e) {
+          appendLine('Direct boot: extraction failed: ' + e.message, 'warn');
+          directBootVmlinuz = null; directBootInitrd = null;
+        }
+
         // Free the JS-side copy to save memory
         diskImageData = null;
 
@@ -871,6 +903,100 @@
         }
         requestAnimationFrame(renderLoop);
 
+        // ── Direct Kernel Boot: preload into guest RAM ──
+        let kernelPreloaded = false;
+        function tryPreloadKernel() {
+          if (kernelPreloaded || !directBootVmlinuz || !directBootInitrd) return;
+          try {
+            if (!Module._wasmJitGetGuestRAM) return;
+            const ramPtr = Number(Module._wasmJitGetGuestRAM());
+            if (!ramPtr) return;
+
+            const mem = new Uint8Array(wasmMemory.buffer);
+            const setup_sects = directBootVmlinuz[0x1F1] || 4;
+            const setup_size = (setup_sects + 1) * 512;
+            const kernel_size = directBootVmlinuz.length - setup_size;
+            const version = directBootVmlinuz[0x206] | (directBootVmlinuz[0x207] << 8);
+
+            // Guest physical addresses
+            const SETUP_ADDR = 0x10000;
+            const KERNEL_ADDR = 0x100000;
+            const INITRD_ADDR = 0x1800000; // 24 MB
+            const CMDLINE_ADDR = 0x20000;
+
+            // We need highRamPtr for addresses >= 0x100000
+            // Check if highRamPtr is available by testing a read
+            // The JIT sets highRamPtr via setHighRAM() — we can check by
+            // trying to read from the wasmMemory at known offsets.
+            // Instead, just use the global VBoxJIT accessor if available.
+            if (typeof globalThis.VBoxJIT !== 'undefined' &&
+                globalThis.VBoxJIT._getHighRAM) {
+              const hr = globalThis.VBoxJIT._getHighRAM();
+              if (!hr.ptr) return; // not ready yet
+
+              // Copy setup code to 0x10000 (low RAM)
+              mem.set(directBootVmlinuz.subarray(0, setup_size),
+                      ramPtr + SETUP_ADDR);
+
+              // Copy PM kernel to 0x100000 (high RAM)
+              mem.set(directBootVmlinuz.subarray(setup_size),
+                      hr.ptr + 0); // highRamPtr maps GCPhys 0x100000
+
+              // Copy initrd to 0x1800000 (high RAM)
+              const initrdHighOff = INITRD_ADDR - 0x100000;
+              mem.set(directBootInitrd, hr.ptr + initrdHighOff);
+
+              // Write command line at 0x20000 (low RAM)
+              const cmdline = 'pmedia=cd\0';
+              for (let i = 0; i < cmdline.length; i++)
+                mem[ramPtr + CMDLINE_ADDR + i] = cmdline.charCodeAt(i);
+
+              // Set up boot_params header at SETUP_ADDR
+              const hdr = ramPtr + SETUP_ADDR;
+              // type_of_loader = 0xFF
+              mem[hdr + 0x210] = 0xFF;
+              // loadflags: LOADED_HIGH (bit 0) | CAN_USE_HEAP (bit 7)
+              mem[hdr + 0x211] = (mem[hdr + 0x211] | 0x01 | 0x80);
+              // heap_end_ptr (relative to setup segment)
+              var he = 0xFE00 - 0x0200;
+              mem[hdr + 0x224] = he & 0xFF;
+              mem[hdr + 0x225] = (he >> 8) & 0xFF;
+              // ramdisk_image
+              mem[hdr + 0x218] = (INITRD_ADDR) & 0xFF;
+              mem[hdr + 0x219] = (INITRD_ADDR >> 8) & 0xFF;
+              mem[hdr + 0x21A] = (INITRD_ADDR >> 16) & 0xFF;
+              mem[hdr + 0x21B] = (INITRD_ADDR >> 24) & 0xFF;
+              // ramdisk_size
+              var irs = directBootInitrd.length;
+              mem[hdr + 0x21C] = irs & 0xFF;
+              mem[hdr + 0x21D] = (irs >> 8) & 0xFF;
+              mem[hdr + 0x21E] = (irs >> 16) & 0xFF;
+              mem[hdr + 0x21F] = (irs >> 24) & 0xFF;
+              // cmd_line_ptr
+              mem[hdr + 0x228] = (CMDLINE_ADDR) & 0xFF;
+              mem[hdr + 0x229] = (CMDLINE_ADDR >> 8) & 0xFF;
+              mem[hdr + 0x22A] = (CMDLINE_ADDR >> 16) & 0xFF;
+              mem[hdr + 0x22B] = (CMDLINE_ADDR >> 24) & 0xFF;
+
+              // Write magic flag at guest 0x7000 (low RAM)
+              mem[ramPtr + 0x7000] = 0x4F; // 'O'
+              mem[ramPtr + 0x7001] = 0x42; // 'B'
+              mem[ramPtr + 0x7002] = 0x4D; // 'M'
+              mem[ramPtr + 0x7003] = 0x56; // 'V' → "OBMV" LE = 0x564D424F
+
+              kernelPreloaded = true;
+              console.log('[DIRECT-BOOT] Kernel preloaded: setup=' + setup_size +
+                ' kernel=' + kernel_size + ' initrd=' + irs +
+                ' version=0x' + version.toString(16));
+              appendLine('Direct boot: kernel preloaded into guest RAM', 'info');
+              directBootVmlinuz = null;
+              directBootInitrd = null;
+            }
+          } catch(e) {
+            console.error('[DIRECT-BOOT] preload error:', e.message);
+          }
+        }
+
         // Monitor POST progress — check for VGA device output
         let postMonitorCount = 0;
         const postMonitor = setInterval(() => {
@@ -887,6 +1013,8 @@
             statusEl.textContent = `VM running — VGA ${w}x${h}`;
             lastUpdateRectCount = updates;
           }
+          // Try to preload kernel into guest RAM
+          tryPreloadKernel();
           // Stop monitoring after 10 minutes
           if (postMonitorCount > 120) clearInterval(postMonitor);
         }, 5000);

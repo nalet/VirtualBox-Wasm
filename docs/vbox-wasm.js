@@ -4100,7 +4100,7 @@ globalThis.VBoxJIT = (function() {
               }
               // After direct boot: handle CPUID in JS.
               // Inject LM/NX/SYSCALL so the Linux kernel detects a 64-bit CPU.
-              const leaf = rd32(R_AX) >>> 0;
+              const leaf = rr32(R_AX) >>> 0;
               if (leaf === 2147483648) {
                 // Max extended CPUID leaf
                 wr32(R_AX, 2147483656);

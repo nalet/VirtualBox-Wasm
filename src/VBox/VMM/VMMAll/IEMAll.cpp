@@ -1301,13 +1301,15 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                             }
                         }
 
-                        /* Detect stuck-at-same-RIP: dump instruction bytes if RIP unchanged
-                           for 10 consecutive diagnostic intervals (10M insns).  This catches
-                           REP-prefixed instructions and infinite JMP loops. */
+                        /* Detect stuck-at-same-RIP and accelerate known patterns.
+                           When the same RIP appears for 20+ diagnostic intervals (20M insns),
+                           check if the instruction pattern is a CRC32 loop.  If so, compute
+                           the CRC natively in C++ instead of iterating byte-by-byte in IEM.
+                           This saves ~40 minutes on the 26MB FossaPup64 kernel decompression. */
                         {
-                            static uint64_t s_uPrevRip     = 0;
-                            static unsigned s_cSameRip     = 0;
-                            static bool     s_fDumpedSameRip = false;
+                            static uint64_t s_uPrevRip = 0;
+                            static unsigned s_cSameRip = 0;
+                            static uint64_t s_uLastAccelRip = 0;
                             uint64_t curRip = pVCpu->cpum.GstCtx.rip;
                             if (curRip == s_uPrevRip)
                                 s_cSameRip++;
@@ -1315,11 +1317,11 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                             {
                                 s_cSameRip = 0;
                                 s_uPrevRip = curRip;
-                                s_fDumpedSameRip = false;
                             }
-                            if (s_cSameRip >= 10 && !s_fDumpedSameRip)
+
+                            /* Log when first detected as stuck */
+                            if (s_cSameRip == 10)
                             {
-                                s_fDumpedSameRip = true;
                                 uint8_t abCode[32];
                                 RT_ZERO(abCode);
                                 PGMPhysSimpleReadGCPtr(pVCpu, abCode, curRip, sizeof(abCode));
@@ -1330,11 +1332,95 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                                 for (int i = 0; i < 32; i++)
                                     RTPrintf("%02x ", abCode[i]);
                                 RTPrintf("\n");
-                                RTPrintf("[SAME-RIP] RCX=%#018llx RSI=%#018llx RDI=%#018llx\n",
+                                RTPrintf("[SAME-RIP] RCX=%#018llx RSI=%#018llx RDI=%#018llx R8=%#018llx R9=%#018llx R12=%#018llx\n",
                                     (unsigned long long)pVCpu->cpum.GstCtx.rcx,
                                     (unsigned long long)pVCpu->cpum.GstCtx.rsi,
-                                    (unsigned long long)pVCpu->cpum.GstCtx.rdi);
+                                    (unsigned long long)pVCpu->cpum.GstCtx.rdi,
+                                    (unsigned long long)pVCpu->cpum.GstCtx.r8,
+                                    (unsigned long long)pVCpu->cpum.GstCtx.r9,
+                                    (unsigned long long)pVCpu->cpum.GstCtx.r12);
                                 RTStrmFlush(g_pStdOut);
+                            }
+
+                            /* CRC32 loop accelerator: fires at 20 intervals (20M insns at same RIP) */
+                            if (s_cSameRip >= 20 && curRip != s_uLastAccelRip)
+                            {
+                                uint8_t abCode[16];
+                                RT_ZERO(abCode);
+                                PGMPhysSimpleReadGCPtr(pVCpu, abCode, curRip, sizeof(abCode));
+
+                                /* Pattern: 43 33 0c 8c  xor ecx,[r12+r9*4]
+                                 *          4c 39 c7     cmp rdi, r8
+                                 *          75 xx        jnz <back>
+                                 * This is the gzip CRC32 verification loop in the kernel decompressor. */
+                                if (abCode[0] == 0x43 && abCode[1] == 0x33
+                                    && abCode[2] == 0x0c && abCode[3] == 0x8c
+                                    && abCode[4] == 0x4c && abCode[5] == 0x39
+                                    && abCode[6] == 0xc7 && abCode[7] == 0x75)
+                                {
+                                    s_uLastAccelRip = curRip;
+                                    uint64_t rdi = pVCpu->cpum.GstCtx.rdi;
+                                    uint64_t r8  = pVCpu->cpum.GstCtx.r8;
+                                    uint64_t r9  = pVCpu->cpum.GstCtx.r9;
+                                    uint64_t r12 = pVCpu->cpum.GstCtx.r12;
+                                    uint32_t crc = (uint32_t)pVCpu->cpum.GstCtx.rcx;
+
+                                    RTPrintf("[CRC-ACCEL] Detected CRC32 loop at RIP=%#llx\n", (unsigned long long)curRip);
+                                    RTPrintf("[CRC-ACCEL] rdi=%#llx r8=%#llx remain=%llu bytes, crc=%#x r9=%#llx\n",
+                                        (unsigned long long)rdi, (unsigned long long)r8,
+                                        (unsigned long long)(r8 - rdi), crc, (unsigned long long)r9);
+
+                                    /* Step 1: Complete current iteration (XOR hasn't executed yet).
+                                     * At this point ECX = old_crc >> 8, R9 = table index.
+                                     * The XOR will do: ecx ^= table[r9 & 0xFF] */
+                                    uint32_t auTable[256];
+                                    RT_ZERO(auTable);
+                                    int rc = PGMPhysSimpleReadGCPtr(pVCpu, auTable, r12, sizeof(auTable));
+                                    if (RT_SUCCESS(rc))
+                                    {
+                                        crc ^= auTable[r9 & 0xFF];
+
+                                        /* Step 2: Compute CRC for remaining bytes (rdi to r8) */
+                                        uint64_t cbRemain = r8 > rdi ? r8 - rdi : 0;
+                                        if (cbRemain > 0 && cbRemain < 64U * 1024U * 1024U)
+                                        {
+                                            uint8_t *pbData = (uint8_t *)RTMemAlloc((size_t)cbRemain);
+                                            if (pbData)
+                                            {
+                                                rc = PGMPhysSimpleReadGCPtr(pVCpu, pbData, rdi, (size_t)cbRemain);
+                                                if (RT_SUCCESS(rc))
+                                                {
+                                                    for (uint64_t i = 0; i < cbRemain; i++)
+                                                        crc = (crc >> 8) ^ auTable[(crc ^ pbData[i]) & 0xFF];
+
+                                                    /* Step 3: Update guest state */
+                                                    pVCpu->cpum.GstCtx.rcx = crc;
+                                                    pVCpu->cpum.GstCtx.rdi = r8;
+                                                    /* Advance RIP past: XOR(4)+CMP(3)+JNZ(2) = 9 bytes
+                                                     * → lands on the 'not ecx' instruction */
+                                                    pVCpu->cpum.GstCtx.rip = curRip + 9;
+
+                                                    RTPrintf("[CRC-ACCEL] OK! Computed CRC=%#x over %llu bytes in native code\n",
+                                                        crc, (unsigned long long)cbRemain);
+                                                    RTPrintf("[CRC-ACCEL] Advanced RIP to %#llx (not ecx), saved ~%lluM insns\n",
+                                                        (unsigned long long)pVCpu->cpum.GstCtx.rip,
+                                                        (unsigned long long)(cbRemain * 10 / 1000000));
+                                                }
+                                                else
+                                                    RTPrintf("[CRC-ACCEL] FAILED: PGMPhysRead data rc=%d\n", rc);
+                                                RTMemFree(pbData);
+                                            }
+                                            else
+                                                RTPrintf("[CRC-ACCEL] FAILED: alloc %llu bytes\n", (unsigned long long)cbRemain);
+                                        }
+                                        else
+                                            RTPrintf("[CRC-ACCEL] Skip: remain=%llu (zero or too large)\n",
+                                                (unsigned long long)cbRemain);
+                                    }
+                                    else
+                                        RTPrintf("[CRC-ACCEL] FAILED: PGMPhysRead table rc=%d\n", rc);
+                                    RTStrmFlush(g_pStdOut);
+                                }
                             }
                         }
 

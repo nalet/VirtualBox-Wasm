@@ -40,6 +40,9 @@
 #ifdef IN_RING0
 # include <VBox/vmm/gvmm.h>
 #endif
+#ifdef __EMSCRIPTEN__
+# include <iprt/stream.h>
+#endif
 
 
 /*********************************************************************************************************************************
@@ -2212,6 +2215,18 @@ static DECLCALLBACK(int) apicBusDeliver(PVMCC pVM, uint8_t uDest, uint8_t uDestM
     apicCommonGetDestCpuSet(pVM, fDestMask, fBroadcastMask, enmDestMode, enmDeliveryMode, &DestCpuSet);
     VBOXSTRICTRC rcStrict = apicSendIntr(pVM, NULL /* pVCpu */, uVector, enmTriggerMode, enmDeliveryMode, &DestCpuSet,
                                          &fIntrAccepted, uSrcTag, VINF_SUCCESS /* rcRZ */);
+#ifdef __EMSCRIPTEN__
+    {
+        static uint32_t s_cBusDlvr = 0;
+        if (++s_cBusDlvr <= 30 || (s_cBusDlvr % 2000) == 0)
+        {
+            RTPrintf("[LAPIC-BUS] #%u vec=%u dest=%u destMode=%u trigger=%u accepted=%d pin=%u\n",
+                     s_cBusDlvr, uVector, uDest, uDestMode, uTriggerMode,
+                     (int)fIntrAccepted, uIoApicPin);
+            RTStrmFlush(g_pStdOut);
+        }
+    }
+#endif
     if (fIntrAccepted)
         return VBOXSTRICTRC_VAL(rcStrict);
     return VERR_APIC_INTR_DISCARDED;
@@ -2242,6 +2257,20 @@ static DECLCALLBACK(VBOXSTRICTRC) apicSetLocalInterrupt(PVMCPUCC pVCpu, uint8_t 
         Assert(u8Pin < RT_ELEMENTS(s_au16LvtOffsets));
         uint16_t const offLvt = s_au16LvtOffsets[u8Pin];
         uint32_t const uLvt   = apicReadRaw32(pVCpu, offLvt);
+
+#ifdef __EMSCRIPTEN__
+        {
+            static uint32_t s_cLocalInt = 0;
+            if (++s_cLocalInt <= 30 || (s_cLocalInt % 5000) == 0)
+            {
+                RTPrintf("[LAPIC-LINT] #%u pin=%u level=%u LVT=0x%08x masked=%u delivMode=%u\n",
+                         s_cLocalInt, u8Pin, u8Level, uLvt,
+                         (unsigned)XAPIC_LVT_IS_MASKED(uLvt),
+                         (unsigned)XAPIC_LVT_GET_DELIVERY_MODE(uLvt));
+                RTStrmFlush(g_pStdOut);
+            }
+        }
+#endif
 
         /* If software hasn't masked the interrupt in the LVT entry, proceed interrupt processing. */
         if (!XAPIC_LVT_IS_MASKED(uLvt))

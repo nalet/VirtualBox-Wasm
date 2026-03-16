@@ -39,6 +39,9 @@
 #include "VBoxDD.h"
 #include <iprt/x86.h>
 #include <iprt/string.h>
+#ifdef __EMSCRIPTEN__
+# include <iprt/stream.h>
+#endif
 
 
 /*********************************************************************************************************************************
@@ -596,7 +599,22 @@ static void ioapicSignalIntrForRte(PPDMDEVINS pDevIns, PIOAPIC pThis, PIOAPICCC 
     if (!IOAPIC_RTE_IS_MASKED(u64Rte))
     { /* likely */ }
     else
+    {
+#ifdef __EMSCRIPTEN__
+        {
+            static uint32_t s_cMaskedDrop = 0;
+            if (++s_cMaskedDrop <= 20 || (s_cMaskedDrop % 5000) == 0)
+            {
+                RTPrintf("[IOAPIC-MASKED] #%u pin=%u rte=0x%016llx (vec=%u mask=%u)\n",
+                         s_cMaskedDrop, idxRte, (unsigned long long)u64Rte,
+                         (unsigned)IOAPIC_RTE_GET_VECTOR(u64Rte),
+                         (unsigned)IOAPIC_RTE_GET_MASK(u64Rte));
+                RTStrmFlush(g_pStdOut);
+            }
+        }
+#endif
         return;
+    }
 
     /* We cannot accept another level-triggered interrupt until remote IRR has been cleared. */
     uint8_t const u8TriggerMode = IOAPIC_RTE_GET_TRIGGER_MODE(u64Rte);
@@ -660,6 +678,20 @@ static void ioapicSignalIntrForRte(PPDMDEVINS pDevIns, PIOAPIC pThis, PIOAPICCC 
           ApicIntr.u8TriggerMode == IOAPIC_RTE_TRIGGER_MODE_EDGE ? "edge" : "level", ApicIntr.u8Dest,
           ApicIntr.u8DestMode == IOAPIC_RTE_DEST_MODE_PHYSICAL ? "physical" : "logical",
           ApicIntr.u8Vector, ApicIntr.u8Vector));
+
+#ifdef __EMSCRIPTEN__
+    {
+        static uint32_t s_cDeliver = 0;
+        if (++s_cDeliver <= 30 || (s_cDeliver % 2000) == 0)
+        {
+            RTPrintf("[IOAPIC-DELIVER] #%u pin=%u vec=%u dest=%u destMode=%s trigger=%s\n",
+                     s_cDeliver, idxRte, ApicIntr.u8Vector, ApicIntr.u8Dest,
+                     ApicIntr.u8DestMode == 0 ? "phys" : "logical",
+                     ApicIntr.u8TriggerMode == 0 ? "edge" : "level");
+            RTStrmFlush(g_pStdOut);
+        }
+    }
+#endif
 
     /*
      * Deliver to the local APIC via the system/3-wire-APIC bus.
@@ -781,6 +813,25 @@ static VBOXSTRICTRC ioapicSetRedirTableEntry(PPDMDEVINS pDevIns, PIOAPIC pThis, 
         }
 
         LogFlow(("IOAPIC: ioapicSetRedirTableEntry: uIndex=%#RX32 idxRte=%u uValue=%#RX32\n", uIndex, idxRte, uValue));
+
+#ifdef __EMSCRIPTEN__
+        {
+            uint64_t const u64RteNew = pThis->au64RedirTable[idxRte];
+            static uint32_t s_cRteWrite = 0;
+            if (++s_cRteWrite <= 100 || idxRte == 2 || (s_cRteWrite % 500) == 0)
+            {
+                RTPrintf("[IOAPIC-RTE] #%u pin=%u %s old=0x%016llx new=0x%016llx (vec=%u mask=%u dest=%u)\n",
+                         s_cRteWrite, idxRte,
+                         (uIndex & 1) ? "hi" : "lo",
+                         (unsigned long long)u64Rte,
+                         (unsigned long long)u64RteNew,
+                         (unsigned)IOAPIC_RTE_GET_VECTOR(u64RteNew),
+                         (unsigned)IOAPIC_RTE_GET_MASK(u64RteNew),
+                         (unsigned)IOAPIC_RTE_GET_DEST(u64RteNew));
+                RTStrmFlush(g_pStdOut);
+            }
+        }
+#endif
 
         /*
          * Signal the next pending interrupt for this RTE.
@@ -948,6 +999,22 @@ static DECLCALLBACK(void) ioapicSetIrq(PPDMDEVINS pDevIns, PCIBDF uBusDevFn, int
     PIOAPIC   pThis   = PDMDEVINS_2_DATA(pDevIns, PIOAPIC);
     PIOAPICCC pThisCC = PDMDEVINS_2_DATA_CC(pDevIns, PIOAPICCC);
     LogFlow(("IOAPIC: ioapicSetIrq: iIrq=%d iLevel=%d uTagSrc=%#x\n", iIrq, iLevel, uTagSrc));
+
+#ifdef __EMSCRIPTEN__
+    {
+        static uint32_t s_cSetIrq = 0;
+        if (++s_cSetIrq <= 30 || (iIrq == 2 && (s_cSetIrq % 2000) == 0))
+        {
+            RTPrintf("[IOAPIC-IRQ] #%u pin=%d level=%d rte=0x%016llx (mask=%u)\n",
+                     s_cSetIrq, iIrq, iLevel,
+                     (unsigned long long)((unsigned)iIrq < RT_ELEMENTS(pThis->au64RedirTable)
+                                          ? pThis->au64RedirTable[iIrq] : 0),
+                     (unsigned)((unsigned)iIrq < RT_ELEMENTS(pThis->au64RedirTable)
+                                ? IOAPIC_RTE_GET_MASK(pThis->au64RedirTable[iIrq]) : 99));
+            RTStrmFlush(g_pStdOut);
+        }
+    }
+#endif
 
     STAM_COUNTER_INC(&pThis->CTX_SUFF_Z(StatSetIrq));
 

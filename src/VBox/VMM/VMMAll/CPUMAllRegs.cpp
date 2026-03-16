@@ -1060,6 +1060,27 @@ VMMDECL(void) CPUMGetGuestCpuId(PVMCPUCC pVCpu, uint32_t uLeaf, uint32_t uSubLea
                 break;
         }
     }
+
+#ifdef __EMSCRIPTEN__
+    /* Wasm: ensure max standard leaf >= 0x16 so the kernel queries leaf 0x15
+       (TSC/Core Crystal Clock) for native_calibrate_tsc(). */
+    if (uLeaf == 0 && *pEax < 0x16)
+        *pEax = 0x16;
+
+    /* Wasm: inject CPUID leaf 0x15 (TSC/Core Crystal Clock Information).
+       Without this, native_calibrate_tsc() returns 0, tsc_khz stays 0, and
+       tsc_init() falls through to slow PIT-based calibration that hangs
+       in quick_pit_calibrate() under IEM emulation.
+       Report 1 GHz TSC: denominator=1, numerator=1, crystal=1 GHz. */
+    if (uLeaf == 0x15)
+    {
+        *pEax = 1;                  /* denominator */
+        *pEbx = 1;                  /* numerator */
+        *pEcx = 1000000000;         /* core crystal clock = 1 GHz */
+        *pEdx = 0;
+    }
+#endif
+
     Log2(("CPUMGetGuestCpuId: uLeaf=%#010x/%#010x %RX32 %RX32 %RX32 %RX32\n", uLeaf, uSubLeaf, *pEax, *pEbx, *pEcx, *pEdx));
 }
 

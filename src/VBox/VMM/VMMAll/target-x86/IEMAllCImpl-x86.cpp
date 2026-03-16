@@ -7772,11 +7772,49 @@ IEM_CIMPL_DEF_0(iemCImpl_hlt)
 #ifdef __EMSCRIPTEN__
     {
         extern volatile uint64_t g_cWasmVirtualInstructions;
-        RTPrintf("[HLT] EIP=%#llx IF=%d FFs=%#RX64 insns=%llu\n",
+        static uint32_t s_cHltCount = 0;
+        s_cHltCount++;
+        RTPrintf("[HLT] #%u EIP=%#llx IF=%d FFs=%#RX64 insns=%llu CR0=%#llx EFER=%#llx\n",
+                 s_cHltCount,
                  (unsigned long long)pVCpu->cpum.GstCtx.rip,
                  !!(pVCpu->cpum.GstCtx.eflags.u & X86_EFL_IF),
                  pVCpu->fLocalForcedActions,
-                 (unsigned long long)g_cWasmVirtualInstructions);
+                 (unsigned long long)g_cWasmVirtualInstructions,
+                 (unsigned long long)pVCpu->cpum.GstCtx.cr0,
+                 (unsigned long long)pVCpu->cpum.GstCtx.msrEFER);
+        /* Dump registers and stack for first few HLTs in long mode */
+        if (s_cHltCount <= 3 && (pVCpu->cpum.GstCtx.msrEFER & MSR_K6_EFER_LMA))
+        {
+            RTPrintf("[HLT-REG] RAX=%#llx RBX=%#llx RCX=%#llx RDX=%#llx\n",
+                     (unsigned long long)pVCpu->cpum.GstCtx.rax,
+                     (unsigned long long)pVCpu->cpum.GstCtx.rbx,
+                     (unsigned long long)pVCpu->cpum.GstCtx.rcx,
+                     (unsigned long long)pVCpu->cpum.GstCtx.rdx);
+            RTPrintf("[HLT-REG] RSI=%#llx RDI=%#llx RBP=%#llx RSP=%#llx\n",
+                     (unsigned long long)pVCpu->cpum.GstCtx.rsi,
+                     (unsigned long long)pVCpu->cpum.GstCtx.rdi,
+                     (unsigned long long)pVCpu->cpum.GstCtx.rbp,
+                     (unsigned long long)pVCpu->cpum.GstCtx.rsp);
+            RTPrintf("[HLT-REG] R8=%#llx R9=%#llx R10=%#llx R11=%#llx\n",
+                     (unsigned long long)pVCpu->cpum.GstCtx.r8,
+                     (unsigned long long)pVCpu->cpum.GstCtx.r9,
+                     (unsigned long long)pVCpu->cpum.GstCtx.r10,
+                     (unsigned long long)pVCpu->cpum.GstCtx.r11);
+            RTPrintf("[HLT-REG] CS=%04x SS=%04x CR3=%#llx CR4=%#llx\n",
+                     pVCpu->cpum.GstCtx.cs.Sel, pVCpu->cpum.GstCtx.ss.Sel,
+                     (unsigned long long)pVCpu->cpum.GstCtx.cr3,
+                     (unsigned long long)pVCpu->cpum.GstCtx.cr4);
+            /* Read stack contents */
+            uint64_t aStack[8];
+            RT_ZERO(aStack);
+            PGMPhysSimpleReadGCPtr(pVCpu, aStack, pVCpu->cpum.GstCtx.rsp, sizeof(aStack));
+            RTPrintf("[HLT-STK] RSP+0=%#llx RSP+8=%#llx RSP+10=%#llx RSP+18=%#llx\n",
+                     (unsigned long long)aStack[0], (unsigned long long)aStack[1],
+                     (unsigned long long)aStack[2], (unsigned long long)aStack[3]);
+            RTPrintf("[HLT-STK] RSP+20=%#llx RSP+28=%#llx RSP+30=%#llx RSP+38=%#llx\n",
+                     (unsigned long long)aStack[4], (unsigned long long)aStack[5],
+                     (unsigned long long)aStack[6], (unsigned long long)aStack[7]);
+        }
         RTStrmFlush(g_pStdOut);
     }
 #endif

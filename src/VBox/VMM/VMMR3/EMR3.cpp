@@ -2824,11 +2824,15 @@ VMMR3_INT_DECL(int) EMR3ExecuteVM(PVM pVM, PVMCPU pVCpu)
                         const uint32_t fWaitHalted = (CPUMGetGuestEFlags(pVCpu) & X86_EFL_IF) ? 0 : VMWAITHALTED_F_IGNORE_IRQS;
 #endif
 #ifdef __EMSCRIPTEN__
-                        RTPrintf("[EM-WAIT] VMR3WaitHalted IF=%d fWaitHalted=%#x FFs=%#RX64 EIP=%#llx\n",
-                                 !!(CPUMGetGuestEFlags(pVCpu) & X86_EFL_IF), fWaitHalted,
-                                 pVCpu->fLocalForcedActions,
-                                 (unsigned long long)pVCpu->cpum.GstCtx.rip);
-                        RTStrmFlush(g_pStdOut);
+                        {
+                            static uint32_t s_cWaitCount = 0;
+                            if (s_cWaitCount == 0 || (s_cWaitCount % 10000) == 0)
+                                RTPrintf("[EM-WAIT] VMR3WaitHalted IF=%d fWaitHalted=%#x FFs=%#RX64 EIP=%#llx count=%u\n",
+                                         !!(CPUMGetGuestEFlags(pVCpu) & X86_EFL_IF), fWaitHalted,
+                                         pVCpu->fLocalForcedActions,
+                                         (unsigned long long)pVCpu->cpum.GstCtx.rip, s_cWaitCount);
+                            s_cWaitCount++;
+                        }
 #endif
                         /* Drain keyboard scancodes before waiting — otherwise
                            keyboard input (typed while CPU is halted) never reaches

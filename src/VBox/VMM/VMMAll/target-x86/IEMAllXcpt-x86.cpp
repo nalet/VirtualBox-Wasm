@@ -56,6 +56,9 @@
 #include <iprt/assert.h>
 #include <iprt/string.h>
 #include <iprt/x86.h>
+#ifdef __EMSCRIPTEN__
+# include <iprt/stream.h>
+#endif
 
 #include "IEMInline.h"
 #include "IEMInline-x86.h"
@@ -2312,6 +2315,25 @@ iemRaiseXcptOrInt(PVMCPUCC    pVCpu,
         u8Vector = X86_XCPT_GP;
         uErr     = 0;
     }
+
+#ifdef __EMSCRIPTEN__
+    /* Log exceptions in long mode for early kernel init debugging */
+    if ((pVCpu->cpum.GstCtx.msrEFER & MSR_K6_EFER_LMA)
+        && (fFlags & IEM_XCPT_FLAGS_T_CPU_XCPT))
+    {
+        static uint32_t s_cXcptLog = 0;
+        if (s_cXcptLog < 50)
+        {
+            extern volatile uint64_t g_cWasmVirtualInstructions;
+            RTPrintf("[XCPT] #%u vec=%#x err=%#x EIP=%#llx CR2=%#llx insns=%llu\n",
+                     ++s_cXcptLog, u8Vector, uErr,
+                     (unsigned long long)pVCpu->cpum.GstCtx.rip,
+                     (unsigned long long)uCr2,
+                     (unsigned long long)g_cWasmVirtualInstructions);
+            RTStrmFlush(g_pStdOut);
+        }
+    }
+#endif
 
     PVMCC const pVM = pVCpu->CTX_SUFF(pVM);
 #ifdef DBGFTRACE_ENABLED

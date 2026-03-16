@@ -1213,6 +1213,75 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                                  !!(pVCpu->cpum.GstCtx.eflags.u & X86_EFL_IF),
                                  fFFs,
                                  (unsigned long long)pVCpu->cpum.GstCtx.rip);
+
+                        /* One-shot stack dump at 300M insns to identify stuck function */
+                        {
+                            static bool s_fStackDumped = false;
+                            if (!s_fStackDumped
+                                && g_cWasmVirtualInstructions >= 300000000
+                                && (pVCpu->cpum.GstCtx.msrEFER & MSR_K6_EFER_LMA)
+                                && !(pVCpu->cpum.GstCtx.eflags.u & X86_EFL_IF))
+                            {
+                                s_fStackDumped = true;
+                                RTPrintf("[STUCK-DIAG] RIP=%#018llx RSP=%#018llx RBP=%#018llx\n",
+                                    (unsigned long long)pVCpu->cpum.GstCtx.rip,
+                                    (unsigned long long)pVCpu->cpum.GstCtx.rsp,
+                                    (unsigned long long)pVCpu->cpum.GstCtx.rbp);
+                                RTPrintf("[STUCK-DIAG] RAX=%#018llx RBX=%#018llx RCX=%#018llx RDX=%#018llx\n",
+                                    (unsigned long long)pVCpu->cpum.GstCtx.rax,
+                                    (unsigned long long)pVCpu->cpum.GstCtx.rbx,
+                                    (unsigned long long)pVCpu->cpum.GstCtx.rcx,
+                                    (unsigned long long)pVCpu->cpum.GstCtx.rdx);
+                                RTPrintf("[STUCK-DIAG] RSI=%#018llx RDI=%#018llx R8=%#018llx R9=%#018llx\n",
+                                    (unsigned long long)pVCpu->cpum.GstCtx.r8,
+                                    (unsigned long long)pVCpu->cpum.GstCtx.r9,
+                                    (unsigned long long)pVCpu->cpum.GstCtx.r10,
+                                    (unsigned long long)pVCpu->cpum.GstCtx.r11);
+                                /* Dump stack: 16 qwords from RSP */
+                                uint64_t auStack[16];
+                                RT_ZERO(auStack);
+                                PGMPhysSimpleReadGCPtr(pVCpu, auStack, pVCpu->cpum.GstCtx.rsp, sizeof(auStack));
+                                for (int i = 0; i < 16; i++)
+                                    RTPrintf("[STUCK-STK] RSP+%02x: %#018llx\n", i*8, (unsigned long long)auStack[i]);
+                                /* Walk RBP chain (frame pointers) */
+                                uint64_t rbp = pVCpu->cpum.GstCtx.rbp;
+                                for (int i = 0; i < 10 && rbp > 0xffff800000000000ULL; i++)
+                                {
+                                    uint64_t frame[2] = {0, 0}; /* [0]=saved RBP, [1]=return addr */
+                                    PGMPhysSimpleReadGCPtr(pVCpu, frame, rbp, sizeof(frame));
+                                    RTPrintf("[STUCK-FRM] #%d RBP=%#018llx RET=%#018llx\n", i, (unsigned long long)rbp, (unsigned long long)frame[1]);
+                                    if (frame[0] == 0 || frame[0] == rbp) break;
+                                    rbp = frame[0];
+                                }
+                                /* Read 64 bytes of code at RIP */
+                                uint8_t abCode[64];
+                                RT_ZERO(abCode);
+                                PGMPhysSimpleReadGCPtr(pVCpu, abCode, pVCpu->cpum.GstCtx.rip, sizeof(abCode));
+                                RTPrintf("[STUCK-CODE] @RIP: ");
+                                for (int i = 0; i < 64; i++)
+                                    RTPrintf("%02x ", abCode[i]);
+                                RTPrintf("\n");
+                                /* Try to read kernel symbol near RIP by scanning for printable text */
+                                for (uint64_t scan = pVCpu->cpum.GstCtx.rip - 0x100; scan < pVCpu->cpum.GstCtx.rip; scan++)
+                                {
+                                    char szBuf[256];
+                                    RT_ZERO(szBuf);
+                                    PGMPhysSimpleReadGCPtr(pVCpu, szBuf, scan, sizeof(szBuf) - 1);
+                                    /* Look for function name pattern: \0funcname\0 */
+                                    if (szBuf[0] == '\0' && szBuf[1] >= 'a' && szBuf[1] <= 'z')
+                                    {
+                                        int len = 0;
+                                        while (len < 60 && szBuf[len+1] >= 0x20 && szBuf[len+1] <= 0x7e) len++;
+                                        if (len >= 4)
+                                        {
+                                            RTPrintf("[STUCK-SYM] near RIP-%#llx: \"%.*s\"\n",
+                                                (unsigned long long)(pVCpu->cpum.GstCtx.rip - scan), len, &szBuf[1]);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
                         RTStrmFlush(g_pStdOut);
                     }
                 }

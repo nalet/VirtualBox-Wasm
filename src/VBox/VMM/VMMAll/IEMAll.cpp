@@ -1199,6 +1199,26 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                     extern volatile uint64_t g_cWasmVirtualInstructions;
                     g_cWasmVirtualInstructions = pVCpu->iem.s.cInstructions;
 
+                    /* High-frequency __delay() fast path: once we've identified the
+                     * delay loop address, check every 1000 instructions and skip it
+                     * immediately by setting the counter register to 1.  This is much
+                     * faster than waiting for the 1M-instruction diagnostic interval. */
+                    static uint64_t s_uDelayRip = 0;  /* learned from slow-path */
+                    {
+                        static uint64_t s_cNextFastCheck = 0;
+                        if (s_uDelayRip != 0 && g_cWasmVirtualInstructions >= s_cNextFastCheck)
+                        {
+                            s_cNextFastCheck = g_cWasmVirtualInstructions + 1000;
+                            uint64_t rip = pVCpu->cpum.GstCtx.rip;
+                            /* Check if RIP is within the tight loop (±4 bytes of known address) */
+                            int64_t d = (int64_t)(rip - s_uDelayRip);
+                            if (d >= -4 && d <= 4)
+                            {
+                                pVCpu->cpum.GstCtx.rax = 1;
+                            }
+                        }
+                    }
+
                     /* Periodic diagnostic: log timer/FF state every ~1M instructions */
                     static uint64_t s_cNextDiag = 1000000;
                     if (g_cWasmVirtualInstructions >= s_cNextDiag)
@@ -1496,6 +1516,13 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
 
                                     if (pszReg)
                                     {
+                                        /* Record for fast-path (1K-instruction interval) */
+                                        if (s_uDelayRip == 0)
+                                        {
+                                            s_uDelayRip = curRip;
+                                            RTPrintf("[DELAY-ACCEL] Learned delay RIP=%#llx, enabling fast-path\n",
+                                                (unsigned long long)curRip);
+                                        }
                                         RTPrintf("[DELAY-ACCEL] Skipping __delay() loop at RIP=%#llx, set %s=1, insns=%llu\n",
                                             (unsigned long long)curRip, pszReg,
                                             (unsigned long long)g_cWasmVirtualInstructions);
@@ -1508,6 +1535,12 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                                     if (abCode2[3] == 0x75)
                                     {
                                         pVCpu->cpum.GstCtx.rax = 1;
+                                        if (s_uDelayRip == 0)
+                                        {
+                                            s_uDelayRip = curRip;
+                                            RTPrintf("[DELAY-ACCEL] Learned delay RIP=%#llx, enabling fast-path\n",
+                                                (unsigned long long)curRip);
+                                        }
                                         RTPrintf("[DELAY-ACCEL] Skipping __delay() loop at RIP=%#llx (dec rax), set RAX=1, insns=%llu\n",
                                             (unsigned long long)curRip,
                                             (unsigned long long)g_cWasmVirtualInstructions);

@@ -1214,6 +1214,25 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                                  fFFs,
                                  (unsigned long long)pVCpu->cpum.GstCtx.rip);
 
+                        /* Force-enable IF after 200M insns if kernel is stuck with
+                           IF=0 in 64-bit mode.  This unsticks calibration/init loops
+                           that depend on timer interrupts (jiffies) which can't fire
+                           while IF=0.  The IDT is already set up at this point. */
+                        {
+                            static bool s_fForceIF = false;
+                            if (!s_fForceIF
+                                && g_cWasmVirtualInstructions >= 200000000
+                                && (pVCpu->cpum.GstCtx.msrEFER & MSR_K6_EFER_LMA)
+                                && !(pVCpu->cpum.GstCtx.eflags.u & X86_EFL_IF))
+                            {
+                                s_fForceIF = true;
+                                pVCpu->cpum.GstCtx.eflags.u |= X86_EFL_IF;
+                                RTPrintf("[FORCE-IF] Enabling IF at insns=%llu RIP=%#llx — unsticking kernel init\n",
+                                    (unsigned long long)g_cWasmVirtualInstructions,
+                                    (unsigned long long)pVCpu->cpum.GstCtx.rip);
+                            }
+                        }
+
                         /* One-shot stack dump at 300M insns to identify stuck function */
                         {
                             static bool s_fStackDumped = false;

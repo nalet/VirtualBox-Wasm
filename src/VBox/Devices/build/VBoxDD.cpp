@@ -80,6 +80,7 @@ extern "C" DECLEXPORT(int) VBoxDevicesRegister(PPDMDEVREGCB pCallbacks, uint32_t
     REGISTER_DEVICE(g_DevicePIIX3IDE);
     REGISTER_DEVICE(g_DeviceI8254);
     REGISTER_DEVICE(g_DeviceI8259);
+    REGISTER_DEVICE(g_DeviceIOAPIC);
     REGISTER_DEVICE(g_DeviceMC146818);
     REGISTER_DEVICE(g_DeviceVga);
     REGISTER_DEVICE(g_DeviceVMMDev);

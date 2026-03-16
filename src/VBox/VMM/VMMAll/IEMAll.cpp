@@ -1301,6 +1301,43 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                             }
                         }
 
+                        /* Detect stuck-at-same-RIP: dump instruction bytes if RIP unchanged
+                           for 10 consecutive diagnostic intervals (10M insns).  This catches
+                           REP-prefixed instructions and infinite JMP loops. */
+                        {
+                            static uint64_t s_uPrevRip     = 0;
+                            static unsigned s_cSameRip     = 0;
+                            static bool     s_fDumpedSameRip = false;
+                            uint64_t curRip = pVCpu->cpum.GstCtx.rip;
+                            if (curRip == s_uPrevRip)
+                                s_cSameRip++;
+                            else
+                            {
+                                s_cSameRip = 0;
+                                s_uPrevRip = curRip;
+                                s_fDumpedSameRip = false;
+                            }
+                            if (s_cSameRip >= 10 && !s_fDumpedSameRip)
+                            {
+                                s_fDumpedSameRip = true;
+                                uint8_t abCode[32];
+                                RT_ZERO(abCode);
+                                PGMPhysSimpleReadGCPtr(pVCpu, abCode, curRip, sizeof(abCode));
+                                RTPrintf("[SAME-RIP] RIP=%#018llx stuck for %u intervals, insns=%llu\n",
+                                    (unsigned long long)curRip, s_cSameRip,
+                                    (unsigned long long)g_cWasmVirtualInstructions);
+                                RTPrintf("[SAME-RIP] code: ");
+                                for (int i = 0; i < 32; i++)
+                                    RTPrintf("%02x ", abCode[i]);
+                                RTPrintf("\n");
+                                RTPrintf("[SAME-RIP] RCX=%#018llx RSI=%#018llx RDI=%#018llx\n",
+                                    (unsigned long long)pVCpu->cpum.GstCtx.rcx,
+                                    (unsigned long long)pVCpu->cpum.GstCtx.rsi,
+                                    (unsigned long long)pVCpu->cpum.GstCtx.rdi);
+                                RTStrmFlush(g_pStdOut);
+                            }
+                        }
+
                         RTStrmFlush(g_pStdOut);
                     }
                 }

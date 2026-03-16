@@ -213,6 +213,20 @@ static DECLCALLBACK(int) vboxWasmCfgmConstructor(PUVM pUVM, PVM pVM, PCVMMR3VTAB
     INSERT_INTEGER(pInst, "Trusted", 1);
     INSERT_NODE(pInst, "Config", &pCfg);
 
+    /* ── Advanced Programmable Interrupt Controller (LAPIC) ── */
+    INSERT_NODE(pDevices, "apic", &pDev);
+    INSERT_NODE(pDev, "0", &pInst);
+    INSERT_INTEGER(pInst, "Trusted", 1);
+    INSERT_NODE(pInst, "Config", &pCfg);
+    INSERT_INTEGER(pCfg, "IOAPIC", 1);
+    INSERT_INTEGER(pCfg, "Mode", 2);   /* PDMAPICMODE_APIC */
+
+    /* ── I/O APIC ── */
+    INSERT_NODE(pDevices, "ioapic", &pDev);
+    INSERT_NODE(pDev, "0", &pInst);
+    INSERT_INTEGER(pInst, "Trusted", 1);
+    INSERT_NODE(pInst, "Config", &pCfg);
+
     /* ── RTC MC146818 ── */
     INSERT_NODE(pDevices, "mc146818", &pDev);
     INSERT_NODE(pDev, "0", &pInst);

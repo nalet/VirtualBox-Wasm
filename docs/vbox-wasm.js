@@ -4609,6 +4609,13 @@ globalThis.VBoxJIT = (function() {
           }
           // protected mode INT needs IDT
           const intNum = mem8[ci + 1];
+          // INT 15h: bail to IEM — the BIOS e820 handler uses .386 pushad/call/popad
+          // in a USE16 segment which needs exact stack frame alignment.  Let IEM handle it.
+          if (intNum === 21) {
+            lastBailOp = b;
+            iter = maxInsn;
+            break;
+          }
           // Log all INT calls to trace ISOLINUX boot sequence
           if (intNum !== 28 && intNum !== 8) {
             // skip timer INTs from count

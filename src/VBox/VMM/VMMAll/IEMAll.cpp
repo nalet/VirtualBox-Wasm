@@ -1452,6 +1452,66 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                                     RTStrmFlush(g_pStdOut);
                                 }
                             }
+
+                            /* __delay() loop accelerator: fires at 10 intervals (10M insns).
+                             * Detects the kernel's __delay() function: dec rax; jnz <-5>.
+                             * The stuck RIP lands on the JNZ (75 fb).  Set RAX=1 so the next
+                             * DEC makes it 0 and JNZ falls through.  This makes calibrate_delay()
+                             * and other busy-wait loops complete instantly under emulation.
+                             * NOTE: No s_uLastAccelRip check here — __delay() is called
+                             * repeatedly at the same address and must be accelerated each time. */
+                            if (s_cSameRip == 10)
+                            {
+                                uint8_t abCode2[4];
+                                RT_ZERO(abCode2);
+                                PGMPhysSimpleReadGCPtr(pVCpu, abCode2, curRip, sizeof(abCode2));
+
+                                if (abCode2[0] == 0x75 && abCode2[1] == 0xfb)
+                                {
+                                    /* JNZ -5: loop body is 3 bytes before this JNZ.
+                                     * Read the 3-byte instruction to identify the counter register. */
+                                    uint8_t abPrev[3];
+                                    RT_ZERO(abPrev);
+                                    PGMPhysSimpleReadGCPtr(pVCpu, abPrev, curRip - 3, sizeof(abPrev));
+
+                                    const char *pszReg = NULL;
+                                    if (abPrev[0] == 0x48 && abPrev[1] == 0xff && abPrev[2] == 0xc8)
+                                    {   /* dec rax */
+                                        pVCpu->cpum.GstCtx.rax = 1;
+                                        pszReg = "RAX";
+                                    }
+                                    else if (abPrev[0] == 0x48 && abPrev[1] == 0xff && abPrev[2] == 0xc9)
+                                    {   /* dec rcx */
+                                        pVCpu->cpum.GstCtx.rcx = 1;
+                                        pszReg = "RCX";
+                                    }
+                                    else if (abPrev[0] == 0xff && abPrev[2] == 0xc8)
+                                    {   /* dec eax (no REX) */
+                                        pVCpu->cpum.GstCtx.rax = 1;
+                                        pszReg = "EAX";
+                                    }
+
+                                    if (pszReg)
+                                    {
+                                        RTPrintf("[DELAY-ACCEL] Skipping __delay() loop at RIP=%#llx, set %s=1, insns=%llu\n",
+                                            (unsigned long long)curRip, pszReg,
+                                            (unsigned long long)g_cWasmVirtualInstructions);
+                                        RTStrmFlush(g_pStdOut);
+                                    }
+                                }
+                                else if (abCode2[0] == 0x48 && abCode2[1] == 0xff && abCode2[2] == 0xc8)
+                                {
+                                    /* Stuck on DEC RAX (before JNZ).  Check if JNZ follows. */
+                                    if (abCode2[3] == 0x75)
+                                    {
+                                        pVCpu->cpum.GstCtx.rax = 1;
+                                        RTPrintf("[DELAY-ACCEL] Skipping __delay() loop at RIP=%#llx (dec rax), set RAX=1, insns=%llu\n",
+                                            (unsigned long long)curRip,
+                                            (unsigned long long)g_cWasmVirtualInstructions);
+                                        RTStrmFlush(g_pStdOut);
+                                    }
+                                }
+                            }
                         }
 
                         RTStrmFlush(g_pStdOut);

@@ -62,6 +62,9 @@
 #include <iprt/assert.h>
 #include <iprt/string.h>
 #include <iprt/x86.h>
+#ifdef __EMSCRIPTEN__
+# include <iprt/stream.h>
+#endif
 
 #include "IEMInline.h"
 #include "IEMInline-x86.h"
@@ -7765,6 +7768,18 @@ IEM_CIMPL_DEF_0(iemCImpl_hlt)
     }
 
     ICORE(pVCpu).cPotentialExits++;
+
+#ifdef __EMSCRIPTEN__
+    {
+        extern volatile uint64_t g_cWasmVirtualInstructions;
+        RTPrintf("[HLT] EIP=%#llx IF=%d FFs=%#RX64 insns=%llu\n",
+                 (unsigned long long)pVCpu->cpum.GstCtx.rip,
+                 !!(pVCpu->cpum.GstCtx.eflags.u & X86_EFL_IF),
+                 pVCpu->fLocalForcedActions,
+                 (unsigned long long)g_cWasmVirtualInstructions);
+        RTStrmFlush(g_pStdOut);
+    }
+#endif
 
     /** @todo finish: This ASSUMES that iemRegAddToRipAndFinishingClearingRF won't
      * be returning any status codes relating to non-guest events being raised, as

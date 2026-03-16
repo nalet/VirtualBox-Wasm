@@ -11595,6 +11595,17 @@ function invoke_ijji(index, a1, a2, a3) {
   }
 }
 
+function invoke_ij(index, a1) {
+  var sp = stackSave();
+  try {
+    return getWasmTableEntry(Number(index))(a1);
+  } catch (e) {
+    stackRestore(sp);
+    if (e !== e + 0) throw e;
+    _setThrew(1, 0);
+  }
+}
+
 function invoke_ijijjj(index, a1, a2, a3, a4, a5) {
   var sp = stackSave();
   try {
@@ -11622,17 +11633,6 @@ function invoke_vjiijj(index, a1, a2, a3, a4, a5) {
   var sp = stackSave();
   try {
     getWasmTableEntry(Number(index))(a1, a2, a3, a4, a5);
-  } catch (e) {
-    stackRestore(sp);
-    if (e !== e + 0) throw e;
-    _setThrew(1, 0);
-  }
-}
-
-function invoke_ij(index, a1) {
-  var sp = stackSave();
-  try {
-    return getWasmTableEntry(Number(index))(a1);
   } catch (e) {
     stackRestore(sp);
     if (e !== e + 0) throw e;

@@ -1192,6 +1192,16 @@ static VBOXSTRICTRC emR3RecompilerExecute(PVM pVM, PVMCPU pVCpu, bool fWasHalted
          */
         if (rcStrict != VINF_SUCCESS)
         {
+#ifdef __EMSCRIPTEN__
+            {
+                extern volatile uint64_t g_cWasmVirtualInstructions;
+                RTPrintf("[EM-IEM-RC] IEMExecLots returned rc=%d (%#x) EIP=%#llx insns=%llu\n",
+                         (int)rcStrict, (unsigned)(int)rcStrict,
+                         (unsigned long long)pVCpu->cpum.GstCtx.rip,
+                         (unsigned long long)g_cWasmVirtualInstructions);
+                RTStrmFlush(g_pStdOut);
+            }
+#endif
 #ifndef VBOX_VMM_TARGET_ARMV8
             if (rcStrict == VINF_EM_EMULATE_SPLIT_LOCK)
                 rcStrict = emR3ExecuteSplitLockInstruction(pVM, pVCpu);
@@ -2430,6 +2440,13 @@ VMMR3_INT_DECL(int) EMR3ExecuteVM(PVM pVM, PVMCPU pVCpu)
                  */
                 case VINF_EM_HALT:
                     Log2(("EMR3ExecuteVM: VINF_EM_HALT: %d -> %d\n", enmOldState, EMSTATE_HALTED));
+#ifdef __EMSCRIPTEN__
+                    RTPrintf("[EM-HALT] entering HALTED state IF=%d FFs=%#RX64 EIP=%#llx\n",
+                             !!(CPUMGetGuestEFlags(pVCpu) & X86_EFL_IF),
+                             pVCpu->fLocalForcedActions,
+                             (unsigned long long)pVCpu->cpum.GstCtx.rip);
+                    RTStrmFlush(g_pStdOut);
+#endif
                     pVCpu->em.s.enmState = EMSTATE_HALTED;
                     break;
 
@@ -2569,6 +2586,11 @@ VMMR3_INT_DECL(int) EMR3ExecuteVM(PVM pVM, PVMCPU pVCpu)
                  * Triple fault.
                  */
                 case VINF_EM_TRIPLE_FAULT:
+#ifdef __EMSCRIPTEN__
+                    RTPrintf("[EM-TRIPLE] Triple fault! EIP=%#llx FFs=%#RX64\n",
+                             (unsigned long long)pVCpu->cpum.GstCtx.rip, pVCpu->fLocalForcedActions);
+                    RTStrmFlush(g_pStdOut);
+#endif
                     if (!pVM->em.s.fGuruOnTripleFault)
                     {
                         Log(("EMR3ExecuteVM: VINF_EM_TRIPLE_FAULT: CPU reset...\n"));
@@ -2592,6 +2614,11 @@ VMMR3_INT_DECL(int) EMR3ExecuteVM(PVM pVM, PVMCPU pVCpu)
                  * included in this.
                  */
                 default:
+#ifdef __EMSCRIPTEN__
+                    RTPrintf("[EM-RC] Unexpected rc=%d (%#x) oldState=%d EIP=%#llx\n",
+                             rc, rc, enmOldState, (unsigned long long)pVCpu->cpum.GstCtx.rip);
+                    RTStrmFlush(g_pStdOut);
+#endif
                     if (RT_SUCCESS_NP(rc))
                     {
                         AssertMsgFailed(("Unexpected warning or informational status code %Rra!\n", rc));
@@ -2796,6 +2823,13 @@ VMMR3_INT_DECL(int) EMR3ExecuteVM(PVM pVM, PVMCPU pVCpu)
 #elif defined(VBOX_VMM_TARGET_X86)
                         const uint32_t fWaitHalted = (CPUMGetGuestEFlags(pVCpu) & X86_EFL_IF) ? 0 : VMWAITHALTED_F_IGNORE_IRQS;
 #endif
+#ifdef __EMSCRIPTEN__
+                        RTPrintf("[EM-WAIT] VMR3WaitHalted IF=%d fWaitHalted=%#x FFs=%#RX64 EIP=%#llx\n",
+                                 !!(CPUMGetGuestEFlags(pVCpu) & X86_EFL_IF), fWaitHalted,
+                                 pVCpu->fLocalForcedActions,
+                                 (unsigned long long)pVCpu->cpum.GstCtx.rip);
+                        RTStrmFlush(g_pStdOut);
+#endif
                         /* Drain keyboard scancodes before waiting — otherwise
                            keyboard input (typed while CPU is halted) never reaches
                            the i8042 controller and no IRQ1 fires to wake HLT. */
@@ -2886,6 +2920,11 @@ VMMR3_INT_DECL(int) EMR3ExecuteVM(PVM pVM, PVMCPU pVCpu)
                  */
                 case EMSTATE_GURU_MEDITATION:
                 {
+#ifdef __EMSCRIPTEN__
+                    RTPrintf("[EM-GURU] Guru meditation! rc=%d EIP=%#llx FFs=%#RX64\n",
+                             rc, (unsigned long long)pVCpu->cpum.GstCtx.rip, pVCpu->fLocalForcedActions);
+                    RTStrmFlush(g_pStdOut);
+#endif
                     TMR3NotifySuspend(pVM, pVCpu);
                     VMR3SetGuruMeditation(pVM); /* This notifies the other EMTs. */
                     VMMR3FatalDump(pVM, pVCpu, rc);

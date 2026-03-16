@@ -1546,13 +1546,25 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                                                 RTPrintf("[DELAY-STK] RSP+%02x: %#018llx\n",
                                                     si*8, (unsigned long long)auStk[si]);
                                         }
-                                        /* Log periodically (every 100 slow-path firings) */
+                                        /* Log and dump stack periodically */
                                         {
                                             static unsigned s_cDelayLogs = 0;
-                                            if (s_cDelayLogs++ < 5 || (s_cDelayLogs % 100) == 0)
-                                                RTPrintf("[DELAY-ACCEL] Skipping __delay() loop at RIP=%#llx, set %s=1, insns=%llu\n",
-                                                    (unsigned long long)curRip, pszReg,
-                                                    (unsigned long long)g_cWasmVirtualInstructions);
+                                            s_cDelayLogs++;
+                                            if (s_cDelayLogs <= 5 || (s_cDelayLogs % 500) == 0)
+                                            {
+                                                RTPrintf("[DELAY-ACCEL] #%u RIP=%#llx %s=1 insns=%llu RAX_was=%#llx\n",
+                                                    s_cDelayLogs, (unsigned long long)curRip, pszReg,
+                                                    (unsigned long long)g_cWasmVirtualInstructions,
+                                                    (unsigned long long)pVCpu->cpum.GstCtx.rax);
+                                                /* Dump return address chain */
+                                                uint64_t auStk2[8];
+                                                RT_ZERO(auStk2);
+                                                PGMPhysSimpleReadGCPtr(pVCpu, auStk2, pVCpu->cpum.GstCtx.rsp, sizeof(auStk2));
+                                                RTPrintf("[DELAY-STK] ret=%#llx caller=%#llx RSP=%#llx\n",
+                                                    (unsigned long long)auStk2[0],
+                                                    (unsigned long long)auStk2[1],
+                                                    (unsigned long long)pVCpu->cpum.GstCtx.rsp);
+                                            }
                                         }
                                         RTStrmFlush(g_pStdOut);
                                     }

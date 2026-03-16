@@ -1342,83 +1342,113 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                                 RTStrmFlush(g_pStdOut);
                             }
 
-                            /* CRC32 loop accelerator: fires at 20 intervals (20M insns at same RIP) */
+                            /* CRC32 loop accelerator: fires at 20 intervals (20M insns at same RIP).
+                             * Searches the code near the stuck RIP for the CRC32 pattern
+                             * (xor ecx,[r12+r9*4]; cmp rdi,r8; jnz).  When found, computes
+                             * the CRC from scratch over the entire output buffer in native C++
+                             * code, then sets registers and advances RIP past the loop.
+                             * This avoids mid-instruction state issues since the from-scratch
+                             * CRC always matches the loop's final result. */
                             if (s_cSameRip >= 20 && curRip != s_uLastAccelRip)
                             {
-                                uint8_t abCode[16];
+                                /* Read 32 bytes at the stuck RIP to search for the CRC pattern */
+                                uint8_t abCode[32];
                                 RT_ZERO(abCode);
                                 PGMPhysSimpleReadGCPtr(pVCpu, abCode, curRip, sizeof(abCode));
 
-                                /* Pattern: 43 33 0c 8c  xor ecx,[r12+r9*4]
-                                 *          4c 39 c7     cmp rdi, r8
-                                 *          75 xx        jnz <back>
-                                 * This is the gzip CRC32 verification loop in the kernel decompressor. */
-                                if (abCode[0] == 0x43 && abCode[1] == 0x33
-                                    && abCode[2] == 0x0c && abCode[3] == 0x8c
-                                    && abCode[4] == 0x4c && abCode[5] == 0x39
-                                    && abCode[6] == 0xc7 && abCode[7] == 0x75)
+                                /* Search for: 43 33 0c 8c 4c 39 c7 75
+                                 *   xor ecx,[r12+r9*4]; cmp rdi,r8; jnz */
+                                int iPatOfs = -1;
+                                for (int i = 0; i < 24; i++)
+                                {
+                                    if (abCode[i]   == 0x43 && abCode[i+1] == 0x33
+                                        && abCode[i+2] == 0x0c && abCode[i+3] == 0x8c
+                                        && abCode[i+4] == 0x4c && abCode[i+5] == 0x39
+                                        && abCode[i+6] == 0xc7 && abCode[i+7] == 0x75)
+                                    {
+                                        iPatOfs = i;
+                                        break;
+                                    }
+                                }
+
+                                if (iPatOfs >= 0)
                                 {
                                     s_uLastAccelRip = curRip;
-                                    uint64_t rdi = pVCpu->cpum.GstCtx.rdi;
                                     uint64_t r8  = pVCpu->cpum.GstCtx.r8;
-                                    uint64_t r9  = pVCpu->cpum.GstCtx.r9;
+                                    uint64_t rsi = pVCpu->cpum.GstCtx.rsi;
                                     uint64_t r12 = pVCpu->cpum.GstCtx.r12;
-                                    uint32_t crc = (uint32_t)pVCpu->cpum.GstCtx.rcx;
 
-                                    RTPrintf("[CRC-ACCEL] Detected CRC32 loop at RIP=%#llx\n", (unsigned long long)curRip);
-                                    RTPrintf("[CRC-ACCEL] rdi=%#llx r8=%#llx remain=%llu bytes, crc=%#x r9=%#llx\n",
-                                        (unsigned long long)rdi, (unsigned long long)r8,
-                                        (unsigned long long)(r8 - rdi), crc, (unsigned long long)r9);
+                                    /* Derive output buffer: R8 = output + output_len,
+                                     * RSI = output_len → output_start = R8 - RSI */
+                                    uint64_t outputStart = r8 - rsi;
+                                    uint64_t outputLen   = rsi;
 
-                                    /* Step 1: Complete current iteration (XOR hasn't executed yet).
-                                     * At this point ECX = old_crc >> 8, R9 = table index.
-                                     * The XOR will do: ecx ^= table[r9 & 0xFF] */
-                                    uint32_t auTable[256];
-                                    RT_ZERO(auTable);
-                                    int rc = PGMPhysSimpleReadGCPtr(pVCpu, auTable, r12, sizeof(auTable));
-                                    if (RT_SUCCESS(rc))
+                                    /* RIP after loop: past XOR(4)+CMP(3)+JNZ(2) from pattern */
+                                    uint64_t ripAfterLoop = curRip + (uint64_t)iPatOfs + 9;
+
+                                    RTPrintf("[CRC-ACCEL] Detected CRC32 loop at RIP=%#llx (pattern at +%d)\n",
+                                        (unsigned long long)curRip, iPatOfs);
+                                    RTPrintf("[CRC-ACCEL] output=%#llx len=%llu r8=%#llx\n",
+                                        (unsigned long long)outputStart, (unsigned long long)outputLen,
+                                        (unsigned long long)r8);
+
+                                    if (outputLen > 0 && outputLen < 64U * 1024U * 1024U)
                                     {
-                                        crc ^= auTable[r9 & 0xFF];
-
-                                        /* Step 2: Compute CRC for remaining bytes (rdi to r8) */
-                                        uint64_t cbRemain = r8 > rdi ? r8 - rdi : 0;
-                                        if (cbRemain > 0 && cbRemain < 64U * 1024U * 1024U)
+                                        /* Read CRC32 table from guest memory (R12, 256 entries) */
+                                        uint32_t auTable[256];
+                                        RT_ZERO(auTable);
+                                        int rc = PGMPhysSimpleReadGCPtr(pVCpu, auTable, r12, sizeof(auTable));
+                                        if (RT_SUCCESS(rc))
                                         {
-                                            uint8_t *pbData = (uint8_t *)RTMemAlloc((size_t)cbRemain);
-                                            if (pbData)
+                                            /* Compute CRC32 from scratch over the full output.
+                                             * Initial CRC = 0xFFFFFFFF (standard gzip pre-condition).
+                                             * Read in 64KB chunks to limit memory usage. */
+                                            uint32_t crc = 0xFFFFFFFFU;
+                                            const size_t cbChunk = 64U * 1024U;
+                                            uint8_t *pbBuf = (uint8_t *)RTMemAlloc(cbChunk);
+                                            bool fOk = pbBuf != NULL;
+
+                                            if (fOk)
                                             {
-                                                rc = PGMPhysSimpleReadGCPtr(pVCpu, pbData, rdi, (size_t)cbRemain);
-                                                if (RT_SUCCESS(rc))
+                                                uint64_t addr = outputStart;
+                                                while (addr < r8)
                                                 {
-                                                    for (uint64_t i = 0; i < cbRemain; i++)
-                                                        crc = (crc >> 8) ^ auTable[(crc ^ pbData[i]) & 0xFF];
-
-                                                    /* Step 3: Update guest state */
-                                                    pVCpu->cpum.GstCtx.rcx = crc;
-                                                    pVCpu->cpum.GstCtx.rdi = r8;
-                                                    /* Advance RIP past: XOR(4)+CMP(3)+JNZ(2) = 9 bytes
-                                                     * → lands on the 'not ecx' instruction */
-                                                    pVCpu->cpum.GstCtx.rip = curRip + 9;
-
-                                                    RTPrintf("[CRC-ACCEL] OK! Computed CRC=%#x over %llu bytes in native code\n",
-                                                        crc, (unsigned long long)cbRemain);
-                                                    RTPrintf("[CRC-ACCEL] Advanced RIP to %#llx (not ecx), saved ~%lluM insns\n",
-                                                        (unsigned long long)pVCpu->cpum.GstCtx.rip,
-                                                        (unsigned long long)(cbRemain * 10 / 1000000));
+                                                    size_t cbRead = (size_t)RT_MIN((uint64_t)cbChunk, r8 - addr);
+                                                    rc = PGMPhysSimpleReadGCPtr(pVCpu, pbBuf, addr, cbRead);
+                                                    if (RT_FAILURE(rc))
+                                                    {
+                                                        RTPrintf("[CRC-ACCEL] FAILED: PGMPhysRead at %#llx rc=%d\n",
+                                                            (unsigned long long)addr, rc);
+                                                        fOk = false;
+                                                        break;
+                                                    }
+                                                    for (size_t i = 0; i < cbRead; i++)
+                                                        crc = (crc >> 8) ^ auTable[(crc ^ pbBuf[i]) & 0xFF];
+                                                    addr += cbRead;
                                                 }
-                                                else
-                                                    RTPrintf("[CRC-ACCEL] FAILED: PGMPhysRead data rc=%d\n", rc);
-                                                RTMemFree(pbData);
+                                                RTMemFree(pbBuf);
                                             }
-                                            else
-                                                RTPrintf("[CRC-ACCEL] FAILED: alloc %llu bytes\n", (unsigned long long)cbRemain);
+
+                                            if (fOk)
+                                            {
+                                                /* Update guest state: ECX = raw CRC (before NOT),
+                                                 * RDI = R8 (loop exit condition), RIP past the loop */
+                                                pVCpu->cpum.GstCtx.rcx = crc;
+                                                pVCpu->cpum.GstCtx.rdi = r8;
+                                                pVCpu->cpum.GstCtx.rip = ripAfterLoop;
+
+                                                RTPrintf("[CRC-ACCEL] OK! CRC=%#x over %llu bytes, RIP→%#llx\n",
+                                                    crc, (unsigned long long)outputLen,
+                                                    (unsigned long long)ripAfterLoop);
+                                            }
                                         }
                                         else
-                                            RTPrintf("[CRC-ACCEL] Skip: remain=%llu (zero or too large)\n",
-                                                (unsigned long long)cbRemain);
+                                            RTPrintf("[CRC-ACCEL] FAILED: read CRC table at %#llx rc=%d\n",
+                                                (unsigned long long)r12, rc);
                                     }
                                     else
-                                        RTPrintf("[CRC-ACCEL] FAILED: PGMPhysRead table rc=%d\n", rc);
+                                        RTPrintf("[CRC-ACCEL] Skip: outputLen=%llu out of range\n",
+                                            (unsigned long long)outputLen);
                                     RTStrmFlush(g_pStdOut);
                                 }
                             }

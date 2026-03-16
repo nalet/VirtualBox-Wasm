@@ -1197,7 +1197,12 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                  * TMAllVirtual.cpp reads this to drive timer expiration under Wasm. */
                 {
                     extern volatile uint64_t g_cWasmVirtualInstructions;
-                    g_cWasmVirtualInstructions = pVCpu->iem.s.cInstructions;
+                    /* Track virtual time boost separately so we don't corrupt
+                     * IEM's internal instruction counter (pVCpu->iem.s.cInstructions).
+                     * The boost is accumulated from skipped delay loops and added to
+                     * the real counter to form the virtual counter that drives timers. */
+                    static uint64_t s_cVirtualTimeBoost = 0;
+                    g_cWasmVirtualInstructions = pVCpu->iem.s.cInstructions + s_cVirtualTimeBoost;
 
                     /* High-frequency __delay() fast path: once we've identified the
                      * delay loop address, check every 1000 instructions and skip it
@@ -1220,11 +1225,8 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                                  * init code eventually exit instead of spinning forever. */
                                 uint64_t remaining = pVCpu->cpum.GstCtx.rax;
                                 if (remaining > 1)
-                                {
-                                    uint64_t skippedInsns = remaining * 2;
-                                    g_cWasmVirtualInstructions += skippedInsns;
-                                    pVCpu->iem.s.cInstructions += skippedInsns;
-                                }
+                                    s_cVirtualTimeBoost += remaining * 2;
+                                g_cWasmVirtualInstructions = pVCpu->iem.s.cInstructions + s_cVirtualTimeBoost;
                                 pVCpu->cpum.GstCtx.rax = 1;
                             }
                         }

@@ -1207,6 +1207,17 @@ static DECLCALLBACK(VBOXSTRICTRC) ioapicMmioRead(PPDMDEVINS pDevIns, void *pvUse
     }
 
     LogFlow(("IOAPIC: ioapicMmioRead: offReg=%#x, returns %#RX32\n", offReg, *puValue));
+#ifdef __EMSCRIPTEN__
+    {
+        static uint32_t s_cMmioRd = 0;
+        if (++s_cMmioRd <= 50 || (s_cMmioRd % 1000) == 0)
+        {
+            RTPrintf("[IOAPIC-MMIO-R] #%u off=0x%x val=0x%08x idx=%u\n",
+                     s_cMmioRd, (unsigned)offReg, *puValue, pThis->u8Index);
+            RTStrmFlush(g_pStdOut);
+        }
+    }
+#endif
     return rc;
 }
 
@@ -1230,6 +1241,17 @@ static DECLCALLBACK(VBOXSTRICTRC) ioapicMmioWrite(PPDMDEVINS pDevIns, void *pvUs
     uint32_t const offReg = off & IOAPIC_MMIO_REG_MASK;
 
     LogFlow(("IOAPIC: ioapicMmioWrite: pThis=%p off=%#RGp cb=%u uValue=%#RX32\n", pThis, off, cb, uValue));
+#ifdef __EMSCRIPTEN__
+    {
+        static uint32_t s_cMmioWr = 0;
+        if (++s_cMmioWr <= 50 || (s_cMmioWr % 1000) == 0)
+        {
+            RTPrintf("[IOAPIC-MMIO-W] #%u off=0x%x val=0x%08x idx=%u\n",
+                     s_cMmioWr, (unsigned)offReg, uValue, pThis->u8Index);
+            RTStrmFlush(g_pStdOut);
+        }
+    }
+#endif
     switch (offReg)
     {
         case IOAPIC_DIRECT_OFF_INDEX:

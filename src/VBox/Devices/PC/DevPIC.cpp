@@ -273,6 +273,15 @@ static int pic_get_irq(PPICSTATE pPic)
     DumpPICState(pPic, "pic_get_irq");
 
     mask = pPic->irr & ~pPic->imr;
+#ifdef __EMSCRIPTEN__
+    /* Force IRQ 0 (PIT timer) through even if masked in IMR.
+     * 64-bit kernels with APIC/IOAPIC never reprogram the PIC,
+     * leaving IRQ 0 masked. But if the kernel fails to program
+     * the IOAPIC (as happens in our Wasm VM), PIT timer interrupts
+     * must flow through PIC → LAPIC LINT0 (ExtINT) path. */
+    if (pPic->idxPic == 0 && (pPic->irr & 1) && !(mask & 1))
+        mask |= 1;
+#endif
     priority = get_priority(pPic, mask);
     Log(("pic_get_irq: priority=%x\n", priority));
     if (priority == 8)

@@ -276,6 +276,14 @@ static DECLCALLBACK(int) vboxWasmCfgmConstructor(PUVM pUVM, PVM pVM, PCVMMR3VTAB
     INSERT_NODE(pInst, "Config", &pCfg);
     INSERT_INTEGER(pCfg, "DMA", 0xFF);  /* Skip DMA — no floppy drives attached */
 
+    /* ── ACPI ── */
+    INSERT_NODE(pDevices, "acpi", &pDev);
+    INSERT_NODE(pDev, "0", &pInst);
+    INSERT_INTEGER(pInst, "Trusted", 1);
+    INSERT_NODE(pInst, "Config", &pCfg);
+    INSERT_INTEGER(pCfg, "IOAPIC", 1);
+    INSERT_INTEGER(pCfg, "NumCPUs", 1);
+
     /* ── VMMDev ── */
     INSERT_NODE(pDevices, "VMMDev", &pDev);
     INSERT_NODE(pDev, "0", &pInst);

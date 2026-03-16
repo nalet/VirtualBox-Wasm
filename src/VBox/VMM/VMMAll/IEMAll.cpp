@@ -1214,6 +1214,17 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                             int64_t d = (int64_t)(rip - s_uDelayRip);
                             if (d >= -4 && d <= 4)
                             {
+                                /* Advance virtual time by the number of instructions we're skipping.
+                                 * Each loop iteration is 2 instructions (dec + jnz).  This ensures
+                                 * the timer system sees time passing, so timeout loops in hardware
+                                 * init code eventually exit instead of spinning forever. */
+                                uint64_t remaining = pVCpu->cpum.GstCtx.rax;
+                                if (remaining > 1)
+                                {
+                                    uint64_t skippedInsns = remaining * 2;
+                                    g_cWasmVirtualInstructions += skippedInsns;
+                                    pVCpu->iem.s.cInstructions += skippedInsns;
+                                }
                                 pVCpu->cpum.GstCtx.rax = 1;
                             }
                         }

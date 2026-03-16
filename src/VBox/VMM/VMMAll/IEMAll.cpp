@@ -1311,7 +1311,12 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                             static unsigned s_cSameRip = 0;
                             static uint64_t s_uLastAccelRip = 0;
                             uint64_t curRip = pVCpu->cpum.GstCtx.rip;
-                            if (curRip == s_uPrevRip)
+                            /* Use range check (±8 bytes) instead of exact match.
+                             * A tight 2-instruction loop like dec rax; jnz causes the
+                             * 1M-instruction sample to alternate between the two addresses,
+                             * preventing exact match from ever reaching the threshold. */
+                            int64_t ripDelta = (int64_t)(curRip - s_uPrevRip);
+                            if (ripDelta >= -8 && ripDelta <= 8)
                                 s_cSameRip++;
                             else
                             {

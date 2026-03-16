@@ -1535,10 +1535,25 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                                             s_uDelayRip = curRip;
                                             RTPrintf("[DELAY-ACCEL] Learned delay RIP=%#llx, enabling fast-path\n",
                                                 (unsigned long long)curRip);
+                                            /* Dump stack to identify caller chain */
+                                            uint64_t auStk[16];
+                                            RT_ZERO(auStk);
+                                            PGMPhysSimpleReadGCPtr(pVCpu, auStk, pVCpu->cpum.GstCtx.rsp, sizeof(auStk));
+                                            RTPrintf("[DELAY-ACCEL] RSP=%#llx RBP=%#llx\n",
+                                                (unsigned long long)pVCpu->cpum.GstCtx.rsp,
+                                                (unsigned long long)pVCpu->cpum.GstCtx.rbp);
+                                            for (int si = 0; si < 16; si++)
+                                                RTPrintf("[DELAY-STK] RSP+%02x: %#018llx\n",
+                                                    si*8, (unsigned long long)auStk[si]);
                                         }
-                                        RTPrintf("[DELAY-ACCEL] Skipping __delay() loop at RIP=%#llx, set %s=1, insns=%llu\n",
-                                            (unsigned long long)curRip, pszReg,
-                                            (unsigned long long)g_cWasmVirtualInstructions);
+                                        /* Log periodically (every 100 slow-path firings) */
+                                        {
+                                            static unsigned s_cDelayLogs = 0;
+                                            if (s_cDelayLogs++ < 5 || (s_cDelayLogs % 100) == 0)
+                                                RTPrintf("[DELAY-ACCEL] Skipping __delay() loop at RIP=%#llx, set %s=1, insns=%llu\n",
+                                                    (unsigned long long)curRip, pszReg,
+                                                    (unsigned long long)g_cWasmVirtualInstructions);
+                                        }
                                         RTStrmFlush(g_pStdOut);
                                     }
                                 }

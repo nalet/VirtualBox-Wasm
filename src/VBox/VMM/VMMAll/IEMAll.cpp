@@ -1453,14 +1453,12 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                                 }
                             }
 
-                            /* __delay() loop accelerator: fires at 10 intervals (10M insns).
+                            /* __delay() loop accelerator: fires after 2M insns at same RIP.
                              * Detects the kernel's __delay() function: dec rax; jnz <-5>.
-                             * The stuck RIP lands on the JNZ (75 fb).  Set RAX=1 so the next
-                             * DEC makes it 0 and JNZ falls through.  This makes calibrate_delay()
-                             * and other busy-wait loops complete instantly under emulation.
-                             * NOTE: No s_uLastAccelRip check here — __delay() is called
-                             * repeatedly at the same address and must be accelerated each time. */
-                            if (s_cSameRip == 10)
+                             * Set RAX=1 so the loop exits on the next iteration.
+                             * Fires repeatedly (every interval once threshold met) since
+                             * __delay() is called many times at the same function address. */
+                            if (s_cSameRip >= 2)
                             {
                                 uint8_t abCode2[4];
                                 RT_ZERO(abCode2);

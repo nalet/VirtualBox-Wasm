@@ -7814,12 +7814,13 @@ IEM_CIMPL_DEF_0(iemCImpl_hlt)
             RTPrintf("[HLT-STK] RSP+20=%#llx RSP+28=%#llx RSP+30=%#llx RSP+38=%#llx\n",
                      (unsigned long long)aStack[4], (unsigned long long)aStack[5],
                      (unsigned long long)aStack[6], (unsigned long long)aStack[7]);
-            /* Try to read memory at R8 and RBP as potential panic message strings */
-            for (int iReg = 0; iReg < 4; iReg++)
+            /* Try to read memory at various registers as potential panic message strings */
+            for (int iReg = 0; iReg < 5; iReg++)
             {
                 uint64_t addr = iReg == 0 ? pVCpu->cpum.GstCtx.r8
                               : iReg == 1 ? pVCpu->cpum.GstCtx.rdi
                               : iReg == 2 ? pVCpu->cpum.GstCtx.rsi
+                              : iReg == 3 ? pVCpu->cpum.GstCtx.r9
                               : aStack[0]; /* return address area */
                 char szBuf[128];
                 RT_ZERO(szBuf);
@@ -7833,7 +7834,7 @@ IEM_CIMPL_DEF_0(iemCImpl_hlt)
                     szBuf[sizeof(szBuf) - 1] = '\0';
                     if (szBuf[0])
                         RTPrintf("[HLT-MEM] %s @ %#llx: \"%s\"\n",
-                                 iReg == 0 ? "R8" : iReg == 1 ? "RDI" : iReg == 2 ? "RSI" : "STK0",
+                                 iReg == 0 ? "R8" : iReg == 1 ? "RDI" : iReg == 2 ? "RSI" : iReg == 3 ? "R9" : "STK0",
                                  (unsigned long long)addr, szBuf);
                 }
             }
@@ -7854,6 +7855,36 @@ IEM_CIMPL_DEF_0(iemCImpl_hlt)
             RTPrintf("[HLT-FRM] RBP+0=%#llx RBP+8=%#llx RBP+10=%#llx RBP+18=%#llx\n",
                      (unsigned long long)aFrame[0], (unsigned long long)aFrame[1],
                      (unsigned long long)aFrame[2], (unsigned long long)aFrame[3]);
+            /* Read panic message buffer at R9 (below RSP, but still mapped) */
+            {
+                char szPanic[256];
+                RT_ZERO(szPanic);
+                int rc2 = PGMPhysSimpleReadGCPtr(pVCpu, szPanic, pVCpu->cpum.GstCtx.r9, sizeof(szPanic) - 1);
+                if (RT_SUCCESS(rc2))
+                {
+                    for (int j = 0; j < (int)sizeof(szPanic) - 1; j++)
+                        if (szPanic[j] < 0x20 || szPanic[j] > 0x7e)
+                            szPanic[j] = szPanic[j] ? '.' : '\0';
+                    szPanic[sizeof(szPanic) - 1] = '\0';
+                    RTPrintf("[HLT-PANIC] R9 buffer: \"%s\"\n", szPanic);
+                }
+            }
+            /* Also try scanning above R9 for "panic" text */
+            {
+                char szScan[512];
+                RT_ZERO(szScan);
+                /* Read the whole stack area around the panic buffer */
+                uint64_t scanAddr = pVCpu->cpum.GstCtx.r9 - 0x40;
+                int rc2 = PGMPhysSimpleReadGCPtr(pVCpu, szScan, scanAddr, sizeof(szScan) - 1);
+                if (RT_SUCCESS(rc2))
+                {
+                    for (int j = 0; j < (int)sizeof(szScan) - 1; j++)
+                        if (szScan[j] < 0x20 || szScan[j] > 0x7e)
+                            szScan[j] = '.';
+                    szScan[sizeof(szScan) - 1] = '\0';
+                    RTPrintf("[HLT-SCAN] stack area: \"%.200s\"\n", szScan);
+                }
+            }
         }
         RTStrmFlush(g_pStdOut);
     }

@@ -7814,6 +7814,46 @@ IEM_CIMPL_DEF_0(iemCImpl_hlt)
             RTPrintf("[HLT-STK] RSP+20=%#llx RSP+28=%#llx RSP+30=%#llx RSP+38=%#llx\n",
                      (unsigned long long)aStack[4], (unsigned long long)aStack[5],
                      (unsigned long long)aStack[6], (unsigned long long)aStack[7]);
+            /* Try to read memory at R8 and RBP as potential panic message strings */
+            for (int iReg = 0; iReg < 4; iReg++)
+            {
+                uint64_t addr = iReg == 0 ? pVCpu->cpum.GstCtx.r8
+                              : iReg == 1 ? pVCpu->cpum.GstCtx.rdi
+                              : iReg == 2 ? pVCpu->cpum.GstCtx.rsi
+                              : aStack[0]; /* return address area */
+                char szBuf[128];
+                RT_ZERO(szBuf);
+                int rc2 = PGMPhysSimpleReadGCPtr(pVCpu, szBuf, addr, sizeof(szBuf) - 1);
+                if (RT_SUCCESS(rc2))
+                {
+                    /* Make printable */
+                    for (int j = 0; j < (int)sizeof(szBuf) - 1; j++)
+                        if (szBuf[j] < 0x20 || szBuf[j] > 0x7e)
+                            szBuf[j] = szBuf[j] ? '.' : '\0';
+                    szBuf[sizeof(szBuf) - 1] = '\0';
+                    if (szBuf[0])
+                        RTPrintf("[HLT-MEM] %s @ %#llx: \"%s\"\n",
+                                 iReg == 0 ? "R8" : iReg == 1 ? "RDI" : iReg == 2 ? "RSI" : "STK0",
+                                 (unsigned long long)addr, szBuf);
+                }
+            }
+            /* Deeper stack dump */
+            uint64_t aStack2[16];
+            RT_ZERO(aStack2);
+            PGMPhysSimpleReadGCPtr(pVCpu, aStack2, pVCpu->cpum.GstCtx.rsp + 0x40, sizeof(aStack2));
+            RTPrintf("[HLT-STK2] RSP+40=%#llx RSP+48=%#llx RSP+50=%#llx RSP+58=%#llx\n",
+                     (unsigned long long)aStack2[0], (unsigned long long)aStack2[1],
+                     (unsigned long long)aStack2[2], (unsigned long long)aStack2[3]);
+            RTPrintf("[HLT-STK2] RSP+60=%#llx RSP+68=%#llx RSP+70=%#llx RSP+78=%#llx\n",
+                     (unsigned long long)aStack2[4], (unsigned long long)aStack2[5],
+                     (unsigned long long)aStack2[6], (unsigned long long)aStack2[7]);
+            /* Read memory at the RBP frame pointer */
+            uint64_t aFrame[8];
+            RT_ZERO(aFrame);
+            PGMPhysSimpleReadGCPtr(pVCpu, aFrame, pVCpu->cpum.GstCtx.rbp, sizeof(aFrame));
+            RTPrintf("[HLT-FRM] RBP+0=%#llx RBP+8=%#llx RBP+10=%#llx RBP+18=%#llx\n",
+                     (unsigned long long)aFrame[0], (unsigned long long)aFrame[1],
+                     (unsigned long long)aFrame[2], (unsigned long long)aFrame[3]);
         }
         RTStrmFlush(g_pStdOut);
     }

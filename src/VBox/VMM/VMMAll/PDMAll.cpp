@@ -44,6 +44,9 @@
 #include <VBox/log.h>
 #include <iprt/asm.h>
 #include <iprt/assert.h>
+#ifdef __EMSCRIPTEN__
+# include <iprt/stream.h>
+#endif
 
 #include "PDMInline.h"
 #include "dtrace/VBoxVMM.h"
@@ -157,6 +160,16 @@ VMMDECL(int) PDMIsaSetIrq(PVMCC pVM, uint8_t u8Irq, uint8_t u8Level, uint32_t uT
     if (pVM->pdm.s.Pic.CTX_SUFF(pDevIns))
     {
         Assert(pVM->pdm.s.Pic.CTX_SUFF(pfnSetIrq));
+#ifdef __EMSCRIPTEN__
+        {
+            static uint32_t s_cIsaToPic = 0;
+            if (++s_cIsaToPic <= 10)
+            {
+                RTPrintf("[PDM-ISA-PIC] #%u irq=%u level=%u\n", s_cIsaToPic, u8Irq, u8Level);
+                RTStrmFlush(g_pStdOut);
+            }
+        }
+#endif
         pVM->pdm.s.Pic.CTX_SUFF(pfnSetIrq)(pVM->pdm.s.Pic.CTX_SUFF(pDevIns), u8Irq, u8Level, uTagSrc);
         rc = VINF_SUCCESS;
     }
@@ -177,9 +190,34 @@ VMMDECL(int) PDMIsaSetIrq(PVMCC pVM, uint8_t u8Irq, uint8_t u8Level, uint32_t uT
         if (u8Irq == 0)
             u8Irq = 2;
 
+#ifdef __EMSCRIPTEN__
+        {
+            static uint32_t s_cIsaToIoapic = 0;
+            if (++s_cIsaToIoapic <= 20 || (s_cIsaToIoapic % 5000) == 0)
+            {
+                RTPrintf("[PDM-ISA-IOAPIC] #%u irq=%u level=%u pDevIns=%p pfnSetIrq=%p\n",
+                         s_cIsaToIoapic, u8Irq, u8Level,
+                         (void *)pVM->pdm.s.IoApic.CTX_SUFF(pDevIns),
+                         (void *)(uintptr_t)pVM->pdm.s.IoApic.CTX_SUFF(pfnSetIrq));
+                RTStrmFlush(g_pStdOut);
+            }
+        }
+#endif
+
         pVM->pdm.s.IoApic.CTX_SUFF(pfnSetIrq)(pVM->pdm.s.IoApic.CTX_SUFF(pDevIns), NIL_PCIBDF, u8Irq, u8Level, uTagSrc);
         rc = VINF_SUCCESS;
     }
+#ifdef __EMSCRIPTEN__
+    else
+    {
+        static uint32_t s_cNoIoapic = 0;
+        if (++s_cNoIoapic <= 5)
+        {
+            RTPrintf("[PDM-ISA] #%u NO IOAPIC! irq=%u level=%u\n", s_cNoIoapic, u8Irq, u8Level);
+            RTStrmFlush(g_pStdOut);
+        }
+    }
+#endif
 #endif
 
     if (!uTagSrc && u8Level == PDM_IRQ_LEVEL_LOW)

@@ -1578,12 +1578,25 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                                         if (s_uDelayRip == 0)
                                         {
                                             s_uDelayRip = curRip;
-                                            RTPrintf("[DELAY-ACCEL] Learned delay RIP=%#llx, enabling fast-path\n",
+                                            RTPrintf("[DELAY-ACCEL] Learned delay RIP=%#llx (dec), enabling fast-path\n",
                                                 (unsigned long long)curRip);
                                         }
-                                        RTPrintf("[DELAY-ACCEL] Skipping __delay() loop at RIP=%#llx (dec rax), set RAX=1, insns=%llu\n",
-                                            (unsigned long long)curRip,
-                                            (unsigned long long)g_cWasmVirtualInstructions);
+                                        /* Periodic log with stack dump */
+                                        {
+                                            static unsigned s_cDecLogs = 0;
+                                            s_cDecLogs++;
+                                            if (s_cDecLogs <= 3 || (s_cDecLogs % 500) == 0)
+                                            {
+                                                uint64_t auStk3[4];
+                                                RT_ZERO(auStk3);
+                                                PGMPhysSimpleReadGCPtr(pVCpu, auStk3, pVCpu->cpum.GstCtx.rsp, sizeof(auStk3));
+                                                RTPrintf("[DELAY-ACCEL] #%u dec-rax RIP=%#llx insns=%llu ret=%#llx caller=%#llx\n",
+                                                    s_cDecLogs, (unsigned long long)curRip,
+                                                    (unsigned long long)g_cWasmVirtualInstructions,
+                                                    (unsigned long long)auStk3[0],
+                                                    (unsigned long long)auStk3[1]);
+                                            }
+                                        }
                                         RTStrmFlush(g_pStdOut);
                                     }
                                 }

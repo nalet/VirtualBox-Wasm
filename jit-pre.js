@@ -1266,6 +1266,74 @@ function execBlock(cpuP, ramB, maxInsn) {
       console.log('[JIT-BOOT] Direct PM boot to startup_32 at 0x' + code32addr.toString(16));
       console.log('[JIT-BOOT] ramdisk=0x' + rdImg.toString(16) + ' size=0x' + rdSz.toString(16));
 
+      // ── Try fast 64-bit boot (JS decompression) ──
+      const setupProto = mem8[setupBase + 0x206] | (mem8[setupBase + 0x207] << 8);
+      if (setupProto >= 0x208 && highRamPtr) {
+        const payOff = mem8[setupBase+0x248]|(mem8[setupBase+0x249]<<8)|
+          (mem8[setupBase+0x24A]<<16)|(mem8[setupBase+0x24B]<<24);
+        const payLen = mem8[setupBase+0x24C]|(mem8[setupBase+0x24D]<<8)|
+          (mem8[setupBase+0x24E]<<16)|(mem8[setupBase+0x24F]<<24);
+        if (payOff > 0 && payLen > 0) {
+          // Payload is at guest GPA code32addr + payOff
+          const payStart = highRamPtr + (code32addr - 0x100000) + payOff;
+          console.log('[FAST-BOOT] proto=0x' + setupProto.toString(16) +
+            ' payload_offset=0x' + payOff.toString(16) + ' payload_length=' + payLen +
+            ' magic=0x' + mem8[payStart].toString(16).padStart(2,'0') +
+            mem8[payStart+1].toString(16).padStart(2,'0'));
+
+          const t0 = performance.now();
+          const comp = mem8.subarray(payStart, payStart + payLen);
+          const vmlinux = jsGunzip(comp);
+          if (vmlinux) {
+            const dt = (performance.now() - t0) | 0;
+            console.log('[FAST-BOOT] Decompressed: ' + vmlinux.length + ' bytes (' +
+              (vmlinux.length >> 20) + 'MB) in ' + dt + 'ms');
+            const elf = parseELF64(vmlinux);
+            if (elf) {
+              console.log('[FAST-BOOT] ELF entry=0x' + elf.entry.toString(16) +
+                ' segments=' + elf.segs.length);
+              const TOTAL_RAM = 0x100000 + highRamSize;
+              for (let si = 0; si < elf.segs.length; si++) {
+                const seg = elf.segs[si];
+                const pa = Number(seg.paddr);
+                console.log('[FAST-BOOT] seg[' + si + '] paddr=0x' + pa.toString(16) +
+                  ' vaddr=0x' + seg.vaddr.toString(16) +
+                  ' filesz=' + seg.filesz + ' memsz=' + seg.memsz);
+                if (pa >= 0x100000 && pa + seg.memsz <= TOTAL_RAM) {
+                  const dst = highRamPtr + (pa - 0x100000);
+                  if (seg.filesz > 0)
+                    mem8.set(vmlinux.subarray(seg.offset, seg.offset + seg.filesz), dst);
+                  if (seg.memsz > seg.filesz)
+                    mem8.fill(0, dst + seg.filesz, dst + seg.memsz);
+                }
+              }
+              const cr3val = buildPageTables64(TOTAL_RAM);
+              // Write boot_params copy to 0x10000 (boot_params GPA for kernel)
+              for (let i = 0; i < 4096; i++) mem8[ramBase + 0x10000 + i] = mem8[setupBase + i];
+              // Write 64-bit metadata at 0x7200
+              dv.setUint32(ramBase + 0x7200, 0x42343644, true); // "D64B"
+              dv.setUint32(ramBase + 0x7204, cr3val, true);
+              dv.setBigUint64(ramBase + 0x7208, elf.entry, true);
+              dv.setUint32(ramBase + 0x7210, 0x10000, true); // boot_params GPA
+              // Write GDT at 0x7300
+              dv.setBigUint64(ramBase + 0x7300, 0n, true);
+              dv.setBigUint64(ramBase + 0x7308, 0x00CF9A000000FFFFn, true);
+              dv.setBigUint64(ramBase + 0x7310, 0x00AF9B000000FFFFn, true);
+              dv.setBigUint64(ramBase + 0x7318, 0x00CF93000000FFFFn, true);
+              wr32(R_CR2, 0xD64B0001);
+              execBlock._directBootDone = true;
+              _directBootDone = true;
+              console.log('[FAST-BOOT] 64-bit kernel ready! entry=0x' +
+                elf.entry.toString(16) + ' CR3=0x' + cr3val.toString(16));
+              return 0;
+            }
+          } else {
+            console.log('[FAST-BOOT] Not gzip or decompress failed');
+          }
+        }
+      }
+
+      // ── Fallback: 32-bit PM boot (slow, IEM decompresses) ──
       // Write GDT at 0x1000 in guest RAM
       // Linux boot protocol requires __BOOT_CS=0x10, __BOOT_DS=0x18
       const gdtB = ramBase + 0x1000;

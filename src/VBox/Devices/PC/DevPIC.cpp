@@ -413,6 +413,14 @@ static DECLCALLBACK(void) picSetIrq(PPDMDEVINS pDevIns, int iIrq, int iLevel, ui
 /* acknowledge interrupt 'irq' */
 DECLINLINE(void) pic_intack(PPICSTATE pPic, int irq)
 {
+#ifdef __EMSCRIPTEN__
+    /* In Wasm, force auto-EOI: the JIT/IEM interrupt handler chain can
+       fail to deliver the explicit EOI (OUT 0x20, 0x20), leaving IRQ0
+       permanently in-service and blocking ALL subsequent interrupts.
+       With auto-EOI the ISR is never set, so no explicit EOI is needed. */
+    if (pPic->rotate_on_auto_eoi)
+        pPic->priority_add = (irq + 1) & 7;
+#else
     if (pPic->auto_eoi)
     {
         if (pPic->rotate_on_auto_eoi)
@@ -420,6 +428,7 @@ DECLINLINE(void) pic_intack(PPICSTATE pPic, int irq)
     }
     else
         pPic->isr |= (1 << irq);
+#endif
 
     /* We don't clear a level sensitive interrupt here */
     if (!(pPic->elcr & (1 << irq)))

@@ -2455,8 +2455,8 @@ function execBlock(cpuP, ramB, maxInsn) {
       if (!ioDiagCounts.has(portDiagKey)) ioDiagCounts.set(portDiagKey, 0);
       const cnt = ioDiagCounts.get(portDiagKey) + 1;
       ioDiagCounts.set(portDiagKey, cnt);
-      const logLimit = isVgaPort ? 200 : (isAtaStatus ? 5 : 30);
-      if (cnt <= logLimit || cnt % 10000 === 0) {
+      const logLimit = isVgaPort ? 3 : (isAtaStatus ? 2 : 3); /* reduced from 200/5/30 */
+      if (cnt <= logLimit || cnt % 100000 === 0) {
         const dir = isOut ? 'OUT' : 'IN';
         const logTag = isVgaPort ? '[VGA-IO]' : (isAtaStatus ? '[ATA-IO]' : '[JIT-IO]');
         console.log(logTag + ' @' + (csBase>>>4).toString(16) + ':' + ip.toString(16) +

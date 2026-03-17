@@ -1743,7 +1743,8 @@ int emR3ForcedActions(PVM pVM, PVMCPU pVCpu, int rc)
 #ifdef __EMSCRIPTEN__
             {
                 static uint32_t s_cTimerDo = 0;
-                if (++s_cTimerDo <= 5 || (s_cTimerDo % 1000) == 0)
+                ++s_cTimerDo;
+                if (0) /* suppressed — EM-TIMER before */
                 {
                     extern volatile uint64_t g_cWasmVirtualInstructions;
                     RTPrintf("[EM-TIMER] TMR3TimerQueuesDo #%u insns=%llu FFs_before=%#RX64\n",
@@ -1757,7 +1758,8 @@ int emR3ForcedActions(PVM pVM, PVMCPU pVCpu, int rc)
 #ifdef __EMSCRIPTEN__
             {
                 static uint32_t s_cTimerDo2 = 0;
-                if (++s_cTimerDo2 <= 5 || (s_cTimerDo2 % 1000) == 0)
+                ++s_cTimerDo2;
+                if (0) /* suppressed — EM-TIMER after */
                 {
                     RTPrintf("[EM-TIMER] after TMR3TimerQueuesDo #%u FFs_after=%#RX64\n",
                              s_cTimerDo2, (uint64_t)pVCpu->fLocalForcedActions);

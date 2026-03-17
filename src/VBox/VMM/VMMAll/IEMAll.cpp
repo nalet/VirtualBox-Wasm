@@ -178,6 +178,15 @@
 # include <emscripten.h>
 # include <iprt/mem.h>
 
+/* Fast boot state globals — queried from wasm-main.cpp via wasmGetFBState() */
+volatile uint32_t g_wasmFBCheckCount = 0;   /* number of FAST-BOOT-CHK checks performed */
+volatile uint64_t g_wasmFBLastEIP = 0;      /* EIP during last check */
+volatile uint32_t g_wasmFBLastHdrS1 = 0;    /* last 4 bytes read from 0x90202 (as uint32) */
+volatile uint32_t g_wasmFBLastHdrS2 = 0;    /* last 4 bytes read from 0x10202 (as uint32) */
+volatile uint16_t g_wasmFBBootCS = 0;       /* current CS during boot monitoring */
+volatile uint8_t  g_wasmFBBootActive = 0;   /* 1 = boot monitoring active */
+volatile uint8_t  g_wasmFBTriggered = 0;    /* 1 = fast boot triggered */
+
 EM_JS(int, wasmJitExecBlock, (void *pCpumCtx, void *pvRAM, int maxInsn, void *pvHighRAM, int cbHighRAM, int fIrqPending), {
     if (typeof globalThis.VBoxJIT === 'undefined') return 0;
     if (!globalThis.VBoxJIT._initialized) {
@@ -1443,7 +1452,7 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                      * Interval: 1M when exploring, 1B when delay accelerator is active
                      * (to prevent IEM-DIAG from flooding the console and hiding
                      * DELAY-ACCEL stack dumps). */
-                    static uint64_t s_cNextDiag = 1000000;
+                    static uint64_t s_cNextDiag = UINT64_C(999999999999); /* suppressed — was 1M/10M */
                     if (g_cWasmVirtualInstructions >= s_cNextDiag)
                     {
                         s_cNextDiag = g_cWasmVirtualInstructions
@@ -2173,7 +2182,7 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                    doesn't advance during synchronous JS execution in Wasm workers) */
                 {
                     static uint32_t s_cDiagCounter = 0;
-                    if (++s_cDiagCounter >= 5000000)
+                    if (++s_cDiagCounter >= 500000000) /* suppressed — was 5M, now 500M to avoid flooding console */
                     {
                         s_cDiagCounter = 0;
                         uint16_t cs = pVCpu->cpum.GstCtx.cs.Sel;
@@ -2600,6 +2609,7 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                             || (pVCpu->cpum.GstCtx.msrEFER & MSR_K6_EFER_LMA)))
                     {
                         s_fBootActive = true;
+                        g_wasmFBBootActive = 1;
                         s_uLastCS = pVCpu->cpum.GstCtx.cs.Sel;
                         RTPrintf("[DBOOT] Kernel boot active (%s), CS=%04x RIP=%#018llx CR0=%08llx\n",
                                  (pVCpu->cpum.GstCtx.msrEFER & MSR_K6_EFER_LMA) ? "64-bit LM" : "32-bit PM",
@@ -2622,6 +2632,8 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                         {
                             static bool s_fFastBootTried = false;
                             static uint32_t s_cFBCheckCounter = 0;
+                            /* Update boot CS global for external querying */
+                            g_wasmFBBootCS = uCS;
                             if (!s_fFastBootTried
                                 && uCS == 0x10
                                 && (pVCpu->cpum.GstCtx.cr0 & X86_CR0_PE)
@@ -2634,12 +2646,16 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                                 /* Also check 0x10202 (some bootloaders load setup to 0x10000) */
                                 uint8_t abHdrS2[4];
                                 PGMPhysRead(pVM, (RTGCPHYS)0x10202, abHdrS2, 4, PGMACCESSORIGIN_IEM);
-                                /* Log first few checks and then every 10th */
-                                static uint32_t s_cFBLog = 0;
-                                if (++s_cFBLog <= 3 || (s_cFBLog % 10) == 0)
+                                /* Update globals for external querying */
+                                g_wasmFBCheckCount++;
+                                g_wasmFBLastEIP = pVCpu->cpum.GstCtx.rip;
+                                g_wasmFBLastHdrS1 = *(uint32_t *)abHdrS;
+                                g_wasmFBLastHdrS2 = *(uint32_t *)abHdrS2;
+                                /* Log first 20 checks, then every 100th */
+                                if (g_wasmFBCheckCount <= 20 || (g_wasmFBCheckCount % 100) == 0)
                                 {
                                     RTPrintf("[FAST-BOOT-CHK] #%u EIP=%#llx @0x90202=%02x%02x%02x%02x @0x10202=%02x%02x%02x%02x\n",
-                                             s_cFBLog,
+                                             g_wasmFBCheckCount,
                                              (unsigned long long)pVCpu->cpum.GstCtx.rip,
                                              abHdrS[0], abHdrS[1], abHdrS[2], abHdrS[3],
                                              abHdrS2[0], abHdrS2[1], abHdrS2[2], abHdrS2[3]);
@@ -2743,7 +2759,7 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                             s_uLastCS = uCS;
                         }
                         /* Periodic progress every 50M instructions */
-                        if (s_cBootInsns - s_cLastReport >= 50000000)
+                        if (s_cBootInsns - s_cLastReport >= 200000000) /* was 50M, now 200M */
                         {
                             s_cLastReport = s_cBootInsns;
                             uint64_t cr3 = pVCpu->cpum.GstCtx.cr3;
@@ -2820,7 +2836,8 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                                 /* Timer poll detected expiry — log periodically */
                                 {
                                     static uint32_t s_cTimerHits = 0;
-                                    if (++s_cTimerHits <= 5 || (s_cTimerHits % 1000) == 0)
+                                    ++s_cTimerHits;
+                                    if (0) /* suppressed — TIMER-POLL */
                                     {
                                         extern volatile uint64_t g_cWasmVirtualInstructions;
                                         RTPrintf("[TIMER-POLL] hit #%u insns=%llu FFs=%#RX64 CR2=%#RX64 IF=%d\n",

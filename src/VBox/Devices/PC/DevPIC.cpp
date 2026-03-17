@@ -361,7 +361,8 @@ static int pic_update_irq(PPDMDEVINS pDevIns, PDEVPIC pThis, PDEVPICCC pThisCC)
 #ifdef __EMSCRIPTEN__
         {
             static uint32_t s_cPicNoPending = 0;
-            if (++s_cPicNoPending <= 5 || (s_cPicNoPending % 5000) == 0)
+            ++s_cPicNoPending;
+            if (0) /* suppressed — PIC-STATE */
             {
                 RTPrintf("[PIC-STATE] no_pending #%u master: irr=%02x imr=%02x isr=%02x  slave: irr=%02x imr=%02x isr=%02x\n",
                          s_cPicNoPending,

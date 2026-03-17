@@ -521,7 +521,34 @@ int main(int argc, char **argv)
 /* Global guest RAM pointer, set by the IEM JIT hook via wasmJitSetGuestRAM */
 static void *g_pvJitGuestRAM = NULL;
 
+/* Fast boot state globals — defined in IEMAll.cpp */
+extern volatile uint32_t g_wasmFBCheckCount;
+extern volatile uint64_t g_wasmFBLastEIP;
+extern volatile uint32_t g_wasmFBLastHdrS1;
+extern volatile uint32_t g_wasmFBLastHdrS2;
+extern volatile uint16_t g_wasmFBBootCS;
+extern volatile uint8_t  g_wasmFBBootActive;
+extern volatile uint8_t  g_wasmFBTriggered;
+
 extern "C" {
+
+EMSCRIPTEN_KEEPALIVE
+uint32_t wasmGetFBCheckCount(void) { return g_wasmFBCheckCount; }
+
+EMSCRIPTEN_KEEPALIVE
+uint32_t wasmGetFBLastEIP(void) { return (uint32_t)g_wasmFBLastEIP; }
+
+EMSCRIPTEN_KEEPALIVE
+uint32_t wasmGetFBLastHdrS1(void) { return g_wasmFBLastHdrS1; }
+
+EMSCRIPTEN_KEEPALIVE
+uint32_t wasmGetFBLastHdrS2(void) { return g_wasmFBLastHdrS2; }
+
+EMSCRIPTEN_KEEPALIVE
+uint32_t wasmGetFBBootCS(void) { return g_wasmFBBootCS; }
+
+EMSCRIPTEN_KEEPALIVE
+uint32_t wasmGetFBBootActive(void) { return g_wasmFBBootActive; }
 
 EMSCRIPTEN_KEEPALIVE
 void wasmJitSetGuestRAM(void *pv)

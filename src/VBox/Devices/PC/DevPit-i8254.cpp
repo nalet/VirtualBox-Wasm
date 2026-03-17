@@ -1147,7 +1147,7 @@ static DECLCALLBACK(void) pitR3Timer(PPDMDEVINS pDevIns, TMTIMERHANDLE hTimer, v
 #ifdef __EMSCRIPTEN__
     {
         static uint32_t s_cPitFires = 0;
-        if (++s_cPitFires <= 5 || (s_cPitFires % 1000) == 0)
+        if (0 && (++s_cPitFires <= 5 || (s_cPitFires % 999999999) == 0)) /* suppressed */
         {
             RTPrintf("[PIT-FIRE] #%u irq=%d mode=%d disabled_by_hpet=%d\n",
                      s_cPitFires, pChan->irq, pChan->mode, pThis->fDisabledByHpet);

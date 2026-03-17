@@ -814,46 +814,64 @@ function execBlock(cpuP, ramB, maxInsn) {
   const ramSize = mem8.length - ramBase; // available RAM
 
   // ── Direct Boot Recovery ──
-  // ISOLINUX's shuffle overwrites its own code at CS=1000 with the kernel
-  // setup code. Detect this and perform a direct boot to the kernel.
-  if (!execBlock._directBootDone && csSel === 0x1000 && ip >= 0x1a00 && ip <= 0x1c00) {
+  // ISOLINUX's shuffle overwrites its own code with the kernel setup code.
+  // The ISOLINUX segment varies with RAM size (0x1000 with 128MB, 0x9000 with 32MB).
+  // Detect corruption: IP in 0x1a00-0x1c00 range with mostly-zero code,
+  // and HdrS magic at csBase+0x202 (vmlinuz header placed on top of ISOLINUX).
+  if (!execBlock._directBootDone && ip >= 0x1a00 && ip <= 0x1c00 && !protMode) {
     // Check if the code at CS:IP is corrupted (mostly zeros)
     const testAddr = ramBase + csBase + ip;
     let zeroCount = 0;
     for (let t = 0; t < 16; t++) if (mem8[testAddr + t] === 0) zeroCount++;
     if (zeroCount >= 12) {
-      // Check if HdrS magic is at 0x10202 (setup code placed here by shuffle)
-      const h0 = mem8[ramBase + 0x10202];
-      const h1 = mem8[ramBase + 0x10203];
-      const h2 = mem8[ramBase + 0x10204];
-      const h3 = mem8[ramBase + 0x10205];
+      // Check if HdrS magic is at csBase+0x202 (setup code placed on top of ISOLINUX)
+      const hdrBase = ramBase + csBase;
+      const h0 = mem8[hdrBase + 0x202];
+      const h1 = mem8[hdrBase + 0x203];
+      const h2 = mem8[hdrBase + 0x204];
+      const h3 = mem8[hdrBase + 0x205];
       if (h0 === 0x48 && h1 === 0x64 && h2 === 0x72 && h3 === 0x53) { // 'HdrS'
-        console.log('[JIT-BOOT] ISOLINUX shuffle corrupted its own code!');
+        const isolBase = csBase; // ISOLINUX was at this physical address
+        console.log('[JIT-BOOT] ISOLINUX shuffle corrupted code at CS=0x' +
+          csSel.toString(16) + ' (phys 0x' + isolBase.toString(16) + ')');
         console.log('[JIT-BOOT] Performing direct boot recovery...');
-        console.log('[JIT-BOOT] Copying setup code: 0x10000 -> 0x90000 (0x4200 bytes)');
 
-        // Copy setup code from 0x10000 to 0x90000 (setup_sects=32 → 0x4200 bytes)
-        const setupSize = 0x4200;
-        for (let i = 0; i < setupSize; i++) {
-          mem8[ramBase + 0x90000 + i] = mem8[ramBase + 0x10000 + i];
+        // Read setup_sects from the header to determine copy size
+        const setupSects = mem8[hdrBase + 0x1F1];
+        const setupSize = (setupSects + 1) * 512;
+        console.log('[JIT-BOOT] setup_sects=' + setupSects + ' size=0x' + setupSize.toString(16));
+
+        // The setup code is at csBase (placed by the shuffle on top of ISOLINUX).
+        // If ISOLINUX is at 0x90000, the setup code is ALREADY at 0x90000 — no copy needed!
+        // If ISOLINUX is at 0x10000, copy to 0x90000.
+        if (isolBase !== 0x90000) {
+          console.log('[JIT-BOOT] Copying setup from 0x' + isolBase.toString(16) + ' to 0x90000');
+          for (let i = 0; i < setupSize; i++) {
+            mem8[ramBase + 0x90000 + i] = mem8[hdrBase + i];
+          }
+        } else {
+          console.log('[JIT-BOOT] Setup code already at 0x90000, no copy needed');
         }
 
-        // Also copy command line from 0x1F800 to 0x99000 (safe location in setup heap)
-        // and update cmd_line_ptr
+        // Find and copy command line
+        const cmdPtr = mem8[hdrBase + 0x228] | (mem8[hdrBase + 0x229] << 8) |
+          (mem8[hdrBase + 0x22A] << 16) | (mem8[hdrBase + 0x22B] << 24);
         let cmdLen = 0;
-        for (let i = 0; i < 256; i++) {
-          const ch = mem8[ramBase + 0x1F800 + i];
-          mem8[ramBase + 0x99000 + i] = ch;
-          if (ch === 0) { cmdLen = i; break; }
+        if (cmdPtr > 0 && cmdPtr < 0xA0000) {
+          // Copy command line to 0x99000 (safe location in setup heap)
+          for (let i = 0; i < 256; i++) {
+            const ch = mem8[ramBase + cmdPtr + i];
+            mem8[ramBase + 0x99000 + i] = ch;
+            if (ch === 0) { cmdLen = i; break; }
+          }
+          // Update cmd_line_ptr in the setup header at 0x90228
+          const newCmdPtr = 0x99000;
+          mem8[ramBase + 0x90228] = newCmdPtr & 0xFF;
+          mem8[ramBase + 0x90229] = (newCmdPtr >> 8) & 0xFF;
+          mem8[ramBase + 0x9022A] = (newCmdPtr >> 16) & 0xFF;
+          mem8[ramBase + 0x9022B] = (newCmdPtr >> 24) & 0xFF;
         }
-        // Update cmd_line_ptr at offset 0x228 in the setup header (now at 0x90228)
-        const newCmdPtr = 0x99000;
-        mem8[ramBase + 0x90228] = newCmdPtr & 0xFF;
-        mem8[ramBase + 0x90229] = (newCmdPtr >> 8) & 0xFF;
-        mem8[ramBase + 0x9022A] = (newCmdPtr >> 16) & 0xFF;
-        mem8[ramBase + 0x9022B] = (newCmdPtr >> 24) & 0xFF;
-
-        console.log('[JIT-BOOT] Command line at 0x99000: "' + cmdLen + ' bytes"');
+        console.log('[JIT-BOOT] cmdline @0x' + cmdPtr.toString(16) + ' (' + cmdLen + ' bytes)');
 
         // Set CPU registers for kernel setup entry
         // CS = 0x9020, IP = 0x0000 (entry point at setup_base + 0x200)
@@ -895,8 +913,16 @@ function execBlock(cpuP, ramB, maxInsn) {
         wr32(R_FLAGS, curFlags & ~0x200); // clear IF
 
         execBlock._directBootDone = true;
+        // Read ramdisk info from the header at 0x90218/0x9021C
+        const rdImg = mem8[ramBase+0x90218]|(mem8[ramBase+0x90219]<<8)|
+          (mem8[ramBase+0x9021A]<<16)|(mem8[ramBase+0x9021B]<<24);
+        const rdSz = mem8[ramBase+0x9021C]|(mem8[ramBase+0x9021D]<<8)|
+          (mem8[ramBase+0x9021E]<<16)|(mem8[ramBase+0x9021F]<<24);
+        const code32 = mem8[ramBase+0x90214]|(mem8[ramBase+0x90215]<<8)|
+          (mem8[ramBase+0x90216]<<16)|(mem8[ramBase+0x90217]<<24);
         console.log('[JIT-BOOT] Direct boot: CS=9020:0000 SS=9000:' + sp.toString(16) +
-          ' DL=80 ramdisk=0x7E8F000 size=0x14F1E4');
+          ' code32=0x' + code32.toString(16) +
+          ' ramdisk=0x' + rdImg.toString(16) + ' size=0x' + rdSz.toString(16));
         console.log('[JIT-BOOT] Jumping to kernel real-mode setup!');
         return 0; // return to IEM, which will execute from new CS:IP
       }

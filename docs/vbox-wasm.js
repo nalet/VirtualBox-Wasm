@@ -3041,8 +3041,8 @@ globalThis.VBoxJIT = (function() {
           if (!ioDiagCounts.has(portDiagKey)) ioDiagCounts.set(portDiagKey, 0);
           const cnt = ioDiagCounts.get(portDiagKey) + 1;
           ioDiagCounts.set(portDiagKey, cnt);
-          const logLimit = isVgaPort ? 200 : (isAtaStatus ? 5 : 30);
-          if (cnt <= logLimit || cnt % 1e4 === 0) {
+          const logLimit = isVgaPort ? 3 : (isAtaStatus ? 2 : 3);
+          /* reduced from 200/5/30 */ if (cnt <= logLimit || cnt % 1e5 === 0) {
             const dir = isOut ? "OUT" : "IN";
             const logTag = isVgaPort ? "[VGA-IO]" : (isAtaStatus ? "[ATA-IO]" : "[JIT-IO]");
             console.log(logTag + " @" + (csBase >>> 4).toString(16) + ":" + ip.toString(16) + " " + dir + " port=0x" + portNum.toString(16) + " DX=0x" + gr16(2).toString(16) + " AX=0x" + gr16(0).toString(16) + " #" + cnt);
@@ -12432,10 +12432,16 @@ function wasmFastBootDecompress() {
 }
 
 // Imports from the Wasm binary.
-var _main, _wasmJitSetGuestRAM, _wasmJitGetGuestRAM, _wasmXzDecompress, _free, _pthread_self, _wasmDisplayGetFB, _wasmDisplayGetWidth, _wasmDisplayGetHeight, _wasmDisplayCheckDirty, _wasmDisplayGetFBSize, _wasmDisplayRefresh, _wasmDisplayGetRefreshCount, _wasmDisplayGetUpdateRectCount, _wasmKbdPutScancode, _wasmKbdDrainQueue, _wasmKbdGetWritePtr, _wasmKbdGetReadPtr, _wasmKbdGetBufPtr, _wasmKbdGetBufSize, _wasmGetDelayRip, _wasmGetDelayRsp, _wasmGetDelayRbp, _wasmGetDelayRet, _wasmGetDelayValid, _wasmReadGuestPhys, _wasmGetGuestReadByte, _malloc, __emscripten_tls_init, __emscripten_proxy_main, __emscripten_thread_init, __emscripten_thread_crashed, _htonl, _htons, _ntohs, __emscripten_run_js_on_main_thread_done, __emscripten_run_js_on_main_thread, __emscripten_thread_free_data, __emscripten_thread_exit, __emscripten_check_mailbox, _setThrew, _emscripten_stack_set_limits, __emscripten_stack_restore, __emscripten_stack_alloc, _emscripten_stack_get_current, __indirect_function_table, wasmTable;
+var _main, _wasmGetFBCheckCount, _wasmGetFBLastEIP, _wasmGetFBLastHdrS1, _wasmGetFBLastHdrS2, _wasmGetFBBootCS, _wasmGetFBBootActive, _wasmJitSetGuestRAM, _wasmJitGetGuestRAM, _wasmXzDecompress, _free, _pthread_self, _wasmDisplayGetFB, _wasmDisplayGetWidth, _wasmDisplayGetHeight, _wasmDisplayCheckDirty, _wasmDisplayGetFBSize, _wasmDisplayRefresh, _wasmDisplayGetRefreshCount, _wasmDisplayGetUpdateRectCount, _wasmKbdPutScancode, _wasmKbdDrainQueue, _wasmKbdGetWritePtr, _wasmKbdGetReadPtr, _wasmKbdGetBufPtr, _wasmKbdGetBufSize, _wasmGetDelayRip, _wasmGetDelayRsp, _wasmGetDelayRbp, _wasmGetDelayRet, _wasmGetDelayValid, _wasmReadGuestPhys, _wasmGetGuestReadByte, _malloc, __emscripten_tls_init, __emscripten_proxy_main, __emscripten_thread_init, __emscripten_thread_crashed, _htonl, _htons, _ntohs, __emscripten_run_js_on_main_thread_done, __emscripten_run_js_on_main_thread, __emscripten_thread_free_data, __emscripten_thread_exit, __emscripten_check_mailbox, _setThrew, _emscripten_stack_set_limits, __emscripten_stack_restore, __emscripten_stack_alloc, _emscripten_stack_get_current, __indirect_function_table, wasmTable;
 
 function assignWasmExports(wasmExports) {
   _main = Module["_main"] = wasmExports["__main_argc_argv"];
+  _wasmGetFBCheckCount = Module["_wasmGetFBCheckCount"] = wasmExports["wasmGetFBCheckCount"];
+  _wasmGetFBLastEIP = Module["_wasmGetFBLastEIP"] = wasmExports["wasmGetFBLastEIP"];
+  _wasmGetFBLastHdrS1 = Module["_wasmGetFBLastHdrS1"] = wasmExports["wasmGetFBLastHdrS1"];
+  _wasmGetFBLastHdrS2 = Module["_wasmGetFBLastHdrS2"] = wasmExports["wasmGetFBLastHdrS2"];
+  _wasmGetFBBootCS = Module["_wasmGetFBBootCS"] = wasmExports["wasmGetFBBootCS"];
+  _wasmGetFBBootActive = Module["_wasmGetFBBootActive"] = wasmExports["wasmGetFBBootActive"];
   _wasmJitSetGuestRAM = Module["_wasmJitSetGuestRAM"] = wasmExports["wasmJitSetGuestRAM"];
   _wasmJitGetGuestRAM = Module["_wasmJitGetGuestRAM"] = wasmExports["wasmJitGetGuestRAM"];
   _wasmXzDecompress = Module["_wasmXzDecompress"] = wasmExports["wasmXzDecompress"];

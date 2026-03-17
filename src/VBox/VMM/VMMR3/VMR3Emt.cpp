@@ -46,6 +46,7 @@
 #include <iprt/asm.h>
 #include <iprt/asm-math.h>
 #include <iprt/semaphore.h>
+#include <iprt/stream.h>
 #include <iprt/string.h>
 #include <iprt/thread.h>
 #include <iprt/time.h>
@@ -543,6 +544,10 @@ static DECLCALLBACK(int) vmR3HaltMethod1Halt(PUVMCPU pUVCpu, const uint64_t fMas
      */
     bool fBlockOnce = false;
     bool fSpinning = false;
+#ifdef __EMSCRIPTEN__
+    static uint32_t s_cHaltEntries = 0;
+    s_cHaltEntries++;
+#endif
     uint32_t u32CatchUpPct = TMVirtualSyncGetCatchUpPct(pVM);
     if (u32CatchUpPct /* non-zero if catching up */)
     {
@@ -603,6 +608,13 @@ static DECLCALLBACK(int) vmR3HaltMethod1Halt(PUVMCPU pUVCpu, const uint64_t fMas
 #endif
             )
         {
+#ifdef __EMSCRIPTEN__
+            if (s_cHaltEntries <= 5 || (s_cHaltEntries % 100) == 0)
+                RTPrintf("[HALT-WAKE] entry=%u loops=%u vmFF=%#RX32 cpuFF=%#RX64 fMask=%#RX64\n",
+                         s_cHaltEntries, cLoops,
+                         pVM->fGlobalForcedActions,
+                         pVCpu->fLocalForcedActions, fMask);
+#endif
 #ifdef VBOX_VMM_TARGET_ARMV8
             cNsVTimerActivate = 0;
 #endif
@@ -621,6 +633,15 @@ static DECLCALLBACK(int) vmR3HaltMethod1Halt(PUVMCPU pUVCpu, const uint64_t fMas
         if (    VM_FF_IS_ANY_SET(pVM, VM_FF_EXTERNAL_HALTED_MASK)
             ||  VMCPU_FF_IS_ANY_SET(pVCpu, fMask))
             break;
+
+#ifdef __EMSCRIPTEN__
+        /* Log the poll result for the first few halt entries and periodically */
+        if (cLoops == 0 && (s_cHaltEntries <= 5 || (s_cHaltEntries % 500) == 0))
+            RTPrintf("[HALT-POLL] entry=%u u64NanoTS=%llu (%llu ms) spinning=%d\n",
+                     s_cHaltEntries, (unsigned long long)u64NanoTS,
+                     (unsigned long long)(u64NanoTS / 1000000ULL),
+                     fSpinning);
+#endif
 
 #ifdef VBOX_VMM_TARGET_ARMV8
         u64NanoTS = RT_MIN(cNsVTimerActivate, u64NanoTS);
@@ -647,6 +668,20 @@ static DECLCALLBACK(int) vmR3HaltMethod1Halt(PUVMCPU pUVCpu, const uint64_t fMas
                 cNanoSecs -= pUVCpu->vm.s.Halt.Method12.cNSBlockedTooLongAvg;
 
             //RTLogRelPrintf("u64NanoTS=%RI64 cLoops=%3d sleep %08dns (%7RU64) ", u64NanoTS, cLoops, cNanoSecs, u64NanoTS);
+#ifdef __EMSCRIPTEN__
+            /* In Wasm/Emscripten, RTSemEventWaitEx may not properly support
+               nanosecond timeouts (futex emulation via SharedArrayBuffer).
+               Use RTThreadSleep(1ms) as a reliable alternative.  This ensures
+               the halt loop retries frequently so TMR3TimerQueuesDo can fire
+               expired PIT/PIC timers and wake the CPU from HLT. */
+            {
+                uint64_t const u64StartSchedHalt   = RTTimeNanoTS();
+                RTThreadSleep(1);  /* 1ms sleep — reliable in Emscripten */
+                uint64_t const cNsElapsedSchedHalt = RTTimeNanoTS() - u64StartSchedHalt;
+                STAM_REL_PROFILE_ADD_PERIOD(&pUVCpu->vm.s.StatHaltBlock, cNsElapsedSchedHalt);
+                rc = VINF_SUCCESS;
+            }
+#else
             uint64_t const u64StartSchedHalt   = RTTimeNanoTS();
             rc = RTSemEventWaitEx(pUVCpu->vm.s.EventSemWait, RTSEMWAIT_FLAGS_RELATIVE | RTSEMWAIT_FLAGS_NANOSECS | RTSEMWAIT_FLAGS_NORESUME, cNanoSecs);
             uint64_t const cNsElapsedSchedHalt = RTTimeNanoTS() - u64StartSchedHalt;
@@ -659,6 +694,7 @@ static DECLCALLBACK(int) vmR3HaltMethod1Halt(PUVMCPU pUVCpu, const uint64_t fMas
                 rc = vmR3FatalWaitError(pUVCpu, "RTSemEventWait->%Rrc\n", rc);
                 break;
             }
+#endif
 
             /*
              * Calc the statistics.
@@ -788,6 +824,7 @@ static DECLCALLBACK(int) vmR3HaltGlobal1Halt(PUVMCPU pUVCpu, const uint64_t fMas
         //u64NowLog = RTTimeNanoTS();
         uint64_t u64Delta;
         uint64_t u64GipTime = TMTimerPollGIP(pVM, pVCpu, &u64Delta);
+        RT_NOREF(u64GipTime);
         if (    VM_FF_IS_ANY_SET(pVM, VM_FF_EXTERNAL_HALTED_MASK)
             ||  VMCPU_FF_IS_ANY_SET(pVCpu, fMask))
             break;
@@ -803,6 +840,12 @@ static DECLCALLBACK(int) vmR3HaltGlobal1Halt(PUVMCPU pUVCpu, const uint64_t fMas
                 break;
 
             //RTLogPrintf("loop=%-3d  u64GipTime=%'llu / %'llu   now=%'llu / %'llu\n", cLoops, u64GipTime, u64Delta, u64NowLog, u64GipTime - u64NowLog);
+#ifdef __EMSCRIPTEN__
+            /* SUPR3CallVMMR0Ex(GVMM_SCHED_HALT) fails in driverless/Wasm mode.
+               Fall back to a simple 1ms sleep so the halt loop retries. */
+            RTThreadSleep(1);
+            rc = VINF_SUCCESS;
+#else
             uint64_t const u64StartSchedHalt   = RTTimeNanoTS();
             rc = SUPR3CallVMMR0Ex(VMCC_GET_VMR0_FOR_CALL(pVM), pVCpu->idCpu, VMMR0_DO_GVMM_SCHED_HALT, u64GipTime, NULL);
             uint64_t const u64EndSchedHalt     = RTTimeNanoTS();
@@ -826,6 +869,7 @@ static DECLCALLBACK(int) vmR3HaltGlobal1Halt(PUVMCPU pUVCpu, const uint64_t fMas
                 else
                     STAM_REL_PROFILE_ADD_PERIOD(&pUVCpu->vm.s.StatHaltBlockOnTime,    cNsElapsedSchedHalt);
             }
+#endif
         }
         /*
          * When spinning call upon the GVMM and do some wakups once
@@ -833,10 +877,14 @@ static DECLCALLBACK(int) vmR3HaltGlobal1Halt(PUVMCPU pUVCpu, const uint64_t fMas
          */
         else if (!(cLoops & 0x1fff))
         {
+#ifdef __EMSCRIPTEN__
+            RTThreadYield();
+#else
             uint64_t const u64StartSchedYield   = RTTimeNanoTS();
             rc = SUPR3CallVMMR0Ex(VMCC_GET_VMR0_FOR_CALL(pVM), pVCpu->idCpu, VMMR0_DO_GVMM_SCHED_POLL, false /* don't yield */, NULL);
             uint64_t const cNsElapsedSchedYield = RTTimeNanoTS() - u64StartSchedYield;
             STAM_REL_PROFILE_ADD_PERIOD(&pUVCpu->vm.s.StatHaltYield, cNsElapsedSchedYield);
+#endif
         }
     }
     //RTLogPrintf("*** %u loops %'llu;  lag=%RU64\n", cLoops, u64NowLog - u64Start, TMVirtualSyncGetLag(pVM));
@@ -874,6 +922,10 @@ static DECLCALLBACK(int) vmR3HaltGlobal1Wait(PUVMCPU pUVCpu)
          * Wait for a while. Someone will wake us up or interrupt the call if
          * anything needs our attention.
          */
+#ifdef __EMSCRIPTEN__
+        RTThreadSleep(10);  /* 10ms sleep for suspend wait */
+        rc = VINF_SUCCESS;
+#else
         rc = SUPR3CallVMMR0Ex(VMCC_GET_VMR0_FOR_CALL(pVM), pVCpu->idCpu, VMMR0_DO_GVMM_SCHED_HALT, RTTimeNanoTS() + 1000000000 /* +1s */, NULL);
         if (rc == VERR_INTERRUPTED)
             rc = VINF_SUCCESS;
@@ -882,6 +934,7 @@ static DECLCALLBACK(int) vmR3HaltGlobal1Wait(PUVMCPU pUVCpu)
             rc = vmR3FatalWaitError(pUVCpu, "vmR3HaltGlobal1Wait: VMMR0_DO_GVMM_SCHED_HALT->%Rrc\n", rc);
             break;
         }
+#endif
     }
 
     ASMAtomicUoWriteBool(&pUVCpu->vm.s.fWait, false);
@@ -897,6 +950,12 @@ static DECLCALLBACK(int) vmR3HaltGlobal1Wait(PUVMCPU pUVCpu)
  */
 static DECLCALLBACK(void) vmR3HaltGlobal1NotifyCpuFF(PUVMCPU pUVCpu, uint32_t fFlags)
 {
+#ifdef __EMSCRIPTEN__
+    /* In Wasm driverless mode, SUPR3CallVMMR0Ex calls fail.
+       The halt loop uses RTThreadSleep, so no explicit wakeup needed.
+       Just let the sleep timeout naturally to re-check force flags. */
+    RT_NOREF(pUVCpu, fFlags);
+#else
     /*
      * With ring-0 halting, the fWait flag isn't set, so we have to check the
      * CPU state to figure out whether to do a wakeup call.
@@ -933,6 +992,7 @@ static DECLCALLBACK(void) vmR3HaltGlobal1NotifyCpuFF(PUVMCPU pUVCpu, uint32_t fF
         int rc = SUPR3CallVMMR0Ex(VMCC_GET_VMR0_FOR_CALL(pUVCpu->pVM), pUVCpu->idCpu, VMMR0_DO_GVMM_SCHED_WAKE_UP, 0, NULL);
         AssertRC(rc);
     }
+#endif
 }
 
 

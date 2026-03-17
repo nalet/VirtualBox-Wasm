@@ -5569,6 +5569,134 @@ globalThis.VBoxJIT = (function() {
         const inCount = (fallbackOpcodes.get(236) || 0) + (fallbackOpcodes.get(237) || 0) + (fallbackOpcodes.get(228) || 0) + (fallbackOpcodes.get(229) || 0);
         const outCount = (fallbackOpcodes.get(238) || 0) + (fallbackOpcodes.get(239) || 0) + (fallbackOpcodes.get(230) || 0) + (fallbackOpcodes.get(231) || 0);
         console.log("[JIT-STUCK] port I/O fallbacks: IN=" + inCount + " OUT=" + outCount);
+        // ── Direct Boot Recovery (in stuck detector) ──
+        // ISOLINUX gets stuck at CS=0x9000 IP≈0x1a45 after "ready."
+        // Kernel+initrd are loaded. Do direct PM boot to startup_32.
+        const cr0S = rr32(R_CR0);
+        if (!(cr0S & 1) && csB >= 28672 && csB < 655360 && curIP >= 16 && curIP <= 12288 && !execBlockWrapped._directBootFired) {
+          // Check if kernel is present at 0x100000 via highRamPtr
+          const kP = highRamPtr;
+          const hasK = kP && (mem8[kP] !== 0 || mem8[kP + 1] !== 0 || mem8[kP + 2] !== 0 || mem8[kP + 3] !== 0);
+          if (hasK) {
+            execBlockWrapped._directBootFired = true;
+            console.log("[JIT-STUCK-BOOT] ISOLINUX stuck after loading kernel. Doing direct PM boot!");
+            console.log("[JIT-STUCK-BOOT] kernel@0x100000: " + mem8[kP].toString(16).padStart(2, "0") + " " + mem8[kP + 1].toString(16).padStart(2, "0") + " " + mem8[kP + 2].toString(16).padStart(2, "0") + " " + mem8[kP + 3].toString(16).padStart(2, "0"));
+            // Write boot_params at 0x90000
+            const rb = ramBase;
+            const setupBase = rb + 589824;
+            // Clear boot_params (first 4K)
+            for (let i = 0; i < 4096; i++) mem8[setupBase + i] = 0;
+            // e820 memory map at offset 0xD00
+            const e820Base = 3328;
+            // Entry 0: 0x0 - 0x9FC00 usable
+            writeDword(setupBase + e820Base + 0, 0);
+            writeDword(setupBase + e820Base + 4, 0);
+            writeDword(setupBase + e820Base + 8, 654336);
+            writeDword(setupBase + e820Base + 12, 0);
+            writeDword(setupBase + e820Base + 16, 1);
+            // Entry 1: 0x100000 - highRamEnd usable
+            writeDword(setupBase + e820Base + 20, 1048576);
+            writeDword(setupBase + e820Base + 24, 0);
+            const ramTop = highRamEnd ? highRamEnd : 33554432;
+            writeDword(setupBase + e820Base + 28, ramTop - 1048576);
+            writeDword(setupBase + e820Base + 32, 0);
+            writeDword(setupBase + e820Base + 36, 1);
+            mem8[setupBase + 488] = 2;
+            // e820_entries count
+            // HdrS signature
+            mem8[setupBase + 514] = 72;
+            // H
+            mem8[setupBase + 515] = 100;
+            // d
+            mem8[setupBase + 516] = 114;
+            // r
+            mem8[setupBase + 517] = 83;
+            // S
+            // Protocol 2.13
+            mem8[setupBase + 518] = 13;
+            mem8[setupBase + 519] = 2;
+            // loadflags: LOADED_HIGH
+            mem8[setupBase + 529] = 1;
+            // type_of_loader
+            mem8[setupBase + 528] = 255;
+            // code32_start
+            writeDword(setupBase + 532, 1048576);
+            // ramdisk
+            // Check if initrd was loaded (typically at ~0x1000000 for 32MB systems)
+            // For now, we rely on the kernel finding it via initrd= cmdline or embedded
+            // Command line
+            const cmdline = "pmedia=cd BOOT_IMAGE=/vmlinuz";
+            for (let ci = 0; ci < cmdline.length; ci++) mem8[rb + 626688 + ci] = cmdline.charCodeAt(ci);
+            mem8[rb + 626688 + cmdline.length] = 0;
+            writeDword(setupBase + 552, 626688);
+            // Write GDT at 0x1000 in guest RAM
+            const gdtBase = rb + 4096;
+            for (let i = 0; i < 24; i++) mem8[gdtBase + i] = 0;
+            // null descriptor
+            // Code32 descriptor (selector 0x08)
+            mem8[gdtBase + 8] = 255;
+            mem8[gdtBase + 9] = 255;
+            mem8[gdtBase + 10] = 0;
+            mem8[gdtBase + 11] = 0;
+            mem8[gdtBase + 12] = 0;
+            mem8[gdtBase + 13] = 154;
+            mem8[gdtBase + 14] = 207;
+            mem8[gdtBase + 15] = 0;
+            // Data32 descriptor (selector 0x10)
+            mem8[gdtBase + 16] = 255;
+            mem8[gdtBase + 17] = 255;
+            mem8[gdtBase + 18] = 0;
+            mem8[gdtBase + 19] = 0;
+            mem8[gdtBase + 20] = 0;
+            mem8[gdtBase + 21] = 146;
+            mem8[gdtBase + 22] = 207;
+            mem8[gdtBase + 23] = 0;
+            // Set GDTR
+            wr64(R_GDTR_BASE, 4096);
+            wr16(R_GDTR_LIMIT, 23);
+            // Set CR0: PE=1, PG=0
+            wr32(R_CR0, (cr0S | 1) & ~2147483648);
+            // Set CS = 0x08 (flat code32)
+            wr16(S_CS + SEG_SEL, 8);
+            wr64(S_CS + SEG_BASE, 0);
+            wr32(S_CS + SEG_LIMIT, 4294967295);
+            wr32(S_CS + SEG_ATTR, 49307);
+            // Set DS/ES/SS/FS/GS = 0x10 (flat data32)
+            const dAttr = 49299;
+            for (const seg of [ S_DS, S_ES, S_SS, S_FS, S_GS ]) {
+              wr16(seg + SEG_SEL, 16);
+              wr64(seg + SEG_BASE, 0);
+              wr32(seg + SEG_LIMIT, 4294967295);
+              wr32(seg + SEG_ATTR, dAttr);
+            }
+            // EIP = startup_32 at 0x100000
+            wr32(R_IP, 1048576);
+            // ESI = boot_params
+            sr32(6, 589824);
+            // Clear other regs
+            sr32(0, 0);
+            sr32(1, 0);
+            sr32(2, 0);
+            sr32(3, 0);
+            sr32(5, 0);
+            sr32(7, 0);
+            sr32(4, 589824);
+            // ESP
+            // Disable interrupts
+            wr32(R_FLAGS, 2);
+            console.log("[JIT-STUCK-BOOT] PM state set: CR0=0x" + ((cr0S | 1) & ~2147483648).toString(16) + " CS=0x08 EIP=0x100000 ESI=0x90000");
+            console.log("[JIT-STUCK-BOOT] Jumping to startup_32!");
+            // Reset stuck counter to prevent re-triggering
+            stuckCount = 0;
+            stuckDumped = false;
+            // Mark as done in both locations
+            execBlock._directBootDone = true;
+            _directBootDone = true;
+            return n;
+          } else {
+            console.log("[JIT-STUCK] No kernel at 0x100000, not triggering direct boot");
+          }
+        }
       }
     }
     // Log stats every 30 seconds

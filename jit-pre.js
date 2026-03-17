@@ -4312,6 +4312,137 @@ function execBlockWrapped(cpuP, ramB, maxInsn, highRamP, highRamSz) {
       const outCount = (fallbackOpcodes.get(0xEE) || 0) + (fallbackOpcodes.get(0xEF) || 0) +
                        (fallbackOpcodes.get(0xE6) || 0) + (fallbackOpcodes.get(0xE7) || 0);
       console.log('[JIT-STUCK] port I/O fallbacks: IN=' + inCount + ' OUT=' + outCount);
+
+      // ── Direct Boot Recovery (in stuck detector) ──
+      // ISOLINUX gets stuck at CS=0x9000 IP≈0x1a45 after "ready."
+      // Kernel+initrd are loaded. Do direct PM boot to startup_32.
+      const cr0S = rr32(R_CR0);
+      if (!(cr0S & 1) && csB >= 0x7000 && csB < 0xA0000 &&
+          curIP >= 0x0010 && curIP <= 0x3000 &&
+          !execBlockWrapped._directBootFired) {
+        // Check if kernel is present at 0x100000 via highRamPtr
+        const kP = highRamPtr;
+        const hasK = kP && (mem8[kP] !== 0 || mem8[kP+1] !== 0 ||
+                            mem8[kP+2] !== 0 || mem8[kP+3] !== 0);
+        if (hasK) {
+          execBlockWrapped._directBootFired = true;
+          console.log('[JIT-STUCK-BOOT] ISOLINUX stuck after loading kernel. Doing direct PM boot!');
+          console.log('[JIT-STUCK-BOOT] kernel@0x100000: ' +
+            mem8[kP].toString(16).padStart(2,'0') + ' ' +
+            mem8[kP+1].toString(16).padStart(2,'0') + ' ' +
+            mem8[kP+2].toString(16).padStart(2,'0') + ' ' +
+            mem8[kP+3].toString(16).padStart(2,'0'));
+
+          // Write boot_params at 0x90000
+          const rb = ramBase;
+          const setupBase = rb + 0x90000;
+          // Clear boot_params (first 4K)
+          for (let i = 0; i < 0x1000; i++) mem8[setupBase + i] = 0;
+
+          // e820 memory map at offset 0xD00
+          const e820Base = 0xD00;
+          // Entry 0: 0x0 - 0x9FC00 usable
+          writeDword(setupBase + e820Base + 0, 0);
+          writeDword(setupBase + e820Base + 4, 0);
+          writeDword(setupBase + e820Base + 8, 0x9FC00);
+          writeDword(setupBase + e820Base + 12, 0);
+          writeDword(setupBase + e820Base + 16, 1);
+          // Entry 1: 0x100000 - highRamEnd usable
+          writeDword(setupBase + e820Base + 20, 0x100000);
+          writeDword(setupBase + e820Base + 24, 0);
+          const ramTop = highRamEnd ? highRamEnd : 0x2000000;
+          writeDword(setupBase + e820Base + 28, ramTop - 0x100000);
+          writeDword(setupBase + e820Base + 32, 0);
+          writeDword(setupBase + e820Base + 36, 1);
+          mem8[setupBase + 0x1E8] = 2; // e820_entries count
+
+          // HdrS signature
+          mem8[setupBase + 0x202] = 0x48; // H
+          mem8[setupBase + 0x203] = 0x64; // d
+          mem8[setupBase + 0x204] = 0x72; // r
+          mem8[setupBase + 0x205] = 0x53; // S
+          // Protocol 2.13
+          mem8[setupBase + 0x206] = 0x0D;
+          mem8[setupBase + 0x207] = 0x02;
+          // loadflags: LOADED_HIGH
+          mem8[setupBase + 0x211] = 0x01;
+          // type_of_loader
+          mem8[setupBase + 0x210] = 0xFF;
+          // code32_start
+          writeDword(setupBase + 0x214, 0x100000);
+          // ramdisk
+          // Check if initrd was loaded (typically at ~0x1000000 for 32MB systems)
+          // For now, we rely on the kernel finding it via initrd= cmdline or embedded
+          // Command line
+          const cmdline = 'pmedia=cd BOOT_IMAGE=/vmlinuz';
+          for (let ci = 0; ci < cmdline.length; ci++)
+            mem8[rb + 0x99000 + ci] = cmdline.charCodeAt(ci);
+          mem8[rb + 0x99000 + cmdline.length] = 0;
+          writeDword(setupBase + 0x228, 0x99000);
+
+          // Write GDT at 0x1000 in guest RAM
+          const gdtBase = rb + 0x1000;
+          for (let i = 0; i < 24; i++) mem8[gdtBase + i] = 0; // null descriptor
+          // Code32 descriptor (selector 0x08)
+          mem8[gdtBase + 8] = 0xFF; mem8[gdtBase + 9] = 0xFF;
+          mem8[gdtBase + 10] = 0; mem8[gdtBase + 11] = 0;
+          mem8[gdtBase + 12] = 0;
+          mem8[gdtBase + 13] = 0x9A;
+          mem8[gdtBase + 14] = 0xCF;
+          mem8[gdtBase + 15] = 0;
+          // Data32 descriptor (selector 0x10)
+          mem8[gdtBase + 16] = 0xFF; mem8[gdtBase + 17] = 0xFF;
+          mem8[gdtBase + 18] = 0; mem8[gdtBase + 19] = 0;
+          mem8[gdtBase + 20] = 0;
+          mem8[gdtBase + 21] = 0x92;
+          mem8[gdtBase + 22] = 0xCF;
+          mem8[gdtBase + 23] = 0;
+
+          // Set GDTR
+          wr64(R_GDTR_BASE, 0x1000);
+          wr16(R_GDTR_LIMIT, 23);
+          // Set CR0: PE=1, PG=0
+          wr32(R_CR0, (cr0S | 1) & ~0x80000000);
+          // Set CS = 0x08 (flat code32)
+          wr16(S_CS + SEG_SEL, 0x08);
+          wr64(S_CS + SEG_BASE, 0);
+          wr32(S_CS + SEG_LIMIT, 0xFFFFFFFF);
+          wr32(S_CS + SEG_ATTR, 0xC09B);
+          // Set DS/ES/SS/FS/GS = 0x10 (flat data32)
+          const dAttr = 0xC093;
+          for (const seg of [S_DS, S_ES, S_SS, S_FS, S_GS]) {
+            wr16(seg + SEG_SEL, 0x10);
+            wr64(seg + SEG_BASE, 0);
+            wr32(seg + SEG_LIMIT, 0xFFFFFFFF);
+            wr32(seg + SEG_ATTR, dAttr);
+          }
+          // EIP = startup_32 at 0x100000
+          wr32(R_IP, 0x100000);
+          // ESI = boot_params
+          sr32(6, 0x90000);
+          // Clear other regs
+          sr32(0, 0); sr32(1, 0); sr32(2, 0); sr32(3, 0);
+          sr32(5, 0); sr32(7, 0);
+          sr32(4, 0x90000); // ESP
+          // Disable interrupts
+          wr32(R_FLAGS, 2);
+
+          console.log('[JIT-STUCK-BOOT] PM state set: CR0=0x' +
+            ((cr0S | 1) & ~0x80000000).toString(16) +
+            ' CS=0x08 EIP=0x100000 ESI=0x90000');
+          console.log('[JIT-STUCK-BOOT] Jumping to startup_32!');
+
+          // Reset stuck counter to prevent re-triggering
+          stuckCount = 0;
+          stuckDumped = false;
+          // Mark as done in both locations
+          execBlock._directBootDone = true;
+          _directBootDone = true;
+          return n; // return to IEM with new register state
+        } else {
+          console.log('[JIT-STUCK] No kernel at 0x100000, not triggering direct boot');
+        }
+      }
     }
   }
 

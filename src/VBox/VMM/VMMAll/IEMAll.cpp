@@ -1447,7 +1447,7 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                     if (g_cWasmVirtualInstructions >= s_cNextDiag)
                     {
                         s_cNextDiag = g_cWasmVirtualInstructions
-                                    + (s_uDelayRip ? UINT64_C(1000000000) : UINT64_C(1000000));
+                                    + (s_uDelayRip ? UINT64_C(1000000000) : UINT64_C(10000000));
                         uint64_t fFFs = pVCpu->fLocalForcedActions;
                         RTPrintf("[IEM-DIAG] insns=%llu CR2=%#llx CR0=%#llx EFER=%#llx IF=%d FFs=%#RX64 EIP=%#llx\n",
                                  (unsigned long long)g_cWasmVirtualInstructions,
@@ -2173,7 +2173,7 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                    doesn't advance during synchronous JS execution in Wasm workers) */
                 {
                     static uint32_t s_cDiagCounter = 0;
-                    if (++s_cDiagCounter >= 500000)
+                    if (++s_cDiagCounter >= 5000000)
                     {
                         s_cDiagCounter = 0;
                         uint16_t cs = pVCpu->cpum.GstCtx.cs.Sel;
@@ -2623,7 +2623,6 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                             if (!s_fFastBootTried
                                 && uCS == 0x10
                                 && (pVCpu->cpum.GstCtx.cr0 & X86_CR0_PE)
-                                && !(pVCpu->cpum.GstCtx.msrEFER & MSR_K6_EFER_LMA)
                                 && pVCpu->cpum.GstCtx.rip >= UINT64_C(0x100000)
                                 && pVCpu->cpum.GstCtx.rip < UINT64_C(0x1000000))
                             {
@@ -2796,7 +2795,7 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                                 /* Timer poll detected expiry — log periodically */
                                 {
                                     static uint32_t s_cTimerHits = 0;
-                                    if (++s_cTimerHits <= 5 || (s_cTimerHits % 100) == 0)
+                                    if (++s_cTimerHits <= 5 || (s_cTimerHits % 1000) == 0)
                                     {
                                         extern volatile uint64_t g_cWasmVirtualInstructions;
                                         RTPrintf("[TIMER-POLL] hit #%u insns=%llu FFs=%#RX64 CR2=%#RX64 IF=%d\n",

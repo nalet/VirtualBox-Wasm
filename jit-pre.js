@@ -743,10 +743,10 @@ function execBlock(cpuP, ramB, maxInsn) {
 
   let ip = csDefBig ? rr32(R_IP) : rr16(R_IP);
 
-  // Trace kernel setup code (CS=0x1020) for debugging direct boot
+  // Trace kernel setup code (CS=0x9020) for debugging direct boot
   if (!execBlock._kernelTraceCount) execBlock._kernelTraceCount = 0;
   const csSel = rr16(S_CS);
-  if (csSel === 0x1020 && execBlock._kernelTraceCount < 20) {
+  if (csSel === 0x9020 && execBlock._kernelTraceCount < 20) {
     execBlock._kernelTraceCount++;
     const c0 = mem8[ramBase + csBase + ip];
     const c1 = mem8[ramBase + csBase + ip + 1];
@@ -812,6 +812,96 @@ function execBlock(cpuP, ramB, maxInsn) {
   let executed = 0;
   let lastBailOp = -1; // track the opcode that caused early exit
   const ramSize = mem8.length - ramBase; // available RAM
+
+  // ── Direct Boot Recovery ──
+  // ISOLINUX's shuffle overwrites its own code at CS=1000 with the kernel
+  // setup code. Detect this and perform a direct boot to the kernel.
+  if (!execBlock._directBootDone && csSel === 0x1000 && ip >= 0x1a00 && ip <= 0x1c00) {
+    // Check if the code at CS:IP is corrupted (mostly zeros)
+    const testAddr = ramBase + csBase + ip;
+    let zeroCount = 0;
+    for (let t = 0; t < 16; t++) if (mem8[testAddr + t] === 0) zeroCount++;
+    if (zeroCount >= 12) {
+      // Check if HdrS magic is at 0x10202 (setup code placed here by shuffle)
+      const h0 = mem8[ramBase + 0x10202];
+      const h1 = mem8[ramBase + 0x10203];
+      const h2 = mem8[ramBase + 0x10204];
+      const h3 = mem8[ramBase + 0x10205];
+      if (h0 === 0x48 && h1 === 0x64 && h2 === 0x72 && h3 === 0x53) { // 'HdrS'
+        console.log('[JIT-BOOT] ISOLINUX shuffle corrupted its own code!');
+        console.log('[JIT-BOOT] Performing direct boot recovery...');
+        console.log('[JIT-BOOT] Copying setup code: 0x10000 -> 0x90000 (0x4200 bytes)');
+
+        // Copy setup code from 0x10000 to 0x90000 (setup_sects=32 → 0x4200 bytes)
+        const setupSize = 0x4200;
+        for (let i = 0; i < setupSize; i++) {
+          mem8[ramBase + 0x90000 + i] = mem8[ramBase + 0x10000 + i];
+        }
+
+        // Also copy command line from 0x1F800 to 0x99000 (safe location in setup heap)
+        // and update cmd_line_ptr
+        let cmdLen = 0;
+        for (let i = 0; i < 256; i++) {
+          const ch = mem8[ramBase + 0x1F800 + i];
+          mem8[ramBase + 0x99000 + i] = ch;
+          if (ch === 0) { cmdLen = i; break; }
+        }
+        // Update cmd_line_ptr at offset 0x228 in the setup header (now at 0x90228)
+        const newCmdPtr = 0x99000;
+        mem8[ramBase + 0x90228] = newCmdPtr & 0xFF;
+        mem8[ramBase + 0x90229] = (newCmdPtr >> 8) & 0xFF;
+        mem8[ramBase + 0x9022A] = (newCmdPtr >> 16) & 0xFF;
+        mem8[ramBase + 0x9022B] = (newCmdPtr >> 24) & 0xFF;
+
+        console.log('[JIT-BOOT] Command line at 0x99000: "' + cmdLen + ' bytes"');
+
+        // Set CPU registers for kernel setup entry
+        // CS = 0x9020, IP = 0x0000 (entry point at setup_base + 0x200)
+        wr16(S_CS + SEG_SEL, 0x9020);
+        wr64(S_CS + SEG_BASE, 0x90200);
+        wrIP(0);
+
+        // DS = SS = ES = FS = GS = 0x9000
+        wr16(S_DS + SEG_SEL, 0x9000);
+        wr64(S_DS + SEG_BASE, 0x90000);
+        wr16(S_SS + SEG_SEL, 0x9000);
+        wr64(S_SS + SEG_BASE, 0x90000);
+        wr16(S_ES + SEG_SEL, 0x9000);
+        wr64(S_ES + SEG_BASE, 0x90000);
+        wr16(S_FS + SEG_SEL, 0x9000);
+        wr64(S_FS + SEG_BASE, 0x90000);
+        wr16(S_GS + SEG_SEL, 0x9000);
+        wr64(S_GS + SEG_BASE, 0x90000);
+
+        // SP = heap_end_ptr + 0x200 (from protocol)
+        // heap_end_ptr = 0xF5F4 (from the header)
+        const heapEnd = mem8[ramBase + 0x90224] | (mem8[ramBase + 0x90225] << 8);
+        const sp = (heapEnd + 0x200) & 0xFFFF;
+        sr16(4, sp); // SP = R_SP register index 4
+
+        // DL = boot drive (0x80 for first hard drive / CD-ROM in emulation)
+        sr16(2, 0x80); // DX low byte = DL
+
+        // Clear other registers
+        sr32(0, 0); // EAX
+        sr32(1, 0); // ECX
+        sr32(3, 0); // EBX
+        sr32(5, 0); // EBP
+        sr32(6, 0); // ESI
+        sr32(7, 0); // EDI
+
+        // Disable interrupts (kernel setup will re-enable when ready)
+        const curFlags = rr32(R_FLAGS);
+        wr32(R_FLAGS, curFlags & ~0x200); // clear IF
+
+        execBlock._directBootDone = true;
+        console.log('[JIT-BOOT] Direct boot: CS=9020:0000 SS=9000:' + sp.toString(16) +
+          ' DL=80 ramdisk=0x7E8F000 size=0x14F1E4');
+        console.log('[JIT-BOOT] Jumping to kernel real-mode setup!');
+        return 0; // return to IEM, which will execute from new CS:IP
+      }
+    }
+  }
 
   // Pre-read a chunk of code for fast access
   let codeLinear = csBase + ip;
@@ -4068,12 +4158,38 @@ function execBlockWrapped(cpuP, ramB, maxInsn, highRamP, highRamSz) {
         ' SI=' + si.toString(16) + ' DI=' + di.toString(16) +
         ' CR0=0x' + cr0.toString(16) + ' CR4=0x' + cr4.toString(16));
 
-      // Dump code bytes at current CS:IP (physical = csBase + IP)
+      // Dump code bytes: 16 bytes before + 32 bytes from CS:IP
       const phys = csBaseVal + eip;
       if (phys < 0xA0000 && ramBase) {
+        const preBytes = [];
+        const startPre = Math.max(0, phys - 16);
+        for (let ci = 0; ci < 16; ci++) preBytes.push(mem8[ramBase + startPre + ci].toString(16).padStart(2,'0'));
+        console.log('[JIT-STATE] code @0x' + startPre.toString(16) + ' (before IP): ' + preBytes.join(' '));
         const codeBytes = [];
-        for (let ci = 0; ci < 16; ci++) codeBytes.push(mem8[ramBase + phys + ci].toString(16).padStart(2,'0'));
-        console.log('[JIT-STATE] code @0x' + phys.toString(16) + ': ' + codeBytes.join(' '));
+        for (let ci = 0; ci < 32; ci++) codeBytes.push(mem8[ramBase + phys + ci].toString(16).padStart(2,'0'));
+        console.log('[JIT-STATE] code @0x' + phys.toString(16) + ' (at IP): ' + codeBytes.join(' '));
+      }
+      // Dump memory at key locations: BX+SI (what ADD instructions target)
+      if (ramBase) {
+        const bxsi = (dsSel * 16 + bx + si) & 0xFFFFF;
+        const memBytes = [];
+        for (let ci = 0; ci < 16; ci++) memBytes.push(mem8[ramBase + bxsi + ci].toString(16).padStart(2,'0'));
+        console.log('[JIT-STATE] mem @DS:BX+SI=0x' + bxsi.toString(16) + ': ' + memBytes.join(' '));
+        // Dump memory above 1MB to check if highRAM is accessible
+        console.log('[JIT-STATE] highRamPtr=' + highRamPtr + ' highRamEnd=' + highRamEnd);
+        // Check if kernel header at 0x100000 is populated (kernel should be there)
+        if (highRamPtr) {
+          const kernBytes = [];
+          for (let ci = 0; ci < 16; ci++) kernBytes.push(mem8[highRamPtr + ci].toString(16).padStart(2,'0'));
+          console.log('[JIT-STATE] @0x100000 (kernel): ' + kernBytes.join(' '));
+        }
+        // Check ESP register too
+        const esp = rr32(R_SP);
+        const ebp = rr32(R_BP);
+        console.log('[JIT-STATE] ESP=0x' + esp.toString(16) + ' EBP=0x' + ebp.toString(16) +
+          ' EAX=0x' + rr32(R_AX).toString(16) + ' EBX=0x' + rr32(R_BX).toString(16) +
+          ' ECX=0x' + rr32(R_CX).toString(16) + ' EDX=0x' + rr32(R_DX).toString(16) +
+          ' ESI=0x' + rr32(R_SI).toString(16) + ' EDI=0x' + rr32(R_DI).toString(16));
       }
 
       // Dump IVT[8] (INT 8 = PIT timer handler) and IVT[0x15] (INT 15h = BIOS services)

@@ -219,6 +219,23 @@ extern "C" void wasmJitSetGuestRAM(void *pv);
 /* Defined in wasm-kbd-drv.cpp — drain keyboard ring buffer on EMT thread */
 extern "C" int wasmKbdDrainQueue(void);
 
+/* Delay caller info — stored by EMT, readable from JS via Module._wasmGetDelay*() */
+static volatile uint64_t s_aDelayStack[8];   /* return address chain from RSP */
+static volatile uint64_t s_uDelayInfoRip = 0;
+static volatile uint64_t s_uDelayInfoRsp = 0;
+static volatile uint64_t s_uDelayInfoRbp = 0;
+static volatile uint32_t s_fDelayInfoValid = 0;
+
+extern "C" {
+    /* Return delay caller info as double (avoids BigInt serialization issues in JS).
+     * These are EMSCRIPTEN_KEEPALIVE so they appear as Module._wasmGetDelay*() */
+    EMSCRIPTEN_KEEPALIVE double wasmGetDelayRip(void)   { return (double)s_uDelayInfoRip; }
+    EMSCRIPTEN_KEEPALIVE double wasmGetDelayRsp(void)   { return (double)s_uDelayInfoRsp; }
+    EMSCRIPTEN_KEEPALIVE double wasmGetDelayRbp(void)   { return (double)s_uDelayInfoRbp; }
+    EMSCRIPTEN_KEEPALIVE double wasmGetDelayRet(int n)  { return (double)s_aDelayStack[n & 7]; }
+    EMSCRIPTEN_KEEPALIVE int    wasmGetDelayValid(void) { return s_fDelayInfoValid; }
+}
+
 static void iemJitEnsureInit(PVMCC pVM)
 {
     /* Fast path: fully initialised (high RAM is optional — don't block on it) */
@@ -1232,11 +1249,15 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                         }
                     }
 
-                    /* Periodic diagnostic: log timer/FF state every ~1M instructions */
+                    /* Periodic diagnostic: log timer/FF state.
+                     * Interval: 1M when exploring, 1B when delay accelerator is active
+                     * (to prevent IEM-DIAG from flooding the console and hiding
+                     * DELAY-ACCEL stack dumps). */
                     static uint64_t s_cNextDiag = 1000000;
                     if (g_cWasmVirtualInstructions >= s_cNextDiag)
                     {
-                        s_cNextDiag = g_cWasmVirtualInstructions + 1000000;
+                        s_cNextDiag = g_cWasmVirtualInstructions
+                                    + (s_uDelayRip ? UINT64_C(1000000000) : UINT64_C(1000000));
                         uint64_t fFFs = pVCpu->fLocalForcedActions;
                         RTPrintf("[IEM-DIAG] insns=%llu CR2=%#llx CR0=%#llx EFER=%#llx IF=%d FFs=%#RX64 EIP=%#llx\n",
                                  (unsigned long long)g_cWasmVirtualInstructions,
@@ -1535,34 +1556,31 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                                             s_uDelayRip = curRip;
                                             RTPrintf("[DELAY-ACCEL] Learned delay RIP=%#llx, enabling fast-path\n",
                                                 (unsigned long long)curRip);
-                                            /* Dump stack to identify caller chain */
-                                            uint64_t auStk[16];
-                                            RT_ZERO(auStk);
-                                            PGMPhysSimpleReadGCPtr(pVCpu, auStk, pVCpu->cpum.GstCtx.rsp, sizeof(auStk));
-                                            RTPrintf("[DELAY-ACCEL] RSP=%#llx RBP=%#llx\n",
-                                                (unsigned long long)pVCpu->cpum.GstCtx.rsp,
-                                                (unsigned long long)pVCpu->cpum.GstCtx.rbp);
-                                            for (int si = 0; si < 16; si++)
-                                                RTPrintf("[DELAY-STK] RSP+%02x: %#018llx\n",
-                                                    si*8, (unsigned long long)auStk[si]);
                                         }
-                                        /* Log and dump stack periodically */
+                                        /* Store caller info in globals (readable from JS via Module._wasmGetDelay*())
+                                         * and log periodically.  Update every time so JS always sees current caller. */
                                         {
                                             static unsigned s_cDelayLogs = 0;
                                             s_cDelayLogs++;
-                                            if (s_cDelayLogs <= 5 || (s_cDelayLogs % 500) == 0)
+                                            uint64_t auStk2[8];
+                                            RT_ZERO(auStk2);
+                                            PGMPhysSimpleReadGCPtr(pVCpu, auStk2, pVCpu->cpum.GstCtx.rsp, sizeof(auStk2));
+                                            /* Always update globals for JS access */
+                                            s_uDelayInfoRip = curRip;
+                                            s_uDelayInfoRsp = pVCpu->cpum.GstCtx.rsp;
+                                            s_uDelayInfoRbp = pVCpu->cpum.GstCtx.rbp;
+                                            for (int si = 0; si < 8; si++)
+                                                s_aDelayStack[si] = auStk2[si];
+                                            s_fDelayInfoValid = 1;
+                                            if (s_cDelayLogs <= 5 || (s_cDelayLogs % 100) == 0)
                                             {
-                                                RTPrintf("[DELAY-ACCEL] #%u RIP=%#llx %s=1 insns=%llu RAX_was=%#llx\n",
+                                                RTPrintf("[DELAY-ACCEL] #%u RIP=%#llx %s=1 insns=%llu\n",
                                                     s_cDelayLogs, (unsigned long long)curRip, pszReg,
-                                                    (unsigned long long)g_cWasmVirtualInstructions,
-                                                    (unsigned long long)pVCpu->cpum.GstCtx.rax);
-                                                /* Dump return address chain */
-                                                uint64_t auStk2[8];
-                                                RT_ZERO(auStk2);
-                                                PGMPhysSimpleReadGCPtr(pVCpu, auStk2, pVCpu->cpum.GstCtx.rsp, sizeof(auStk2));
-                                                RTPrintf("[DELAY-STK] ret=%#llx caller=%#llx RSP=%#llx\n",
+                                                    (unsigned long long)g_cWasmVirtualInstructions);
+                                                RTPrintf("[DELAY-STK] ret=%#llx caller=%#llx caller2=%#llx RSP=%#llx\n",
                                                     (unsigned long long)auStk2[0],
                                                     (unsigned long long)auStk2[1],
+                                                    (unsigned long long)auStk2[2],
                                                     (unsigned long long)pVCpu->cpum.GstCtx.rsp);
                                             }
                                         }
@@ -1581,15 +1599,22 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                                             RTPrintf("[DELAY-ACCEL] Learned delay RIP=%#llx (dec), enabling fast-path\n",
                                                 (unsigned long long)curRip);
                                         }
-                                        /* Periodic log with stack dump */
+                                        /* Store caller info + periodic log */
                                         {
                                             static unsigned s_cDecLogs = 0;
                                             s_cDecLogs++;
-                                            if (s_cDecLogs <= 3 || (s_cDecLogs % 500) == 0)
+                                            uint64_t auStk3[8];
+                                            RT_ZERO(auStk3);
+                                            PGMPhysSimpleReadGCPtr(pVCpu, auStk3, pVCpu->cpum.GstCtx.rsp, sizeof(auStk3));
+                                            /* Update globals for JS access */
+                                            s_uDelayInfoRip = curRip;
+                                            s_uDelayInfoRsp = pVCpu->cpum.GstCtx.rsp;
+                                            s_uDelayInfoRbp = pVCpu->cpum.GstCtx.rbp;
+                                            for (int si = 0; si < 8; si++)
+                                                s_aDelayStack[si] = auStk3[si];
+                                            s_fDelayInfoValid = 1;
+                                            if (s_cDecLogs <= 5 || (s_cDecLogs % 100) == 0)
                                             {
-                                                uint64_t auStk3[4];
-                                                RT_ZERO(auStk3);
-                                                PGMPhysSimpleReadGCPtr(pVCpu, auStk3, pVCpu->cpum.GstCtx.rsp, sizeof(auStk3));
                                                 RTPrintf("[DELAY-ACCEL] #%u dec-rax RIP=%#llx insns=%llu ret=%#llx caller=%#llx\n",
                                                     s_cDecLogs, (unsigned long long)curRip,
                                                     (unsigned long long)g_cWasmVirtualInstructions,

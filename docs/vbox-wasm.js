@@ -6279,15 +6279,27 @@ globalThis.VBoxJIT = (function() {
       console.log("[FAST-BOOT-JS] XZ decompress: src=0x" + compStart.toString(16) + " len=" + compLen + " dst=0x" + Number(dstBI).toString(16) + " cap=" + dstCap);
       const rc = Module._wasmXzDecompress(srcBI, compLen, dstBI, dstCap, outBI);
       if (rc !== 0) {
-        // Try reading from the relocated kernel instead (EIP was 0x2a2xxxx)
-        // Kernel relocated from 0x100000 to ~0x2a20000
-        const relocBase = rb + 44171264;
-        let dr = "";
-        for (let i = 0; i < 16; i++) dr += m[relocBase + compOff + i].toString(16).padStart(2, "0");
-        let dr1m = "";
-        for (let i = -8; i < 24; i++) dr1m += m[relocBase + compOff + ofs1m + i].toString(16).padStart(2, "0");
-        console.log("[FAST-BOOT-JS] Relocated XZ @0x2a20000+payOff: " + dr);
-        console.log("[FAST-BOOT-JS] Relocated XZ @1MB: " + dr1m);
+        // Scan entire high RAM for XZ magic (FD 37 7A 58 5A 00)
+        // The kernel relocated itself and the compressed data may be elsewhere
+        console.log("[FAST-BOOT-JS] Scanning high RAM for XZ magic...");
+        const scanEnd = hp + highRamSize;
+        let xzLocations = [];
+        for (let addr = hp; addr < scanEnd - 6; addr += 1) {
+          if (m[addr] === 253 && m[addr + 1] === 55 && m[addr + 2] === 122 && m[addr + 3] === 88 && m[addr + 4] === 90 && m[addr + 5] === 0) {
+            const gpa = 1048576 + (addr - hp);
+            xzLocations.push({
+              addr,
+              gpa
+            });
+            if (xzLocations.length >= 10) break;
+          }
+        }
+        console.log("[FAST-BOOT-JS] Found " + xzLocations.length + " XZ locations:");
+        for (const loc of xzLocations) {
+          let d = "";
+          for (let i = 0; i < 16; i++) d += m[loc.addr + i].toString(16).padStart(2, "0");
+          console.log("[FAST-BOOT-JS]   GPA=0x" + loc.gpa.toString(16) + " data: " + d);
+        }
         console.log("[FAST-BOOT-JS] XZ decompression failed, rc=" + rc);
         Module._free(pDstRaw);
         Module._free(pOutLenRaw);

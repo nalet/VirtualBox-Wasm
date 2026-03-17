@@ -5012,7 +5012,11 @@ function fastBootDecompress() {
   const t0 = performance.now();
   const compStart = hp + compOff;
   let vmlinux = null;
-  const isXzOrLzma = compType.startsWith('xz') || compType.startsWith('lzma');
+  // Detect compression from actual data bytes, not compType string
+  // (compType='header' when payload info comes from setup header)
+  const b0 = m[compStart], b1 = m[compStart+1];
+  const isXzOrLzma = (b0 === 0xFD && b1 === 0x37) || // XZ magic
+                     (b0 === 0x5D && b1 === 0x00);    // LZMA magic
 
   if (isXzOrLzma) {
     // Use C-side liblzma via wasmXzDecompress(src, srcLen, dst, dstCap, pOutLen)

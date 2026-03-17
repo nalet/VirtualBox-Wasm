@@ -6240,7 +6240,12 @@ globalThis.VBoxJIT = (function() {
     const t0 = performance.now();
     const compStart = hp + compOff;
     let vmlinux = null;
-    const isXzOrLzma = compType.startsWith("xz") || compType.startsWith("lzma");
+    // Detect compression from actual data bytes, not compType string
+    // (compType='header' when payload info comes from setup header)
+    const b0 = m[compStart], b1 = m[compStart + 1];
+    const isXzOrLzma = (b0 === 253 && b1 === 55) || // XZ magic
+    (b0 === 93 && b1 === 0);
+    // LZMA magic
     if (isXzOrLzma) {
       // Use C-side liblzma via wasmXzDecompress(src, srcLen, dst, dstCap, pOutLen)
       // Allocate 64MB output buffer via Module._malloc (returns BigInt in wasm64)

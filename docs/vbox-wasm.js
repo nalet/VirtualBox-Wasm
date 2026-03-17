@@ -6340,8 +6340,16 @@ globalThis.VBoxJIT = (function() {
         if (seg.memsz > seg.filesz) mf.fill(0, dst + seg.filesz, dst + seg.memsz);
       }
     }
+    // Refresh mem8 — Wasm buffer may have grown during XZ decompression (malloc)
+    mem8 = new Uint8Array(wasmMemory.buffer);
     const cr3val = buildPageTables64(TOTAL_RAM);
-    console.log("[FAST-BOOT-JS] Page tables at GPA 0x" + cr3val.toString(16));
+    // Verify page tables were written correctly
+    const ptBase = Number(highRamPtr) + (8388608 - 1048576);
+    const ptView = new DataView(wasmMemory.buffer);
+    const pml4e0 = ptView.getBigUint64(ptBase, true);
+    const pde8 = ptView.getBigUint64(ptBase + 12288 + 8 * 8, true);
+    // PD entry for 16MB
+    console.error("[FAST-BOOT] Page tables at GPA 0x" + cr3val.toString(16) + " PML4[0]=" + pml4e0.toString(16) + " PD[8]=" + pde8.toString(16));
     // Determine where boot_params actually lives (where HdrS was found)
     const bpGPA = (setupBase - rb);
     // 0x90000 or 0x10000

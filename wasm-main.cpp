@@ -30,6 +30,7 @@
 #include <VBox/vmm/cfgm.h>
 #include <VBox/vmm/pdmapi.h>
 #include <VBox/vmm/pdmdrv.h>
+#include <VBox/vmm/pgm.h>
 #include <VBox/vmm/mm.h>
 #include <VBox/err.h>
 #include <VBox/version.h>
@@ -600,6 +601,31 @@ int wasmXzDecompress(const uint8_t *pSrc, uint32_t cbSrc,
     if (pcbOut)
         *pcbOut = cbOut;
     RTPrintf("[XZ-DECOMP] Success: %u -> %u bytes (%.1fx)\n", cbSrc, cbOut, (double)cbOut / cbSrc);
+    return 0;
+}
+
+EMSCRIPTEN_KEEPALIVE
+int wasmPGMPhysWrite(uint64_t GCPhys, const void *pvBuf, uint32_t cbWrite)
+{
+    if (!g_pVM) return -1;
+    return PGMPhysWrite(g_pVM, (RTGCPHYS)GCPhys, pvBuf, cbWrite, PGMACCESSORIGIN_IEM);
+}
+
+EMSCRIPTEN_KEEPALIVE
+int wasmPGMPhysZero(uint64_t GCPhys, uint32_t cbZero)
+{
+    if (!g_pVM) return -1;
+    /* Zero guest RAM in 4KB chunks */
+    uint8_t abZero[4096];
+    RT_ZERO(abZero);
+    while (cbZero > 0)
+    {
+        uint32_t cbChunk = RT_MIN(cbZero, sizeof(abZero));
+        int rc = PGMPhysWrite(g_pVM, (RTGCPHYS)GCPhys, abZero, cbChunk, PGMACCESSORIGIN_IEM);
+        if (RT_FAILURE(rc)) return rc;
+        GCPhys += cbChunk;
+        cbZero -= cbChunk;
+    }
     return 0;
 }
 

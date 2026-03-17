@@ -6246,9 +6246,13 @@ globalThis.VBoxJIT = (function() {
     const isXzOrLzma = (b0 === 253 && b1 === 55) || // XZ magic
     (b0 === 93 && b1 === 0);
     // LZMA magic
+    // vmlinuxPtr: Wasm address of decompressed vmlinux (kept alive for PGMPhysWrite)
+    // vmlinuxLen: length of decompressed vmlinux
+    let vmlinuxPtr = 0;
+    // BigInt (Wasm address)
+    let vmlinuxLen = 0;
     if (isXzOrLzma) {
       // Use C-side liblzma via wasmXzDecompress(src, srcLen, dst, dstCap, pOutLen)
-      // Allocate 64MB output buffer via Module._malloc (returns BigInt in wasm64)
       const dstCap = 64 * 1024 * 1024;
       const pDstRaw = Module._malloc(dstCap);
       const pOutLenRaw = Module._malloc(4);
@@ -6259,22 +6263,17 @@ globalThis.VBoxJIT = (function() {
         if (pOutLenRaw) Module._free(pOutLenRaw);
         return 0;
       }
-      // In wasm64 (memory64), all pointer args must be BigInt
       const srcBI = BigInt(compStart);
       const dstBI = BigInt(pDstRaw);
       const outBI = BigInt(pOutLenRaw);
-      // The kernel relocates itself from 0x100000 to a higher address,
-      // which may corrupt the original data. Scan for relocated XZ copy.
-      // The relocated copy has identical XZ header bytes (first 16).
+      // Scan for relocated XZ copy (kernel self-relocates from 0x100000)
       let xzSrc = compStart;
       let xzSrcGPA = 1048576 + compOff;
       const origHdr = [];
       for (let i = 0; i < 16; i++) origHdr.push(m[compStart + i]);
-      // Scan high RAM for XZ magic with matching header
       const scanEnd = hp + highRamSize;
       for (let addr = hp + 1048576; addr < scanEnd - 6; addr++) {
         if (m[addr] === 253 && m[addr + 1] === 55 && m[addr + 2] === 122 && m[addr + 3] === 88 && m[addr + 4] === 90 && m[addr + 5] === 0) {
-          // Check if header matches (same XZ stream params)
           let match = true;
           for (let i = 6; i < 16; i++) {
             if (m[addr + i] !== origHdr[i]) {
@@ -6299,81 +6298,113 @@ globalThis.VBoxJIT = (function() {
         Module._free(pOutLenRaw);
         return 0;
       }
-      // Re-read memory views since buffer may have grown from malloc
-      const m2 = new Uint8Array(wasmMemory.buffer);
       const dv3 = new DataView(wasmMemory.buffer);
-      const outLen = dv3.getUint32(Number(outBI), true);
-      console.error("[FAST-BOOT] XZ decompressed: " + outLen + " bytes (" + (outLen >> 20) + "MB)");
-      vmlinux = new Uint8Array(outLen);
-      vmlinux.set(m2.subarray(Number(dstBI), Number(dstBI) + outLen));
-      Module._free(pDstRaw);
+      vmlinuxLen = dv3.getUint32(Number(outBI), true);
+      vmlinuxPtr = pDstRaw;
+      // keep alive — will free after PGMPhysWrite
       Module._free(pOutLenRaw);
+      console.error("[FAST-BOOT] XZ decompressed: " + vmlinuxLen + " bytes (" + (vmlinuxLen >> 20) + "MB)");
     } else {
-      // gzip — use jsGunzip
+      // gzip — decompress to JS array, then copy to Wasm buffer
       const comp = m.subarray(compStart, compStart + compLen);
-      vmlinux = jsGunzip(comp);
+      const gunzipped = jsGunzip(comp);
+      if (!gunzipped) {
+        console.error("[FAST-BOOT] gzip decompression failed");
+        return 0;
+      }
+      vmlinuxPtr = Module._malloc(gunzipped.length);
+      if (!vmlinuxPtr) {
+        console.error("[FAST-BOOT] malloc failed for gzip output");
+        return 0;
+      }
+      const mTmp = new Uint8Array(wasmMemory.buffer);
+      mTmp.set(gunzipped, Number(vmlinuxPtr));
+      vmlinuxLen = gunzipped.length;
     }
-    if (!vmlinux) {
+    if (!vmlinuxPtr || vmlinuxLen === 0) {
       const magic = m[compStart].toString(16).padStart(2, "0") + m[compStart + 1].toString(16).padStart(2, "0");
       console.error("[FAST-BOOT] Decompression failed, magic=0x" + magic);
       return 0;
     }
     const dt = (performance.now() - t0) | 0;
-    console.error("[FAST-BOOT] Decompressed: " + vmlinux.length + " bytes (" + (vmlinux.length >> 20) + "MB) in " + dt + "ms");
-    // Refresh memory views (buffer may have grown after malloc/decompress)
-    const mf = new Uint8Array(wasmMemory.buffer);
-    const dvf = new DataView(wasmMemory.buffer);
-    const elf = parseELF64(vmlinux);
+    console.error("[FAST-BOOT] Decompressed: " + vmlinuxLen + " bytes (" + (vmlinuxLen >> 20) + "MB) in " + dt + "ms");
+    // Parse ELF from Wasm buffer (vmlinuxPtr points to decompressed data)
+    const vmOff = Number(vmlinuxPtr);
+    const vmView = new Uint8Array(wasmMemory.buffer, vmOff, vmlinuxLen);
+    const elf = parseELF64(vmView);
     if (!elf) {
       console.error("[FAST-BOOT] ELF parse failed");
+      Module._free(vmlinuxPtr);
       return 0;
     }
     console.error("[FAST-BOOT] ELF entry=0x" + elf.entry.toString(16) + " segments=" + elf.segs.length);
     const TOTAL_RAM = 1048576 + highRamSize;
-    console.error("[FAST-BOOT] hp=0x" + hp.toString(16) + " highRamSize=0x" + highRamSize.toString(16) + " TOTAL_RAM=0x" + TOTAL_RAM.toString(16) + " typeof_hrp=" + typeof highRamPtr);
-    // Log first 16 bytes of vmlinux at seg[0].offset (what we'll copy)
-    if (elf.segs.length > 0) {
-      const s0 = elf.segs[0];
-      const srcBytes = [];
-      for (let i = 0; i < 16; i++) srcBytes.push(vmlinux[s0.offset + i].toString(16).padStart(2, "0"));
-      console.error("[FAST-BOOT] vmlinux @offset=" + s0.offset + ": " + srcBytes.join(" "));
-    }
+    // Load ELF segments into guest RAM via PGMPhysWrite (PGM handles
+    // non-contiguous page chunk mapping correctly, unlike direct mf.set)
     let segsLoaded = 0;
     for (let si = 0; si < elf.segs.length; si++) {
       const seg = elf.segs[si];
       const pa = Number(seg.paddr);
       const fits = (pa >= 1048576 && pa + seg.memsz <= TOTAL_RAM);
-      console.error("[FAST-BOOT] seg[" + si + "] paddr=0x" + pa.toString(16) + " vaddr=0x" + seg.vaddr.toString(16) + " filesz=" + seg.filesz + " memsz=" + seg.memsz + (fits ? " LOAD" : " SKIP(oom)"));
+      console.error("[FAST-BOOT] seg[" + si + "] paddr=0x" + pa.toString(16) + " vaddr=0x" + seg.vaddr.toString(16) + " filesz=" + seg.filesz + " memsz=" + seg.memsz + (fits ? " PGM-LOAD" : " SKIP(oom)"));
       if (fits) {
-        const dst = hp + (pa - 1048576);
-        if (seg.filesz > 0) mf.set(vmlinux.subarray(seg.offset, seg.offset + seg.filesz), dst);
-        if (seg.memsz > seg.filesz) mf.fill(0, dst + seg.filesz, dst + seg.memsz);
+        if (seg.filesz > 0) {
+          // Source: vmlinuxPtr + seg.offset in Wasm memory
+          const srcPtr = BigInt(vmOff + seg.offset);
+          const rcW = Module._wasmPGMPhysWrite(BigInt(pa), srcPtr, seg.filesz);
+          if (rcW !== 0) console.error("[FAST-BOOT] PGMPhysWrite seg[" + si + "] FAILED rc=" + rcW);
+        }
+        if (seg.memsz > seg.filesz) {
+          const rcZ = Module._wasmPGMPhysZero(BigInt(pa + seg.filesz), seg.memsz - seg.filesz);
+          if (rcZ !== 0) console.error("[FAST-BOOT] PGMPhysZero seg[" + si + "] BSS FAILED rc=" + rcZ);
+        }
         segsLoaded++;
       }
     }
-    // Verify entry point bytes in guest RAM after copy
-    const entryPA = Number(elf.entry);
-    const entryOff = hp + (entryPA - 1048576);
-    const vfy = new Uint8Array(wasmMemory.buffer);
-    const entryBytes = [];
-    for (let i = 0; i < 16; i++) entryBytes.push(vfy[entryOff + i].toString(16).padStart(2, "0"));
-    console.error("[FAST-BOOT] VERIFY @GPA=0x" + entryPA.toString(16) + " wasm_off=0x" + entryOff.toString(16) + ": " + entryBytes.join(" ") + " (loaded " + segsLoaded + "/" + elf.segs.length + " segs)");
-    // Refresh mem8 — Wasm buffer may have grown during XZ decompression (malloc)
+    console.error("[FAST-BOOT] Loaded " + segsLoaded + "/" + elf.segs.length + " segments via PGM");
+    // Free decompressed vmlinux buffer
+    Module._free(vmlinuxPtr);
+    vmlinuxPtr = 0;
+    // Refresh mem8 for page table and low-RAM writes
     mem8 = new Uint8Array(wasmMemory.buffer);
-    let cr3val;
-    try {
-      cr3val = buildPageTables64(TOTAL_RAM);
-    } catch (e) {
-      console.error("[FAST-BOOT] buildPageTables64 FAILED: " + e.message + "\n" + e.stack);
-      cr3val = 0;
+    const mf = new Uint8Array(wasmMemory.buffer);
+    const dvf = new DataView(wasmMemory.buffer);
+    // Build page tables in a temp buffer, then PGMPhysWrite to guest RAM
+    const PT_GPA = 8388608;
+    const PT_SIZE = 20480;
+    // 5 pages: PML4 + PDPT-lo + PDPT-hi + PD-lo + PD-hi
+    const ptBuf = Module._malloc(PT_SIZE);
+    if (!ptBuf) {
+      console.error("[FAST-BOOT] malloc failed for page tables");
+      return 0;
     }
-    // Verify page tables were written correctly
-    const ptBase = Number(highRamPtr) + (8388608 - 1048576);
-    const ptView = new DataView(wasmMemory.buffer);
-    const pml4e0 = ptView.getBigUint64(ptBase, true);
-    const pde8 = ptView.getBigUint64(ptBase + 12288 + 8 * 8, true);
-    // PD entry for 16MB
-    console.error("[FAST-BOOT] Page tables at GPA 0x" + cr3val.toString(16) + " PML4[0]=" + pml4e0.toString(16) + " PD[8]=" + pde8.toString(16));
+    {
+      const ptOff = Number(ptBuf);
+      const ptMem = new Uint8Array(wasmMemory.buffer);
+      const ptDv = new DataView(wasmMemory.buffer);
+      // Clear
+      ptMem.fill(0, ptOff, ptOff + PT_SIZE);
+      const P = 1, W = 2, PS = 128;
+      // PML4[0] → PDPT-low, PML4[511] → PDPT-high
+      ptDv.setBigUint64(ptOff, BigInt(PT_GPA + 4096) | BigInt(P | W), true);
+      ptDv.setBigUint64(ptOff + 511 * 8, BigInt(PT_GPA + 8192) | BigInt(P | W), true);
+      // PDPT-low[0] → PD-low
+      ptDv.setBigUint64(ptOff + 4096, BigInt(PT_GPA + 12288) | BigInt(P | W), true);
+      // PDPT-high[510] → PD-high (0xFFFFFFFF80000000 = PML4[511]:PDPT[510])
+      ptDv.setBigUint64(ptOff + 8192 + 510 * 8, BigInt(PT_GPA + 16384) | BigInt(P | W), true);
+      // PD entries: identity-map with 2MB pages
+      const nPages = Math.min(512, Math.ceil(TOTAL_RAM / 2097152));
+      for (let i = 0; i < nPages; i++) {
+        ptDv.setBigUint64(ptOff + 12288 + i * 8, BigInt(i * 2097152) | BigInt(P | W | PS), true);
+        ptDv.setBigUint64(ptOff + 16384 + i * 8, BigInt(i * 2097152) | BigInt(P | W | PS), true);
+      }
+      // Write page tables to guest RAM via PGM
+      const rcPT = Module._wasmPGMPhysWrite(BigInt(PT_GPA), ptBuf, PT_SIZE);
+      if (rcPT !== 0) console.error("[FAST-BOOT] PGMPhysWrite page tables FAILED rc=" + rcPT);
+    }
+    Module._free(ptBuf);
+    const cr3val = PT_GPA;
+    console.error("[FAST-BOOT] Page tables written to GPA 0x" + cr3val.toString(16) + " via PGM");
     // Determine where boot_params actually lives (where HdrS was found)
     const bpGPA = (setupBase - rb);
     // 0x90000 or 0x10000
@@ -12510,7 +12541,7 @@ function wasmFastBootDecompress() {
 }
 
 // Imports from the Wasm binary.
-var _main, _wasmGetFBCheckCount, _wasmGetFBLastEIP, _wasmGetFBLastHdrS1, _wasmGetFBLastHdrS2, _wasmGetFBBootCS, _wasmGetFBBootActive, _wasmJitSetGuestRAM, _wasmJitGetGuestRAM, _wasmXzDecompress, _free, _pthread_self, _wasmDisplayGetFB, _wasmDisplayGetWidth, _wasmDisplayGetHeight, _wasmDisplayCheckDirty, _wasmDisplayGetFBSize, _wasmDisplayRefresh, _wasmDisplayGetRefreshCount, _wasmDisplayGetUpdateRectCount, _wasmKbdPutScancode, _wasmKbdDrainQueue, _wasmKbdGetWritePtr, _wasmKbdGetReadPtr, _wasmKbdGetBufPtr, _wasmKbdGetBufSize, _wasmGetDelayRip, _wasmGetDelayRsp, _wasmGetDelayRbp, _wasmGetDelayRet, _wasmGetDelayValid, _wasmReadGuestPhys, _wasmGetGuestReadByte, _malloc, __emscripten_tls_init, __emscripten_proxy_main, __emscripten_thread_init, __emscripten_thread_crashed, _htonl, _htons, _ntohs, __emscripten_run_js_on_main_thread_done, __emscripten_run_js_on_main_thread, __emscripten_thread_free_data, __emscripten_thread_exit, __emscripten_check_mailbox, _setThrew, _emscripten_stack_set_limits, __emscripten_stack_restore, __emscripten_stack_alloc, _emscripten_stack_get_current, __indirect_function_table, wasmTable;
+var _main, _wasmGetFBCheckCount, _wasmGetFBLastEIP, _wasmGetFBLastHdrS1, _wasmGetFBLastHdrS2, _wasmGetFBBootCS, _wasmGetFBBootActive, _wasmJitSetGuestRAM, _wasmJitGetGuestRAM, _wasmXzDecompress, _wasmPGMPhysWrite, _wasmPGMPhysZero, _free, _pthread_self, _wasmDisplayGetFB, _wasmDisplayGetWidth, _wasmDisplayGetHeight, _wasmDisplayCheckDirty, _wasmDisplayGetFBSize, _wasmDisplayRefresh, _wasmDisplayGetRefreshCount, _wasmDisplayGetUpdateRectCount, _wasmKbdPutScancode, _wasmKbdDrainQueue, _wasmKbdGetWritePtr, _wasmKbdGetReadPtr, _wasmKbdGetBufPtr, _wasmKbdGetBufSize, _wasmGetDelayRip, _wasmGetDelayRsp, _wasmGetDelayRbp, _wasmGetDelayRet, _wasmGetDelayValid, _wasmReadGuestPhys, _wasmGetGuestReadByte, _malloc, __emscripten_tls_init, __emscripten_proxy_main, __emscripten_thread_init, __emscripten_thread_crashed, _htonl, _htons, _ntohs, __emscripten_run_js_on_main_thread_done, __emscripten_run_js_on_main_thread, __emscripten_thread_free_data, __emscripten_thread_exit, __emscripten_check_mailbox, _setThrew, _emscripten_stack_set_limits, __emscripten_stack_restore, __emscripten_stack_alloc, _emscripten_stack_get_current, __indirect_function_table, wasmTable;
 
 function assignWasmExports(wasmExports) {
   _main = Module["_main"] = wasmExports["__main_argc_argv"];
@@ -12523,6 +12554,8 @@ function assignWasmExports(wasmExports) {
   _wasmJitSetGuestRAM = Module["_wasmJitSetGuestRAM"] = wasmExports["wasmJitSetGuestRAM"];
   _wasmJitGetGuestRAM = Module["_wasmJitGetGuestRAM"] = wasmExports["wasmJitGetGuestRAM"];
   _wasmXzDecompress = Module["_wasmXzDecompress"] = wasmExports["wasmXzDecompress"];
+  _wasmPGMPhysWrite = Module["_wasmPGMPhysWrite"] = wasmExports["wasmPGMPhysWrite"];
+  _wasmPGMPhysZero = Module["_wasmPGMPhysZero"] = wasmExports["wasmPGMPhysZero"];
   _free = Module["_free"] = wasmExports["free"];
   _pthread_self = wasmExports["pthread_self"];
   _wasmDisplayGetFB = Module["_wasmDisplayGetFB"] = wasmExports["wasmDisplayGetFB"];

@@ -6168,19 +6168,24 @@ globalThis.VBoxJIT = (function() {
     const dv2 = new DataView(wasmMemory.buffer);
     const rb = Number(ramBase);
     const hp = Number(highRamPtr);
-    const setupBase = rb + 589824;
-    // Try to get payload_offset from setup header at 0x90000
+    // Try both 0x90000 and 0x10000 for setup header
+    // ISOLINUX may load setup at either address
+    let setupBase = rb + 589824;
     let payOff = 0, payLen = 0;
-    const hasHdrS = (m[setupBase + 514] === 72 && m[setupBase + 515] === 100 && m[setupBase + 516] === 114 && m[setupBase + 517] === 83);
+    let hasHdrS = (m[setupBase + 514] === 72 && m[setupBase + 515] === 100 && m[setupBase + 516] === 114 && m[setupBase + 517] === 83);
+    if (!hasHdrS) {
+      setupBase = rb + 65536;
+      hasHdrS = (m[setupBase + 514] === 72 && m[setupBase + 515] === 100 && m[setupBase + 516] === 114 && m[setupBase + 517] === 83);
+    }
     if (hasHdrS) {
       const proto = m[setupBase + 518] | (m[setupBase + 519] << 8);
       if (proto >= 520) {
         payOff = m[setupBase + 584] | (m[setupBase + 585] << 8) | (m[setupBase + 586] << 16) | (m[setupBase + 587] << 24);
         payLen = m[setupBase + 588] | (m[setupBase + 589] << 8) | (m[setupBase + 590] << 16) | (m[setupBase + 591] << 24);
       }
-      console.log("[FAST-BOOT-JS] HdrS found, proto=0x" + proto.toString(16) + " payOff=0x" + payOff.toString(16) + " payLen=" + payLen);
+      console.log("[FAST-BOOT-JS] HdrS found @0x" + (setupBase - rb).toString(16) + " proto=0x" + proto.toString(16) + " payOff=0x" + payOff.toString(16) + " payLen=" + payLen);
     } else {
-      console.log("[FAST-BOOT-JS] No HdrS at 0x90000");
+      console.log("[FAST-BOOT-JS] No HdrS at 0x90000 or 0x10000");
     }
     // If setup header didn't provide payload info, scan kernel image for
     // compression magic (gzip 0x1F8B, xz 0xFD37, lzma 0x5D00, bzip2 0x425A)
@@ -6240,35 +6245,36 @@ globalThis.VBoxJIT = (function() {
       // Use C-side liblzma via wasmXzDecompress(src, srcLen, dst, dstCap, pOutLen)
       // Allocate 64MB output buffer via Module._malloc (returns BigInt in wasm64)
       const dstCap = 64 * 1024 * 1024;
-      const pDst = Module._malloc(dstCap);
-      const pOutLen = Module._malloc(4);
+      const pDstRaw = Module._malloc(dstCap);
+      const pOutLenRaw = Module._malloc(4);
       // uint32_t
-      if (!pDst || !pOutLen) {
+      if (!pDstRaw || !pOutLenRaw) {
         console.log("[FAST-BOOT-JS] malloc failed for XZ decompress buffer");
-        if (pDst) Module._free(pDst);
-        if (pOutLen) Module._free(pOutLen);
+        if (pDstRaw) Module._free(pDstRaw);
+        if (pOutLenRaw) Module._free(pOutLenRaw);
         return 0;
       }
-      console.log("[FAST-BOOT-JS] XZ decompress: src=0x" + compStart.toString(16) + " len=" + compLen + " dst=0x" + Number(pDst).toString(16) + " cap=" + dstCap);
-      // Source is already in wasm memory at compStart (hp + compOff)
-      // All pointer args must be BigInt for wasm64
-      const srcPtr = BigInt(compStart);
-      const rc = Module._wasmXzDecompress(srcPtr, compLen, pDst, dstCap, pOutLen);
+      // In wasm64 (memory64), all pointer args must be BigInt
+      const srcBI = BigInt(compStart);
+      const dstBI = BigInt(pDstRaw);
+      const outBI = BigInt(pOutLenRaw);
+      console.log("[FAST-BOOT-JS] XZ decompress: src=0x" + compStart.toString(16) + " len=" + compLen + " dst=0x" + Number(dstBI).toString(16) + " cap=" + dstCap);
+      const rc = Module._wasmXzDecompress(srcBI, compLen, dstBI, dstCap, outBI);
       if (rc !== 0) {
         console.log("[FAST-BOOT-JS] XZ decompression failed, rc=" + rc);
-        Module._free(pDst);
-        Module._free(pOutLen);
+        Module._free(pDstRaw);
+        Module._free(pOutLenRaw);
         return 0;
       }
       // Re-read memory views since buffer may have grown from malloc
       const m2 = new Uint8Array(wasmMemory.buffer);
       const dv3 = new DataView(wasmMemory.buffer);
-      const outLen = dv3.getUint32(Number(pOutLen), true);
+      const outLen = dv3.getUint32(Number(outBI), true);
       console.log("[FAST-BOOT-JS] XZ decompressed: " + outLen + " bytes (" + (outLen >> 20) + "MB)");
       vmlinux = new Uint8Array(outLen);
-      vmlinux.set(m2.subarray(Number(pDst), Number(pDst) + outLen));
-      Module._free(pDst);
-      Module._free(pOutLen);
+      vmlinux.set(m2.subarray(Number(dstBI), Number(dstBI) + outLen));
+      Module._free(pDstRaw);
+      Module._free(pOutLenRaw);
     } else {
       // gzip — use jsGunzip
       const comp = m.subarray(compStart, compStart + compLen);
@@ -6303,10 +6309,17 @@ globalThis.VBoxJIT = (function() {
     }
     const cr3val = buildPageTables64(TOTAL_RAM);
     console.log("[FAST-BOOT-JS] Page tables at GPA 0x" + cr3val.toString(16));
-    // Copy boot_params to 0x10000 (safe location for kernel)
-    for (let i = 0; i < 4096; i++) mf[rb + 65536 + i] = mf[rb + 589824 + i];
+    // Determine where boot_params actually lives (where HdrS was found)
+    const bpGPA = (setupBase - rb);
+    // 0x90000 or 0x10000
+    console.log("[FAST-BOOT-JS] boot_params at GPA 0x" + bpGPA.toString(16));
+    // Copy boot_params to 0x10000 if they're at 0x90000
+    if (bpGPA !== 65536) {
+      for (let i = 0; i < 4096; i++) mf[rb + 65536 + i] = mf[setupBase + i];
+    }
+    // boot_params are now at 0x10000
     // Ensure serial console in command line
-    const cmdPtr = mf[rb + 589824 + 552] | (mf[rb + 589824 + 553] << 8) | (mf[rb + 589824 + 554] << 16) | (mf[rb + 589824 + 555] << 24);
+    const cmdPtr = mf[rb + 65536 + 552] | (mf[rb + 65536 + 553] << 8) | (mf[rb + 65536 + 554] << 16) | (mf[rb + 65536 + 555] << 24);
     if (cmdPtr > 0 && cmdPtr < 655360) {
       let cmdLen = 0;
       for (let i = 0; i < 256; i++) {

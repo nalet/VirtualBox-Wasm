@@ -2697,7 +2697,7 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                         }
 
                         /* Detailed trace: first 200 IEM instructions after boot */
-                        if (s_cBootInsns <= 200)
+                        if (s_cBootInsns <= 10)
                         {
                             RTPrintf("[DBOOT-INSN] #%llu CS=%04x EIP=%08llx FL=%08x ESP=%08x EAX=%08x\n",
                                      (unsigned long long)s_cBootInsns, uCS,
@@ -2705,7 +2705,7 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                                      pVCpu->cpum.GstCtx.eflags.u,
                                      (unsigned)pVCpu->cpum.GstCtx.rsp,
                                      (unsigned)pVCpu->cpum.GstCtx.rax);
-                            if (s_cBootInsns % 50 == 0) RTStrmFlush(g_pStdOut);
+                            if (s_cBootInsns % 5 == 0) RTStrmFlush(g_pStdOut);
                         }
                         /* Log CS changes */
                         if (uCS != s_uLastCS)
@@ -2718,8 +2718,8 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                             RTStrmFlush(g_pStdOut);
                             s_uLastCS = uCS;
                         }
-                        /* Periodic progress every 1M instructions */
-                        if (s_cBootInsns - s_cLastReport >= 1000000)
+                        /* Periodic progress every 50M instructions */
+                        if (s_cBootInsns - s_cLastReport >= 50000000)
                         {
                             s_cLastReport = s_cBootInsns;
                             uint64_t cr3 = pVCpu->cpum.GstCtx.cr3;

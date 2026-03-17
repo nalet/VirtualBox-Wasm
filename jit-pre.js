@@ -4950,9 +4950,9 @@ function fastBootDecompress() {
 
   // If setup header didn't provide payload info, scan kernel image for
   // compression magic (gzip 0x1F8B, xz 0xFD37, lzma 0x5D00, bzip2 0x425A)
-  let compStart = 0, compLen = 0, compType = '';
+  let compOff = -1, compLen = 0, compType = '';
   if (payOff > 0 && payLen > 0) {
-    compStart = hp + payOff; // payload_offset is relative to 0x100000
+    compOff = payOff; // payload_offset is relative to 0x100000
     compLen = payLen;
     compType = 'header';
   } else {
@@ -4962,24 +4962,26 @@ function fastBootDecompress() {
     for (let off = 0; off < scanLen - 6; off++) {
       const b0 = m[hp + off], b1 = m[hp + off + 1];
       if (b0 === 0x1F && b1 === 0x8B && m[hp+off+2] === 0x08) {
-        compStart = hp + off;
-        compLen = highRamSize - off; // assume rest is payload
+        compOff = off;
+        compLen = highRamSize - off;
         compType = 'gzip@0x' + (0x100000 + off).toString(16);
         console.log('[FAST-BOOT-JS] Found gzip at GPA 0x' + (0x100000+off).toString(16));
         break;
       }
       if (b0 === 0xFD && b1 === 0x37 && m[hp+off+2]===0x7A &&
           m[hp+off+3]===0x58 && m[hp+off+4]===0x5A && m[hp+off+5]===0x00) {
+        compOff = off;
+        compLen = highRamSize - off;
         compType = 'xz@0x' + (0x100000 + off).toString(16);
-        console.log('[FAST-BOOT-JS] Found XZ at GPA 0x' + (0x100000+off).toString(16) +
-          ' — XZ not supported, cannot fast-boot');
-        return 0; // XZ not implemented
+        console.log('[FAST-BOOT-JS] Found XZ at GPA 0x' + (0x100000+off).toString(16));
+        break;
       }
       if (b0 === 0x5D && b1 === 0x00 && m[hp+off+2]===0x00) {
+        compOff = off;
+        compLen = highRamSize - off;
         compType = 'lzma@0x' + (0x100000 + off).toString(16);
-        console.log('[FAST-BOOT-JS] Found LZMA at GPA 0x' + (0x100000+off).toString(16) +
-          ' — LZMA not supported');
-        return 0;
+        console.log('[FAST-BOOT-JS] Found LZMA at GPA 0x' + (0x100000+off).toString(16));
+        break;
       }
       if (b0 === 0x28 && b1 === 0xB5 && m[hp+off+2]===0x2F && m[hp+off+3]===0xFD) {
         compType = 'zstd@0x' + (0x100000 + off).toString(16);
@@ -4990,9 +4992,8 @@ function fastBootDecompress() {
     }
   }
 
-  if (!compStart) {
+  if (compOff < 0) {
     console.log('[FAST-BOOT-JS] No compressed payload found');
-    // Dump first 32 bytes at 0x100000 for debugging
     let d = '';
     for (let i = 0; i < 32; i++) d += m[hp+i].toString(16).padStart(2,'0') + ' ';
     console.log('[FAST-BOOT-JS] @0x100000: ' + d);
@@ -5003,8 +5004,51 @@ function fastBootDecompress() {
     ' (' + (compLen > 1024*1024 ? (compLen>>20)+'MB' : (compLen>>10)+'KB') + ')...');
 
   const t0 = performance.now();
-  const comp = m.subarray(compStart, compStart + compLen);
-  const vmlinux = jsGunzip(comp);
+  const compStart = hp + compOff;
+  let vmlinux = null;
+  const isXzOrLzma = compType.startsWith('xz') || compType.startsWith('lzma');
+
+  if (isXzOrLzma) {
+    // Use C-side liblzma via wasmXzDecompress(src, srcLen, dst, dstCap, pOutLen)
+    // Allocate 64MB output buffer via Module._malloc (returns BigInt in wasm64)
+    const dstCap = 64 * 1024 * 1024;
+    const pDst = Module._malloc(dstCap);
+    const pOutLen = Module._malloc(4); // uint32_t
+    if (!pDst || !pOutLen) {
+      console.log('[FAST-BOOT-JS] malloc failed for XZ decompress buffer');
+      if (pDst) Module._free(pDst);
+      if (pOutLen) Module._free(pOutLen);
+      return 0;
+    }
+    console.log('[FAST-BOOT-JS] XZ decompress: src=0x' + compStart.toString(16) +
+      ' len=' + compLen + ' dst=0x' + Number(pDst).toString(16) +
+      ' cap=' + dstCap);
+    // Source is already in wasm memory at compStart (hp + compOff)
+    // All pointer args must be BigInt for wasm64
+    const srcPtr = BigInt(compStart);
+    const rc = Module._wasmXzDecompress(srcPtr, compLen, pDst, dstCap, pOutLen);
+    if (rc !== 0) {
+      console.log('[FAST-BOOT-JS] XZ decompression failed, rc=' + rc);
+      Module._free(pDst);
+      Module._free(pOutLen);
+      return 0;
+    }
+    // Re-read memory views since buffer may have grown from malloc
+    const m2 = new Uint8Array(wasmMemory.buffer);
+    const dv3 = new DataView(wasmMemory.buffer);
+    const outLen = dv3.getUint32(Number(pOutLen), true);
+    console.log('[FAST-BOOT-JS] XZ decompressed: ' + outLen + ' bytes (' +
+      (outLen >> 20) + 'MB)');
+    vmlinux = new Uint8Array(outLen);
+    vmlinux.set(m2.subarray(Number(pDst), Number(pDst) + outLen));
+    Module._free(pDst);
+    Module._free(pOutLen);
+  } else {
+    // gzip — use jsGunzip
+    const comp = m.subarray(compStart, compStart + compLen);
+    vmlinux = jsGunzip(comp);
+  }
+
   if (!vmlinux) {
     const magic = m[compStart].toString(16).padStart(2,'0') +
       m[compStart+1].toString(16).padStart(2,'0');
@@ -5014,6 +5058,10 @@ function fastBootDecompress() {
   const dt = (performance.now() - t0) | 0;
   console.log('[FAST-BOOT-JS] Decompressed: ' + vmlinux.length + ' bytes (' +
     (vmlinux.length >> 20) + 'MB) in ' + dt + 'ms');
+
+  // Refresh memory views (buffer may have grown after malloc/decompress)
+  const mf = new Uint8Array(wasmMemory.buffer);
+  const dvf = new DataView(wasmMemory.buffer);
 
   const elf = parseELF64(vmlinux);
   if (!elf) {
@@ -5033,9 +5081,9 @@ function fastBootDecompress() {
     if (pa >= 0x100000 && pa + seg.memsz <= TOTAL_RAM) {
       const dst = hp + (pa - 0x100000);
       if (seg.filesz > 0)
-        m.set(vmlinux.subarray(seg.offset, seg.offset + seg.filesz), dst);
+        mf.set(vmlinux.subarray(seg.offset, seg.offset + seg.filesz), dst);
       if (seg.memsz > seg.filesz)
-        m.fill(0, dst + seg.filesz, dst + seg.memsz);
+        mf.fill(0, dst + seg.filesz, dst + seg.memsz);
     }
   }
 
@@ -5043,35 +5091,35 @@ function fastBootDecompress() {
   console.log('[FAST-BOOT-JS] Page tables at GPA 0x' + cr3val.toString(16));
 
   // Copy boot_params to 0x10000 (safe location for kernel)
-  for (let i = 0; i < 4096; i++) m[rb + 0x10000 + i] = m[setupBase + i];
+  for (let i = 0; i < 4096; i++) mf[rb + 0x10000 + i] = mf[rb + 0x90000 + i];
 
   // Ensure serial console in command line
-  const cmdPtr = m[setupBase+0x228]|(m[setupBase+0x229]<<8)|
-    (m[setupBase+0x22A]<<16)|(m[setupBase+0x22B]<<24);
+  const cmdPtr = mf[rb+0x90000+0x228]|(mf[rb+0x90000+0x229]<<8)|
+    (mf[rb+0x90000+0x22A]<<16)|(mf[rb+0x90000+0x22B]<<24);
   if (cmdPtr > 0 && cmdPtr < 0xA0000) {
     let cmdLen = 0;
     for (let i = 0; i < 256; i++) {
-      if (m[rb + cmdPtr + i] === 0) { cmdLen = i; break; }
+      if (mf[rb + cmdPtr + i] === 0) { cmdLen = i; break; }
     }
-    for (let i = 0; i < cmdLen; i++) m[rb + 0x99000 + i] = m[rb + cmdPtr + i];
+    for (let i = 0; i < cmdLen; i++) mf[rb + 0x99000 + i] = mf[rb + cmdPtr + i];
     const serialOpts = ' console=ttyS0,115200 earlyprintk=serial,ttyS0,115200 loglevel=7';
     for (let i = 0; i < serialOpts.length; i++)
-      m[rb + 0x99000 + cmdLen + i] = serialOpts.charCodeAt(i);
-    m[rb + 0x99000 + cmdLen + serialOpts.length] = 0;
-    dv2.setUint32(rb + 0x10000 + 0x228, 0x99000, true);
+      mf[rb + 0x99000 + cmdLen + i] = serialOpts.charCodeAt(i);
+    mf[rb + 0x99000 + cmdLen + serialOpts.length] = 0;
+    dvf.setUint32(rb + 0x10000 + 0x228, 0x99000, true);
   }
 
   // Write D64B metadata at guest 0x7200
-  dv2.setUint32(rb + 0x7200, 0x42343644, true); // "D64B"
-  dv2.setUint32(rb + 0x7204, cr3val, true);      // CR3
-  dv2.setBigUint64(rb + 0x7208, elf.entry, true); // entry point (64-bit)
-  dv2.setUint32(rb + 0x7210, 0x10000, true);     // boot_params GPA
+  dvf.setUint32(rb + 0x7200, 0x42343644, true); // "D64B"
+  dvf.setUint32(rb + 0x7204, cr3val, true);      // CR3
+  dvf.setBigUint64(rb + 0x7208, elf.entry, true); // entry point (64-bit)
+  dvf.setUint32(rb + 0x7210, 0x10000, true);     // boot_params GPA
 
   // Write GDT at guest 0x7300
-  dv2.setBigUint64(rb + 0x7300, 0n, true);                         // null
-  dv2.setBigUint64(rb + 0x7308, 0x00CF9A000000FFFFn, true);       // 32-bit code
-  dv2.setBigUint64(rb + 0x7310, 0x00AF9B000000FFFFn, true);       // 64-bit code
-  dv2.setBigUint64(rb + 0x7318, 0x00CF93000000FFFFn, true);       // data
+  dvf.setBigUint64(rb + 0x7300, 0n, true);                         // null
+  dvf.setBigUint64(rb + 0x7308, 0x00CF9A000000FFFFn, true);       // 32-bit code
+  dvf.setBigUint64(rb + 0x7310, 0x00AF9B000000FFFFn, true);       // 64-bit code
+  dvf.setBigUint64(rb + 0x7318, 0x00CF93000000FFFFn, true);       // data
 
   console.log('[FAST-BOOT-JS] Ready! entry=0x' + elf.entry.toString(16) +
     ' CR3=0x' + cr3val.toString(16) + ' boot_params=0x10000');

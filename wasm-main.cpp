@@ -36,6 +36,7 @@
 #include <VBox/log.h>
 
 #include <pthread.h>
+#include <lzma.h>
 
 #ifdef __EMSCRIPTEN__
 # include <emscripten.h>
@@ -534,6 +535,45 @@ EMSCRIPTEN_KEEPALIVE
 void *wasmJitGetGuestRAM(void)
 {
     return g_pvJitGuestRAM;
+}
+
+EMSCRIPTEN_KEEPALIVE
+int wasmXzDecompress(const uint8_t *pSrc, uint32_t cbSrc,
+                     uint8_t *pDst, uint32_t cbDstCap,
+                     uint32_t *pcbOut)
+{
+    /*
+     * Use VBox-liblzma to decompress XZ data in-place in Wasm memory.
+     * Called from jit-pre.js fastBootDecompress() for kernel decompression.
+     */
+    lzma_stream strm = LZMA_STREAM_INIT;
+    lzma_ret ret = lzma_stream_decoder(&strm, UINT64_MAX, 0);
+    if (ret != LZMA_OK)
+    {
+        RTPrintf("[XZ-DECOMP] lzma_stream_decoder init failed: %d\n", (int)ret);
+        return -1;
+    }
+
+    strm.next_in  = pSrc;
+    strm.avail_in = cbSrc;
+    strm.next_out = pDst;
+    strm.avail_out = cbDstCap;
+
+    ret = lzma_code(&strm, LZMA_FINISH);
+    uint32_t cbOut = (uint32_t)strm.total_out;
+    lzma_end(&strm);
+
+    if (ret != LZMA_STREAM_END)
+    {
+        RTPrintf("[XZ-DECOMP] lzma_code failed: ret=%d total_out=%u avail_in=%u avail_out=%u\n",
+                 (int)ret, cbOut, (uint32_t)strm.avail_in, (uint32_t)strm.avail_out);
+        return -2;
+    }
+
+    if (pcbOut)
+        *pcbOut = cbOut;
+    RTPrintf("[XZ-DECOMP] Success: %u -> %u bytes (%.1fx)\n", cbSrc, cbOut, (double)cbOut / cbSrc);
+    return 0;
 }
 
 } /* extern "C" */

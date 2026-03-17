@@ -7869,21 +7869,107 @@ IEM_CIMPL_DEF_0(iemCImpl_hlt)
                     RTPrintf("[HLT-PANIC] R9 buffer: \"%s\"\n", szPanic);
                 }
             }
-            /* Also try scanning above R9 for "panic" text */
+            /* Read VGA text buffer at physical 0xB8000 to find panic message */
             {
-                char szScan[512];
-                RT_ZERO(szScan);
-                /* Read the whole stack area around the panic buffer */
-                uint64_t scanAddr = pVCpu->cpum.GstCtx.r9 - 0x40;
-                int rc2 = PGMPhysSimpleReadGCPtr(pVCpu, szScan, scanAddr, sizeof(szScan) - 1);
+                uint8_t abVga[4000]; /* 80x25 * 2 bytes per cell */
+                RT_ZERO(abVga);
+                int rc2 = PGMPhysSimpleReadGCPhys(pVCpu->CTX_SUFF(pVM), abVga, 0xB8000, sizeof(abVga));
                 if (RT_SUCCESS(rc2))
                 {
-                    for (int j = 0; j < (int)sizeof(szScan) - 1; j++)
-                        if (szScan[j] < 0x20 || szScan[j] > 0x7e)
-                            szScan[j] = '.';
-                    szScan[sizeof(szScan) - 1] = '\0';
-                    RTPrintf("[HLT-SCAN] stack area: \"%.200s\"\n", szScan);
+                    /* Extract text from VGA buffer (every other byte is the char) */
+                    for (int row = 0; row < 25; row++)
+                    {
+                        char szLine[82];
+                        int lastNonSpace = -1;
+                        for (int col = 0; col < 80; col++)
+                        {
+                            char ch = abVga[(row * 80 + col) * 2];
+                            if (ch < 0x20 || ch > 0x7e) ch = ' ';
+                            szLine[col] = ch;
+                            if (ch != ' ') lastNonSpace = col;
+                        }
+                        szLine[lastNonSpace + 1] = '\0';
+                        if (szLine[0])
+                            RTPrintf("[HLT-VGA] %02d: %s\n", row, szLine);
+                    }
                 }
+            }
+            /* Scan physical memory for "not syncing" — finds both the format
+             * string constant (.rodata) and the actual printk output (__log_buf).
+             * Kernel image: phys 0x1000000, ~24MB. Also scan up to 64MB for log_buf. */
+            {
+                int cFound = 0;
+                for (uint64_t phys = 0x01000000; phys < 0x04000000 && cFound < 10; phys += 0x4000)
+                {
+                    char szBuf[0x4000]; /* 16KB */
+                    RT_ZERO(szBuf);
+                    int rc2 = PGMPhysSimpleReadGCPhys(pVCpu->CTX_SUFF(pVM), szBuf, (RTGCPHYS)phys, sizeof(szBuf));
+                    if (RT_SUCCESS(rc2))
+                    {
+                        for (int off = 0; off < (int)sizeof(szBuf) - 30; off++)
+                        {
+                            if (szBuf[off] == 'n' && szBuf[off+1] == 'o' && szBuf[off+2] == 't'
+                                && szBuf[off+3] == ' ' && szBuf[off+4] == 's' && szBuf[off+5] == 'y'
+                                && szBuf[off+6] == 'n' && szBuf[off+7] == 'c')
+                            {
+                                char szCtx[256];
+                                int start = off > 120 ? off - 120 : 0;
+                                int len = (int)sizeof(szBuf) - start;
+                                if (len > (int)sizeof(szCtx) - 1) len = (int)sizeof(szCtx) - 1;
+                                memcpy(szCtx, &szBuf[start], len);
+                                szCtx[len] = '\0';
+                                for (int j = 0; j < len; j++)
+                                    if ((uint8_t)szCtx[j] < 0x20 || (uint8_t)szCtx[j] > 0x7e)
+                                        szCtx[j] = '.';
+                                RTPrintf("[HLT-LOG] #%d phys=%#llx+%#x: \"%s\"\n",
+                                         ++cFound, (unsigned long long)phys, off, szCtx);
+                            }
+                        }
+                    }
+                }
+                RTPrintf("[HLT-LOG] scan done, %d matches in phys 0x1000000-0x4000000\n", cFound);
+            }
+            /* Dump the full printk ring buffer. We know it's near VA 0xffffffff82620000
+             * from the previous scan. Read 128KB around that area and extract all
+             * printable strings (printk_log format: 16-byte header + text). */
+            {
+                RTPrintf("[HLT-DMESG] === Begin kernel log dump ===\n");
+                /* Start well before the first match and read 256KB */
+                uint64_t logStart = 0xffffffff82610000ULL;
+                int cLines = 0;
+                for (uint64_t va = logStart; va < logStart + 0x40000ULL && cLines < 200; va += 0x1000)
+                {
+                    char szBuf[0x1000]; /* 4KB per read */
+                    RT_ZERO(szBuf);
+                    int rc2 = PGMPhysSimpleReadGCPtr(pVCpu, szBuf, va, sizeof(szBuf));
+                    if (RT_SUCCESS(rc2))
+                    {
+                        /* Extract printable strings >= 8 chars (kernel messages) */
+                        int runStart = -1;
+                        for (int off = 0; off <= (int)sizeof(szBuf); off++)
+                        {
+                            bool printable = (off < (int)sizeof(szBuf))
+                                          && ((uint8_t)szBuf[off] >= 0x20 && (uint8_t)szBuf[off] <= 0x7e);
+                            if (printable && runStart < 0)
+                                runStart = off;
+                            else if (!printable && runStart >= 0)
+                            {
+                                int runLen = off - runStart;
+                                if (runLen >= 8 && cLines < 200)
+                                {
+                                    char szLine[256];
+                                    int copyLen = runLen < (int)sizeof(szLine) - 1 ? runLen : (int)sizeof(szLine) - 1;
+                                    memcpy(szLine, &szBuf[runStart], copyLen);
+                                    szLine[copyLen] = '\0';
+                                    RTPrintf("[HLT-DMESG] %s\n", szLine);
+                                    cLines++;
+                                }
+                                runStart = -1;
+                            }
+                        }
+                    }
+                }
+                RTPrintf("[HLT-DMESG] === End kernel log dump (%d lines) ===\n", cLines);
             }
         }
         RTStrmFlush(g_pStdOut);

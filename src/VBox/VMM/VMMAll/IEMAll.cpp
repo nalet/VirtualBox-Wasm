@@ -1390,6 +1390,11 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                  * TMAllVirtual.cpp reads this to drive timer expiration under Wasm. */
                 {
                     extern volatile uint64_t g_cWasmVirtualInstructions;
+
+                    /* Set up s_pVMForRead early so wasmReadGuestPhys() works from JS
+                     * before DELAY-ACCEL fires (e.g., during decompression). */
+                    if (RT_UNLIKELY(!s_pVMForRead))
+                        s_pVMForRead = pVCpu->CTX_SUFF(pVM);
                     /* Track virtual time boost separately so we don't corrupt
                      * IEM's internal instruction counter (pVCpu->iem.s.cInstructions).
                      * The boost is accumulated from skipped delay loops and added to
@@ -1443,6 +1448,289 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                                  !!(pVCpu->cpum.GstCtx.eflags.u & X86_EFL_IF),
                                  fFFs,
                                  (unsigned long long)pVCpu->cpum.GstCtx.rip);
+
+                        /* ── One-shot E820 / BIOS memory diagnostic ──
+                         * Fires once at 5M instructions — by this point the BIOS has
+                         * finished POST, programmed CMOS, and set up the IVT (including
+                         * INT 15h for E820).  We dump:
+                         *  1) IVT entry for INT 15h (should point to BIOS handler)
+                         *  2) CMOS extended-memory registers (0x17-0x18, 0x30-0x31, 0x34-0x35)
+                         *  3) PGM physical memory accessibility at key addresses
+                         *  4) Scan for Linux boot_params header signature 'HdrS' (0x53726448)
+                         *     at offset 0x202 from candidate base addresses
+                         *  5) If boot_params found, dump E820 table from it */
+                        {
+                            static int s_cE820Dumps = 0;
+                            /* Dump at 5M (for IVT/BDA), 100M (ISOLINUX loaded kernel),
+                             * and when the decompressor exits (RIP leaves 0x02a2xxxx). */
+                            bool fShouldDump = false;
+                            if (s_cE820Dumps == 0 && g_cWasmVirtualInstructions >= 5000000)
+                                fShouldDump = true;
+                            else if (s_cE820Dumps == 1 && g_cWasmVirtualInstructions >= 100000000)
+                                fShouldDump = true;
+                            if (fShouldDump)
+                            {
+                                s_cE820Dumps++;
+                                RTPrintf("[E820-EARLY] ═══ Dump #%d at insns=%llu ═══\n",
+                                    s_cE820Dumps, (unsigned long long)g_cWasmVirtualInstructions);
+                                PVMCC pVMRead = pVCpu->CTX_SUFF(pVM);
+
+                                /* 1) IVT INT 15h vector at physical 0x54 */
+                                uint8_t abIvt[4] = {0};
+                                PGMPhysRead(pVMRead, 0x54, abIvt, 4, PGMACCESSORIGIN_DEBUGGER);
+                                uint16_t int15off = abIvt[0] | (abIvt[1] << 8);
+                                uint16_t int15seg = abIvt[2] | (abIvt[3] << 8);
+                                RTPrintf("[E820-EARLY] INT 15h IVT vector: %04x:%04x (phys %#x)\n",
+                                    int15seg, int15off, (int15seg << 4) + int15off);
+
+                                /* 2) BDA base memory at 0x413 */
+                                uint8_t abBda[2] = {0};
+                                PGMPhysRead(pVMRead, 0x413, abBda, 2, PGMACCESSORIGIN_DEBUGGER);
+                                RTPrintf("[E820-EARLY] BDA base memory: %u KB\n",
+                                    (unsigned)(abBda[0] | (abBda[1] << 8)));
+
+                                /* 3) PGM accessibility: try reading 4 bytes at key addresses */
+                                static const uint64_t aTestAddr[] = {
+                                    0x100000, 0xA00000, 0x3200000, 0x6400000, 0x7F00000
+                                };
+                                for (unsigned t = 0; t < RT_ELEMENTS(aTestAddr); t++)
+                                {
+                                    uint8_t abTest[4] = {0};
+                                    int rc2 = PGMPhysRead(pVMRead, aTestAddr[t], abTest, 4, PGMACCESSORIGIN_DEBUGGER);
+                                    RTPrintf("[E820-EARLY] PGM read at %#llx: rc=%d data=%02x%02x%02x%02x\n",
+                                        (unsigned long long)aTestAddr[t], rc2,
+                                        abTest[0], abTest[1], abTest[2], abTest[3]);
+                                }
+
+                                /* 4) Scan for Linux boot_params (signature 'HdrS' at offset 0x202)
+                                 * ISOLINUX typically loads setup at various aligned addresses. */
+                                static const uint64_t aBpCandidates[] = {
+                                    0x10000, 0x15000, 0x18000, 0x1F000, 0x20000,
+                                    0x7000, 0x8000, 0x90000, 0x96000, 0x97000,
+                                    0x98000, 0x99000, 0x9A000
+                                };
+                                for (unsigned c = 0; c < RT_ELEMENTS(aBpCandidates); c++)
+                                {
+                                    uint8_t abSig[4] = {0};
+                                    PGMPhysRead(pVMRead, aBpCandidates[c] + 0x202, abSig, 4,
+                                        PGMACCESSORIGIN_DEBUGGER);
+                                    uint32_t sig = abSig[0] | (abSig[1] << 8)
+                                                 | (abSig[2] << 16) | (abSig[3] << 24);
+                                    if (sig == 0x53726448) /* 'HdrS' */
+                                    {
+                                        RTPrintf("[E820-EARLY] boot_params found at %#llx (HdrS signature)\n",
+                                            (unsigned long long)aBpCandidates[c]);
+                                        /* Read e820_entries at offset 0x1E8 (1 byte) */
+                                        uint8_t e820cnt = 0;
+                                        PGMPhysRead(pVMRead, aBpCandidates[c] + 0x1E8, &e820cnt, 1,
+                                            PGMACCESSORIGIN_DEBUGGER);
+                                        RTPrintf("[E820-EARLY] e820_entries=%u\n", e820cnt);
+                                        /* Read E820 table at offset 0x2D0 (each entry is 20 bytes) */
+                                        for (unsigned e = 0; e < e820cnt && e < 32; e++)
+                                        {
+                                            uint8_t abEntry[20] = {0};
+                                            PGMPhysRead(pVMRead, aBpCandidates[c] + 0x2D0 + e * 20,
+                                                abEntry, 20, PGMACCESSORIGIN_DEBUGGER);
+                                            uint64_t addr = *(uint64_t *)&abEntry[0];
+                                            uint64_t size = *(uint64_t *)&abEntry[8];
+                                            uint32_t type = *(uint32_t *)&abEntry[16];
+                                            const char *pszType = type == 1 ? "usable"
+                                                : type == 2 ? "reserved" : type == 3 ? "ACPI"
+                                                : type == 4 ? "ACPI-NVS" : "unknown";
+                                            RTPrintf("[E820-EARLY] e820[%u]: %#018llx - %#018llx (%llu KB) type=%u (%s)\n",
+                                                e,
+                                                (unsigned long long)addr,
+                                                (unsigned long long)(addr + size),
+                                                (unsigned long long)(size >> 10),
+                                                type, pszType);
+                                        }
+                                    }
+                                }
+
+                                /* 5) Also scan for E820 entries in low memory (the BIOS stores them
+                                 * in the BDA/EBDA area for its own INT 15h handler) */
+                                /* Check if INT 15h works by reading the handler code */
+                                uint8_t abHandler[16] = {0};
+                                PGMPhysRead(pVMRead, (uint32_t)(int15seg << 4) + int15off,
+                                    abHandler, 16, PGMACCESSORIGIN_DEBUGGER);
+                                RTPrintf("[E820-EARLY] INT 15h handler code: ");
+                                for (int i = 0; i < 16; i++)
+                                    RTPrintf("%02x ", abHandler[i]);
+                                RTPrintf("\n");
+
+                                RTStrmFlush(g_pStdOut);
+                            }
+                        }
+
+                        /* ── Decompressor-exit detector ──
+                         * The kernel decompressor runs in the 0x02a20000-0x02a30000 range.
+                         * When RIP moves outside that range while in long mode, the
+                         * decompressed kernel has started. Dump boot_params E820 at that
+                         * point since the kernel is about to parse it. */
+                        {
+                            static bool s_fInDecompressor = false;
+                            static bool s_fDecompExitDumped = false;
+                            uint64_t rip = pVCpu->cpum.GstCtx.rip;
+                            bool fLongMode = !!(pVCpu->cpum.GstCtx.msrEFER & MSR_K6_EFER_LMA);
+
+                            if (!s_fInDecompressor && fLongMode
+                                && rip >= 0x02a20000 && rip < 0x02a30000)
+                                s_fInDecompressor = true;
+
+                            if (s_fInDecompressor && !s_fDecompExitDumped && fLongMode
+                                && (rip < 0x02a20000 || rip >= 0x02a30000))
+                            {
+                                s_fDecompExitDumped = true;
+                                RTPrintf("[DECOMP-EXIT] Decompressor finished! RIP=%#llx CR3=%#llx insns=%llu\n",
+                                    (unsigned long long)rip,
+                                    (unsigned long long)pVCpu->cpum.GstCtx.cr3,
+                                    (unsigned long long)g_cWasmVirtualInstructions);
+
+                                /* Scan for boot_params (HdrS signature) and inject E820 if empty.
+                                 * ISOLINUX fails to populate boot_params.e820_table under VBox-Wasm
+                                 * IEM emulation (likely because INT 15h AX=E820h doesn't work correctly
+                                 * during ISOLINUX's real-mode phase).  Inject the memory map that the
+                                 * BIOS *should* have returned for the configured RAM size. */
+                                PVMCC pVMRead = pVCpu->CTX_SUFF(pVM);
+                                static const uint64_t aBpCandidates[] = {
+                                    0x10000, 0x15000, 0x18000, 0x1F000, 0x20000,
+                                    0x7000, 0x8000, 0x90000, 0x96000, 0x97000,
+                                    0x98000, 0x99000, 0x9A000, 0x100000
+                                };
+                                for (unsigned c = 0; c < RT_ELEMENTS(aBpCandidates); c++)
+                                {
+                                    uint8_t abSig[4] = {0};
+                                    PGMPhysRead(pVMRead, aBpCandidates[c] + 0x202,
+                                        abSig, 4, PGMACCESSORIGIN_DEBUGGER);
+                                    uint32_t sig = abSig[0] | (abSig[1] << 8)
+                                                 | (abSig[2] << 16) | (abSig[3] << 24);
+                                    if (sig != 0x53726448) /* 'HdrS' */
+                                        continue;
+
+                                    uint64_t bpBase = aBpCandidates[c];
+                                    RTPrintf("[DECOMP-EXIT] boot_params at %#llx\n",
+                                        (unsigned long long)bpBase);
+
+                                    uint8_t e820cnt = 0;
+                                    PGMPhysRead(pVMRead, bpBase + 0x1E8,
+                                        &e820cnt, 1, PGMACCESSORIGIN_DEBUGGER);
+                                    RTPrintf("[DECOMP-EXIT] existing e820_entries=%u\n", e820cnt);
+
+                                    if (e820cnt == 0)
+                                    {
+                                        /* ── Inject E820 memory map for 128 MB RAM ── */
+                                        RTPrintf("[E820-FIX] Injecting E820 map (ISOLINUX failed to provide one)\n");
+
+                                        struct { uint64_t addr; uint64_t size; uint32_t type; } __attribute__((packed))
+                                        aEntries[] = {
+                                            { UINT64_C(0x000000000000), UINT64_C(0x000000009FC00), 1 }, /* usable: 0-639KB */
+                                            { UINT64_C(0x00000009FC00), UINT64_C(0x000000000400),  2 }, /* reserved: EBDA */
+                                            { UINT64_C(0x0000000E8000), UINT64_C(0x000000018000),  2 }, /* reserved: BIOS area */
+                                            { UINT64_C(0x000000100000), UINT64_C(0x000007EF0000),  1 }, /* usable: 1MB - ~127.9MB */
+                                            { UINT64_C(0x000007FF0000), UINT64_C(0x000000010000),  3 }, /* ACPI reclaim: 64KB at top */
+                                            { UINT64_C(0x0000FEC00000), UINT64_C(0x000000001000),  2 }, /* reserved: I/O APIC */
+                                            { UINT64_C(0x0000FEE00000), UINT64_C(0x000000001000),  2 }, /* reserved: Local APIC */
+                                            { UINT64_C(0x0000FFFC0000), UINT64_C(0x000000040000),  2 }, /* reserved: BIOS ROM */
+                                        };
+
+                                        /* Write e820_entries count */
+                                        uint8_t cnt = (uint8_t)RT_ELEMENTS(aEntries);
+                                        PGMPhysWrite(pVMRead, bpBase + 0x1E8, &cnt, 1, PGMACCESSORIGIN_DEBUGGER);
+
+                                        /* Write E820 table at offset 0x2D0 (each entry = 20 bytes) */
+                                        for (unsigned e = 0; e < RT_ELEMENTS(aEntries); e++)
+                                        {
+                                            PGMPhysWrite(pVMRead, bpBase + 0x2D0 + e * 20,
+                                                &aEntries[e], 20, PGMACCESSORIGIN_DEBUGGER);
+                                            const char *pszType = aEntries[e].type == 1 ? "usable"
+                                                : aEntries[e].type == 2 ? "reserved" : "ACPI";
+                                            RTPrintf("[E820-FIX] e820[%u]: %#018llx - %#018llx (%llu KB) type=%u (%s)\n",
+                                                e,
+                                                (unsigned long long)aEntries[e].addr,
+                                                (unsigned long long)(aEntries[e].addr + aEntries[e].size),
+                                                (unsigned long long)(aEntries[e].size >> 10),
+                                                aEntries[e].type, pszType);
+                                        }
+
+                                        /* Also set alt_mem_k at offset 0x1E0: extended memory in KB
+                                         * = (128MB - 1MB) / 1024 = 130048 */
+                                        uint32_t altMemK = 130048;
+                                        PGMPhysWrite(pVMRead, bpBase + 0x1E0, &altMemK, 4, PGMACCESSORIGIN_DEBUGGER);
+                                        RTPrintf("[E820-FIX] alt_mem_k=%u\n", altMemK);
+                                    }
+                                    else
+                                    {
+                                        /* E820 exists — just dump it */
+                                        for (unsigned e = 0; e < e820cnt && e < 32; e++)
+                                        {
+                                            uint8_t abEntry[20] = {0};
+                                            PGMPhysRead(pVMRead, bpBase + 0x2D0 + e * 20,
+                                                abEntry, 20, PGMACCESSORIGIN_DEBUGGER);
+                                            uint64_t eaddr = *(uint64_t *)&abEntry[0];
+                                            uint64_t esize = *(uint64_t *)&abEntry[8];
+                                            uint32_t etype = *(uint32_t *)&abEntry[16];
+                                            RTPrintf("[DECOMP-EXIT] e820[%u]: %#018llx - %#018llx type=%u\n",
+                                                e, (unsigned long long)eaddr,
+                                                (unsigned long long)(eaddr + esize), etype);
+                                        }
+                                    }
+                                    break; /* found boot_params, done */
+                                }
+                                RTStrmFlush(g_pStdOut);
+                            }
+                        }
+
+                        /* ── Robust E820 injection fallback ──
+                         * Runs every 1M diagnostic interval while in long mode.
+                         * If boot_params at 0x10000 has HdrS but e820_entries==0,
+                         * inject correct E820 entries.  This is a belt-and-suspenders
+                         * fallback in case the decompressor-exit detection doesn't fire
+                         * (e.g., different kernel with different decompressor address). */
+                        {
+                            static bool s_fE820Injected = false;
+                            if (!s_fE820Injected
+                                && (pVCpu->cpum.GstCtx.msrEFER & MSR_K6_EFER_LMA))
+                            {
+                                PVMCC pVMInj = pVCpu->CTX_SUFF(pVM);
+                                uint8_t abSig[4] = {0};
+                                PGMPhysRead(pVMInj, 0x10000 + 0x202, abSig, 4, PGMACCESSORIGIN_DEBUGGER);
+                                uint32_t sig = abSig[0] | (abSig[1]<<8) | (abSig[2]<<16) | (abSig[3]<<24);
+                                if (sig == 0x53726448) /* HdrS */
+                                {
+                                    uint8_t e820cnt = 0;
+                                    PGMPhysRead(pVMInj, 0x10000 + 0x1E8, &e820cnt, 1, PGMACCESSORIGIN_DEBUGGER);
+                                    if (e820cnt == 0)
+                                    {
+                                        s_fE820Injected = true;
+                                        RTPrintf("[E820-FIX-FALLBACK] Long mode detected, boot_params e820 empty — injecting\n");
+
+                                        struct { uint64_t addr; uint64_t size; uint32_t type; } __attribute__((packed))
+                                        aE[] = {
+                                            { UINT64_C(0x000000000000), UINT64_C(0x000000009FC00), 1 },
+                                            { UINT64_C(0x00000009FC00), UINT64_C(0x000000000400),  2 },
+                                            { UINT64_C(0x0000000E8000), UINT64_C(0x000000018000),  2 },
+                                            { UINT64_C(0x000000100000), UINT64_C(0x000007EF0000),  1 },
+                                            { UINT64_C(0x000007FF0000), UINT64_C(0x000000010000),  3 },
+                                            { UINT64_C(0x0000FEC00000), UINT64_C(0x000000001000),  2 },
+                                            { UINT64_C(0x0000FEE00000), UINT64_C(0x000000001000),  2 },
+                                            { UINT64_C(0x0000FFFC0000), UINT64_C(0x000000040000),  2 },
+                                        };
+                                        uint8_t cnt = (uint8_t)RT_ELEMENTS(aE);
+                                        PGMPhysWrite(pVMInj, 0x10000 + 0x1E8, &cnt, 1, PGMACCESSORIGIN_DEBUGGER);
+                                        for (unsigned e = 0; e < RT_ELEMENTS(aE); e++)
+                                            PGMPhysWrite(pVMInj, 0x10000 + 0x2D0 + e * 20,
+                                                &aE[e], 20, PGMACCESSORIGIN_DEBUGGER);
+                                        uint32_t altMemK = 130048;
+                                        PGMPhysWrite(pVMInj, 0x10000 + 0x1E0, &altMemK, 4, PGMACCESSORIGIN_DEBUGGER);
+                                        RTPrintf("[E820-FIX-FALLBACK] Injected %u E820 entries + alt_mem_k=%u\n",
+                                            cnt, altMemK);
+                                        RTStrmFlush(g_pStdOut);
+                                    }
+                                    else
+                                        s_fE820Injected = true; /* already has entries, don't check again */
+                                }
+                            }
+                        }
 
                         /* Force-enable IF after 200M insns if kernel is stuck with
                            IF=0 in 64-bit mode.  This unsticks calibration/init loops

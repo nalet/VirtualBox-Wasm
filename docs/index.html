@@ -614,7 +614,7 @@
         // Cache key includes a build version so new deploys invalidate old cache.
         // The JS file changes on each build, so use a hash of the JS URL's
         // last-modified or just use the script element's src with a version.
-        const wasmCacheKey = wasmUrl + '?v=cpuid-diag2';
+        const wasmCacheKey = wasmUrl + '?v=e820-fix1';
         appendLine('Loading WebAssembly module...', 'info');
         const t0 = performance.now();
 
@@ -1015,6 +1015,38 @@
             statusEl.textContent = `VM running — VGA ${w}x${h}`;
             lastUpdateRectCount = updates;
           }
+          // ── E820 injection: fix missing memory map in boot_params ──
+          // ISOLINUX fails to populate boot_params.e820_table under IEM emulation.
+          // When we detect HdrS at 0x10000 with e820_entries==0, inject correct entries.
+          try {
+            const ramE = Number(Module._wasmJitGetGuestRAM());
+            const memE = new Uint8Array(wasmMemory.buffer);
+            const dvE = new DataView(wasmMemory.buffer);
+            const bp = ramE + 0x10000;
+            const hdrSig = dvE.getUint32(bp + 0x202, true);
+            if (hdrSig === 0x53726448 && memE[bp + 0x1E8] === 0) {
+              // 8 E820 entries for 128MB RAM
+              const e820 = [
+                [0n, 0x9FC00n, 1],           // usable: 0-639KB
+                [0x9FC00n, 0x400n, 2],        // reserved: EBDA
+                [0xE8000n, 0x18000n, 2],      // reserved: BIOS
+                [0x100000n, 0x7EF0000n, 1],   // usable: 1MB-~127.9MB
+                [0x7FF0000n, 0x10000n, 3],    // ACPI reclaim
+                [0xFEC00000n, 0x1000n, 2],    // I/O APIC
+                [0xFEE00000n, 0x1000n, 2],    // Local APIC
+                [0xFFFC0000n, 0x40000n, 2],   // BIOS ROM
+              ];
+              memE[bp + 0x1E8] = e820.length;
+              for (let i = 0; i < e820.length; i++) {
+                const off = bp + 0x2D0 + i * 20;
+                dvE.setBigUint64(off, e820[i][0], true);
+                dvE.setBigUint64(off + 8, e820[i][1], true);
+                dvE.setUint32(off + 16, e820[i][2], true);
+              }
+              dvE.setUint32(bp + 0x1E0, 130048, true); // alt_mem_k
+              console.log('[E820-JS-FIX] Injected 8 E820 entries + alt_mem_k=130048');
+            }
+          } catch(e) {}
           // Try to preload kernel into guest RAM
           tryPreloadKernel();
           // Stop monitoring after 10 minutes

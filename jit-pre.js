@@ -1155,7 +1155,7 @@ function execBlock(cpuP, ramB, maxInsn) {
         // code32_start
         writeDword(setupBase + 0x214, 0x100000);
         // Command line
-        const cmdline = 'pmedia=cd BOOT_IMAGE=/vmlinuz console=ttyS0,115200 earlyprintk=serial,ttyS0,115200 loglevel=7';
+        const cmdline = 'pmedia=cd BOOT_IMAGE=/vmlinuz console=ttyS0,115200 earlyprintk=serial,ttyS0,115200 loglevel=7 idle=halt notsc clocksource=jiffies';
         for (let i = 0; i < cmdline.length; i++)
           mem8[ramBase + 0x99000 + i] = cmdline.charCodeAt(i);
         mem8[ramBase + 0x99000 + cmdline.length] = 0;
@@ -1239,7 +1239,7 @@ function execBlock(cpuP, ramB, maxInsn) {
           console.log('[JIT-BOOT] cmdline @0x' + cmdPtr.toString(16) + ' (' + cmdLen + ' bytes)');
         }
         // Append serial console options to command line
-        const serialOpts = ' console=ttyS0,115200 earlyprintk=serial,ttyS0,115200 loglevel=7';
+        const serialOpts = ' console=ttyS0,115200 earlyprintk=serial,ttyS0,115200 loglevel=7 idle=halt notsc clocksource=jiffies';
         for (let i = 0; i < serialOpts.length; i++)
           mem8[ramBase + 0x99000 + cmdLen + i] = serialOpts.charCodeAt(i);
         mem8[ramBase + 0x99000 + cmdLen + serialOpts.length] = 0;
@@ -4121,7 +4121,7 @@ function execBlock(cpuP, ramB, maxInsn) {
                 highRamPtr + (INITRD_GPA - 0x100000));
 
               // Write kernel command line at guest 0x20000
-              const cmdline = 'console=ttyS0,115200 earlyprintk=serial,ttyS0,115200 loglevel=7 lpj=5000 auto\0';
+              const cmdline = 'console=ttyS0,115200 earlyprintk=serial,ttyS0,115200 loglevel=7 lpj=5000 auto idle=halt notsc clocksource=jiffies\0';
               for (let ci = 0; ci < cmdline.length; ci++)
                 mem8[ramBase + CMDLINE_GPA + ci] = cmdline.charCodeAt(ci);
 
@@ -4739,7 +4739,7 @@ function execBlockWrapped(cpuP, ramB, maxInsn, highRamP, highRamSz) {
           // Check if initrd was loaded (typically at ~0x1000000 for 32MB systems)
           // For now, we rely on the kernel finding it via initrd= cmdline or embedded
           // Command line
-          const cmdline = 'pmedia=cd BOOT_IMAGE=/vmlinuz console=ttyS0,115200 earlyprintk=serial,ttyS0,115200 loglevel=7';
+          const cmdline = 'pmedia=cd BOOT_IMAGE=/vmlinuz console=ttyS0,115200 earlyprintk=serial,ttyS0,115200 loglevel=7 idle=halt notsc clocksource=jiffies';
           for (let ci = 0; ci < cmdline.length; ci++)
             mem8[rb + 0x99000 + ci] = cmdline.charCodeAt(ci);
           mem8[rb + 0x99000 + cmdline.length] = 0;
@@ -5211,12 +5211,20 @@ function fastBootDecompress() {
       if (mf[rb + cmdPtr + i] === 0) { cmdLen = i; break; }
     }
     for (let i = 0; i < cmdLen; i++) mf[rb + 0x99000 + i] = mf[rb + cmdPtr + i];
-    const serialOpts = ' console=ttyS0,115200 earlyprintk=serial,ttyS0,115200 loglevel=7';
+    const serialOpts = ' console=ttyS0,115200 earlyprintk=serial,ttyS0,115200 loglevel=7 idle=halt notsc clocksource=jiffies';
     for (let i = 0; i < serialOpts.length; i++)
       mf[rb + 0x99000 + cmdLen + i] = serialOpts.charCodeAt(i);
     mf[rb + 0x99000 + cmdLen + serialOpts.length] = 0;
     dvf.setUint32(rb + 0x10000 + 0x228, 0x99000, true);
   }
+
+  // Log ramdisk info from boot_params for diagnostics
+  const rdImg = mf[rb+0x10000+0x218]|(mf[rb+0x10000+0x219]<<8)|
+    (mf[rb+0x10000+0x21A]<<16)|(mf[rb+0x10000+0x21B]<<24);
+  const rdSz = mf[rb+0x10000+0x21C]|(mf[rb+0x10000+0x21D]<<8)|
+    (mf[rb+0x10000+0x21E]<<16)|(mf[rb+0x10000+0x21F]<<24);
+  console.error('[FAST-BOOT] boot_params ramdisk_image=0x' + rdImg.toString(16) +
+    ' ramdisk_size=0x' + rdSz.toString(16) + ' (' + (rdSz >> 10) + 'KB)');
 
   // Write D64B metadata at guest 0x7200
   dvf.setUint32(rb + 0x7200, 0x42343644, true); // "D64B"

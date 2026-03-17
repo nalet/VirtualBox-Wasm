@@ -2601,6 +2601,7 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                 /* Monitor kernel boot progress: log CS changes and milestones */
                 {
                     static bool     s_fBootActive = false;
+                    static bool     s_fFB64Active = false;
                     static uint16_t s_uLastCS = 0;
                     static uint64_t s_cBootInsns = 0;
                     static uint64_t s_cLastReport = 0;
@@ -2620,6 +2621,19 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                     if (s_fBootActive)
                     {
                         s_cBootInsns++;
+
+                        /* Trace first 20 instructions after 64-bit kernel entry */
+                        if (s_fFB64Active && s_cBootInsns <= 20)
+                        {
+                            RTPrintf("[FB64-TRACE] #%llu RIP=%#018llx RSP=%#018llx CR0=%#010llx EFER=%#010llx\n",
+                                     (unsigned long long)s_cBootInsns,
+                                     (unsigned long long)pVCpu->cpum.GstCtx.rip,
+                                     (unsigned long long)pVCpu->cpum.GstCtx.rsp,
+                                     (unsigned long long)pVCpu->cpum.GstCtx.cr0,
+                                     (unsigned long long)pVCpu->cpum.GstCtx.msrEFER);
+                            RTStrmFlush(g_pStdOut);
+                        }
+
                         uint16_t uCS = pVCpu->cpum.GstCtx.cs.Sel;
 
                         /* Fast boot: detect 32-bit PM kernel decompressor running and
@@ -2717,10 +2731,18 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                                         pCtx->idtr.pIdt = 0; pCtx->idtr.cbIdt = 0;
                                         pCtx->cr2 = 0;
 
+                                        /* Also zero R8-R15 for clean state */
+                                        pCtx->r8 = 0; pCtx->r9 = 0; pCtx->r10 = 0; pCtx->r11 = 0;
+                                        pCtx->r12 = 0; pCtx->r13 = 0; pCtx->r14 = 0; pCtx->r15 = 0;
+
                                         VMCPU_FF_SET(pVCpu, VMCPU_FF_PGM_SYNC_CR3);
 
-                                        RTPrintf("[FAST-BOOT-CPP] Entering 64-bit kernel: RIP=%#018llx RSI=%#010x\n",
-                                                 (unsigned long long)pCtx->rip, (unsigned)pCtx->rsi);
+                                        s_cBootInsns = 0; /* reset trace counter */
+                                        s_fFB64Active = true;
+
+                                        RTPrintf("[FAST-BOOT-CPP] Entering 64-bit kernel: RIP=%#018llx RSI=%#010x CR3=%#010llx\n",
+                                                 (unsigned long long)pCtx->rip, (unsigned)pCtx->rsi,
+                                                 (unsigned long long)pCtx->cr3);
                                         RTStrmFlush(g_pStdOut);
                                         /* Re-init decoder for new mode */
                                         iemReInitDecoder(pVCpu);

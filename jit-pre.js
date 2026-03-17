@@ -815,117 +815,161 @@ function execBlock(cpuP, ramB, maxInsn) {
 
   // ── Direct Boot Recovery ──
   // ISOLINUX's shuffle overwrites its own code with the kernel setup code.
-  // The ISOLINUX segment varies with RAM size (0x1000 with 128MB, 0x9000 with 32MB).
-  // Detect corruption: IP in 0x1a00-0x1c00 range with mostly-zero code,
-  // and HdrS magic at csBase+0x202 (vmlinuz header placed on top of ISOLINUX).
-  if (!execBlock._directBootDone && ip >= 0x1a00 && ip <= 0x1c00 && !protMode) {
-    // Check if the code at CS:IP is corrupted (mostly zeros)
+  // The shuffle's bcopy32 (protected-mode flat copy) can cause PGM copy-on-write,
+  // making mem8[ramBase+...] and PGM's physical memory diverge.
+  // Detection: IP in 0x1a00-0x1c00, code is mostly zeros, real mode, not BIOS.
+  if (!execBlock._directBootDone && ip >= 0x1a00 && ip <= 0x1c00 && !protMode
+      && csBase < 0xF0000) {
     const testAddr = ramBase + csBase + ip;
     let zeroCount = 0;
     for (let t = 0; t < 16; t++) if (mem8[testAddr + t] === 0) zeroCount++;
     if (zeroCount >= 12) {
-      // Check if HdrS magic is at csBase+0x202 (setup code placed on top of ISOLINUX)
-      const hdrBase = ramBase + csBase;
-      const h0 = mem8[hdrBase + 0x202];
-      const h1 = mem8[hdrBase + 0x203];
-      const h2 = mem8[hdrBase + 0x204];
-      const h3 = mem8[hdrBase + 0x205];
-      if (h0 === 0x48 && h1 === 0x64 && h2 === 0x72 && h3 === 0x53) { // 'HdrS'
-        const isolBase = csBase; // ISOLINUX was at this physical address
-        console.log('[JIT-BOOT] ISOLINUX shuffle corrupted code at CS=0x' +
-          csSel.toString(16) + ' (phys 0x' + isolBase.toString(16) + ')');
-        console.log('[JIT-BOOT] Performing direct boot recovery...');
+      console.log('[JIT-BOOT] ISOLINUX shuffle corrupted code at CS=0x' +
+        csSel.toString(16) + ' (phys 0x' + csBase.toString(16) + ') IP=0x' + ip.toString(16));
 
-        // Read setup_sects from the header to determine copy size
-        const setupSects = mem8[hdrBase + 0x1F1];
-        const setupSize = (setupSects + 1) * 512;
-        console.log('[JIT-BOOT] setup_sects=' + setupSects + ' size=0x' + setupSize.toString(16));
-
-        // The setup code is at csBase (placed by the shuffle on top of ISOLINUX).
-        // If ISOLINUX is at 0x90000, the setup code is ALREADY at 0x90000 — no copy needed!
-        // If ISOLINUX is at 0x10000, copy to 0x90000.
-        if (isolBase !== 0x90000) {
-          console.log('[JIT-BOOT] Copying setup from 0x' + isolBase.toString(16) + ' to 0x90000');
-          for (let i = 0; i < setupSize; i++) {
-            mem8[ramBase + 0x90000 + i] = mem8[hdrBase + i];
-          }
-        } else {
-          console.log('[JIT-BOOT] Setup code already at 0x90000, no copy needed');
+      // Scan multiple locations for HdrS magic — PGM/mem8 may diverge after bcopy32
+      const hdrCandidates = [csBase, 0x10000, 0x90000, 0x20000, 0x80000];
+      let hdrPhys = -1;
+      for (let ci = 0; ci < hdrCandidates.length; ci++) {
+        const cand = hdrCandidates[ci];
+        if (cand >= 0xA0000) continue; // only low RAM accessible via ramBase
+        const off = ramBase + cand;
+        if (mem8[off + 0x202] === 0x48 && mem8[off + 0x203] === 0x64 &&
+            mem8[off + 0x204] === 0x72 && mem8[off + 0x205] === 0x53) {
+          hdrPhys = cand;
+          console.log('[JIT-BOOT] Found HdrS at phys 0x' + cand.toString(16));
+          break;
         }
+      }
 
-        // Find and copy command line
-        const cmdPtr = mem8[hdrBase + 0x228] | (mem8[hdrBase + 0x229] << 8) |
-          (mem8[hdrBase + 0x22A] << 16) | (mem8[hdrBase + 0x22B] << 24);
+      if (hdrPhys < 0) {
+        // HdrS not found in mem8[] — PGM has diverged. Use hardcoded FossaPup64 values.
+        console.log('[JIT-BOOT] HdrS not found in mem8 — using hardcoded boot params');
+        // Diagnostics: dump what mem8 sees at candidate locations
+        for (let ci = 0; ci < 3; ci++) {
+          const cand = [csBase, 0x10000, 0x90000][ci];
+          if (cand >= 0xA0000) continue;
+          let d = '';
+          for (let b = 0; b < 16; b++)
+            d += mem8[ramBase + cand + 0x200 + b].toString(16).padStart(2, '0') + ' ';
+          console.log('[JIT-BOOT-DIAG] phys 0x' + cand.toString(16) + '+0x200: ' + d);
+        }
+      }
+
+      // Build boot_params at 0x90000 — either from found header or hardcoded
+      const setupBase = ramBase + 0x90000;
+      if (hdrPhys >= 0 && hdrPhys !== 0x90000) {
+        // Copy setup code from found location to 0x90000
+        const srcBase = ramBase + hdrPhys;
+        const srcSects = mem8[srcBase + 0x1F1] || 32;
+        const cpSize = (srcSects + 1) * 512;
+        console.log('[JIT-BOOT] Copying setup from 0x' + hdrPhys.toString(16) +
+          ' (' + cpSize + ' bytes)');
+        for (let i = 0; i < cpSize; i++) mem8[setupBase + i] = mem8[srcBase + i];
+      } else if (hdrPhys < 0) {
+        // Hardcoded FossaPup64 boot_params — write minimal Linux boot header
+        // Clear first 0x300 bytes
+        for (let i = 0; i < 0x300; i++) mem8[setupBase + i] = 0;
+        // Boot signature at 0x1FE
+        mem8[setupBase + 0x1FE] = 0x55;
+        mem8[setupBase + 0x1FF] = 0xAA;
+        // Setup header at 0x200
+        // jump instruction (2 bytes): eb 66 (jmp +0x66)
+        mem8[setupBase + 0x200] = 0xEB;
+        mem8[setupBase + 0x201] = 0x66;
+        // 'HdrS' magic at 0x202
+        mem8[setupBase + 0x202] = 0x48; // H
+        mem8[setupBase + 0x203] = 0x64; // d
+        mem8[setupBase + 0x204] = 0x72; // r
+        mem8[setupBase + 0x205] = 0x53; // S
+        // Protocol version 2.13 at 0x206
+        mem8[setupBase + 0x206] = 0x0D;
+        mem8[setupBase + 0x207] = 0x02;
+        // setup_sects at 0x1F1
+        mem8[setupBase + 0x1F1] = 32;
+        // loadflags at 0x211: LOADED_HIGH (1) | CAN_USE_HEAP (0x80)
+        mem8[setupBase + 0x211] = 0x81;
+        // heap_end_ptr at 0x224: 0xDE00 (typical)
+        mem8[setupBase + 0x224] = 0x00;
+        mem8[setupBase + 0x225] = 0xDE;
+        // type_of_loader at 0x210: 0xFF (unknown)
+        mem8[setupBase + 0x210] = 0xFF;
+        // code32_start at 0x214: 0x100000
+        mem8[setupBase + 0x214] = 0x00;
+        mem8[setupBase + 0x215] = 0x00;
+        mem8[setupBase + 0x216] = 0x10;
+        mem8[setupBase + 0x217] = 0x00;
+
+        // Write command line at 0x99000
+        const cmdline = 'pmedia=cd initrd=/initrd.gz BOOT_IMAGE=/vmlinuz';
+        for (let i = 0; i < cmdline.length; i++)
+          mem8[ramBase + 0x99000 + i] = cmdline.charCodeAt(i);
+        mem8[ramBase + 0x99000 + cmdline.length] = 0;
+        // cmd_line_ptr at 0x228: 0x99000
+        mem8[setupBase + 0x228] = 0x00;
+        mem8[setupBase + 0x229] = 0x90;
+        mem8[setupBase + 0x22A] = 0x09;
+        mem8[setupBase + 0x22B] = 0x00;
+        console.log('[JIT-BOOT] Wrote hardcoded boot_params + cmdline');
+      }
+
+      // If we have a header source (found or hardcoded), copy command line
+      if (hdrPhys >= 0) {
+        const srcBase = (hdrPhys === 0x90000) ? setupBase : ramBase + hdrPhys;
+        const cmdPtr = mem8[srcBase + 0x228] | (mem8[srcBase + 0x229] << 8) |
+          (mem8[srcBase + 0x22A] << 16) | (mem8[srcBase + 0x22B] << 24);
         let cmdLen = 0;
         if (cmdPtr > 0 && cmdPtr < 0xA0000) {
-          // Copy command line to 0x99000 (safe location in setup heap)
           for (let i = 0; i < 256; i++) {
             const ch = mem8[ramBase + cmdPtr + i];
             mem8[ramBase + 0x99000 + i] = ch;
             if (ch === 0) { cmdLen = i; break; }
           }
-          // Update cmd_line_ptr in the setup header at 0x90228
-          const newCmdPtr = 0x99000;
-          mem8[ramBase + 0x90228] = newCmdPtr & 0xFF;
-          mem8[ramBase + 0x90229] = (newCmdPtr >> 8) & 0xFF;
-          mem8[ramBase + 0x9022A] = (newCmdPtr >> 16) & 0xFF;
-          mem8[ramBase + 0x9022B] = (newCmdPtr >> 24) & 0xFF;
+          mem8[setupBase + 0x228] = 0x00;
+          mem8[setupBase + 0x229] = 0x90;
+          mem8[setupBase + 0x22A] = 0x09;
+          mem8[setupBase + 0x22B] = 0x00;
         }
         console.log('[JIT-BOOT] cmdline @0x' + cmdPtr.toString(16) + ' (' + cmdLen + ' bytes)');
-
-        // Set CPU registers for kernel setup entry
-        // CS = 0x9020, IP = 0x0000 (entry point at setup_base + 0x200)
-        wr16(S_CS + SEG_SEL, 0x9020);
-        wr64(S_CS + SEG_BASE, 0x90200);
-        wrIP(0);
-
-        // DS = SS = ES = FS = GS = 0x9000
-        wr16(S_DS + SEG_SEL, 0x9000);
-        wr64(S_DS + SEG_BASE, 0x90000);
-        wr16(S_SS + SEG_SEL, 0x9000);
-        wr64(S_SS + SEG_BASE, 0x90000);
-        wr16(S_ES + SEG_SEL, 0x9000);
-        wr64(S_ES + SEG_BASE, 0x90000);
-        wr16(S_FS + SEG_SEL, 0x9000);
-        wr64(S_FS + SEG_BASE, 0x90000);
-        wr16(S_GS + SEG_SEL, 0x9000);
-        wr64(S_GS + SEG_BASE, 0x90000);
-
-        // SP = heap_end_ptr + 0x200 (from protocol)
-        // heap_end_ptr = 0xF5F4 (from the header)
-        const heapEnd = mem8[ramBase + 0x90224] | (mem8[ramBase + 0x90225] << 8);
-        const sp = (heapEnd + 0x200) & 0xFFFF;
-        sr16(4, sp); // SP = R_SP register index 4
-
-        // DL = boot drive (0x80 for first hard drive / CD-ROM in emulation)
-        sr16(2, 0x80); // DX low byte = DL
-
-        // Clear other registers
-        sr32(0, 0); // EAX
-        sr32(1, 0); // ECX
-        sr32(3, 0); // EBX
-        sr32(5, 0); // EBP
-        sr32(6, 0); // ESI
-        sr32(7, 0); // EDI
-
-        // Disable interrupts (kernel setup will re-enable when ready)
-        const curFlags = rr32(R_FLAGS);
-        wr32(R_FLAGS, curFlags & ~0x200); // clear IF
-
-        execBlock._directBootDone = true;
-        // Read ramdisk info from the header at 0x90218/0x9021C
-        const rdImg = mem8[ramBase+0x90218]|(mem8[ramBase+0x90219]<<8)|
-          (mem8[ramBase+0x9021A]<<16)|(mem8[ramBase+0x9021B]<<24);
-        const rdSz = mem8[ramBase+0x9021C]|(mem8[ramBase+0x9021D]<<8)|
-          (mem8[ramBase+0x9021E]<<16)|(mem8[ramBase+0x9021F]<<24);
-        const code32 = mem8[ramBase+0x90214]|(mem8[ramBase+0x90215]<<8)|
-          (mem8[ramBase+0x90216]<<16)|(mem8[ramBase+0x90217]<<24);
-        console.log('[JIT-BOOT] Direct boot: CS=9020:0000 SS=9000:' + sp.toString(16) +
-          ' code32=0x' + code32.toString(16) +
-          ' ramdisk=0x' + rdImg.toString(16) + ' size=0x' + rdSz.toString(16));
-        console.log('[JIT-BOOT] Jumping to kernel real-mode setup!');
-        return 0; // return to IEM, which will execute from new CS:IP
       }
+
+      // Set CPU registers for kernel setup entry: CS=0x9020:0000
+      wr16(S_CS + SEG_SEL, 0x9020);
+      wr64(S_CS + SEG_BASE, 0x90200);
+      wrIP(0);
+      // DS = SS = ES = FS = GS = 0x9000
+      wr16(S_DS + SEG_SEL, 0x9000);
+      wr64(S_DS + SEG_BASE, 0x90000);
+      wr16(S_SS + SEG_SEL, 0x9000);
+      wr64(S_SS + SEG_BASE, 0x90000);
+      wr16(S_ES + SEG_SEL, 0x9000);
+      wr64(S_ES + SEG_BASE, 0x90000);
+      wr16(S_FS + SEG_SEL, 0x9000);
+      wr64(S_FS + SEG_BASE, 0x90000);
+      wr16(S_GS + SEG_SEL, 0x9000);
+      wr64(S_GS + SEG_BASE, 0x90000);
+      // SP: heap_end + 0x200
+      const heapEnd = mem8[setupBase + 0x224] | (mem8[setupBase + 0x225] << 8);
+      const sp = (heapEnd + 0x200) & 0xFFFF;
+      sr16(4, sp);
+      sr16(2, 0x80); // DL = boot drive
+      sr32(0, 0); sr32(1, 0); sr32(3, 0);
+      sr32(5, 0); sr32(6, 0); sr32(7, 0);
+      // Disable interrupts
+      wr32(R_FLAGS, rr32(R_FLAGS) & ~0x200);
+
+      execBlock._directBootDone = true;
+      const rdImg = mem8[setupBase+0x218]|(mem8[setupBase+0x219]<<8)|
+        (mem8[setupBase+0x21A]<<16)|(mem8[setupBase+0x21B]<<24);
+      const rdSz = mem8[setupBase+0x21C]|(mem8[setupBase+0x21D]<<8)|
+        (mem8[setupBase+0x21E]<<16)|(mem8[setupBase+0x21F]<<24);
+      const code32 = mem8[setupBase+0x214]|(mem8[setupBase+0x215]<<8)|
+        (mem8[setupBase+0x216]<<16)|(mem8[setupBase+0x217]<<24);
+      console.log('[JIT-BOOT] Direct boot: CS=9020:0000 SS=9000:' + sp.toString(16) +
+        ' code32=0x' + code32.toString(16) +
+        ' ramdisk=0x' + rdImg.toString(16) + ' size=0x' + rdSz.toString(16));
+      console.log('[JIT-BOOT] Jumping to kernel real-mode setup!');
+      return 0;
     }
   }
 

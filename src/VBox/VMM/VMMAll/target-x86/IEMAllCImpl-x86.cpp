@@ -7604,6 +7604,26 @@ IEM_CIMPL_DEF_3(iemCImpl_out, uint16_t, u16Port, uint8_t, cbReg, uint8_t, bImmAn
         default: AssertFailedReturn(VERR_IEM_IPE_4);
     }
     rcStrict = IOMIOPortWrite(pVM, pVCpu, u16Port, u32Value, cbReg);
+#ifdef __EMSCRIPTEN__
+    /* Capture serial port output (COM1 data register at 0x3F8) for kernel console */
+    if (u16Port == 0x3F8 && cbReg == 1)
+    {
+        static char s_szSerialBuf[256];
+        static unsigned s_iSerialBuf = 0;
+        char ch = (char)(u32Value & 0xFF);
+        if (ch == '\n' || s_iSerialBuf >= sizeof(s_szSerialBuf) - 1)
+        {
+            s_szSerialBuf[s_iSerialBuf] = '\0';
+            RTPrintf("[SERIAL] %s\n", s_szSerialBuf);
+            RTStrmFlush(g_pStdOut);
+            s_iSerialBuf = 0;
+        }
+        else if (ch != '\r')
+        {
+            s_szSerialBuf[s_iSerialBuf++] = ch;
+        }
+    }
+#endif
     if (IOM_SUCCESS(rcStrict))
     {
         ICORE(pVCpu).cPotentialExits++;

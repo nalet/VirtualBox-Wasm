@@ -206,6 +206,14 @@ function wr16(off, v) { dv.setUint16(cpuPtr + off, v & 0xFFFF, true); }
 function rr8(off) { return dv.getUint8(cpuPtr + off); }
 function wr8(off, v) { dv.setUint8(cpuPtr + off, v & 0xFF); }
 
+// Write dword to guest physical memory via mem8 (little-endian)
+function writeDword(addr, v) {
+  mem8[addr] = v & 0xFF;
+  mem8[addr + 1] = (v >>> 8) & 0xFF;
+  mem8[addr + 2] = (v >>> 16) & 0xFF;
+  mem8[addr + 3] = (v >>> 24) & 0xFF;
+}
+
 // Segment base (cached)
 function segBase(segOff) { return Number(dv.getBigUint64(cpuPtr + segOff + SEG_BASE, true)); }
 
@@ -824,36 +832,50 @@ function execBlock(cpuP, ramB, maxInsn) {
   const ramSize = mem8.length - ramBase; // available RAM
 
   // ── Direct Boot Recovery ──
-  // ISOLINUX's shuffle overwrites its own code with the kernel setup code.
-  // The shuffle's bcopy32 (protected-mode flat copy) can cause PGM copy-on-write,
-  // making mem8[ramBase+...] and PGM's physical memory diverge.
-  // Detection: IP in 0x1a00-0x1c00, code is mostly zeros, real mode, not BIOS.
-  if (!execBlock._directBootDone && ip >= 0x1a00 && ip <= 0x1c00 && !protMode
-      && csBase < 0xF0000) {
-    if (!execBlock._dbDiag1) {
-      execBlock._dbDiag1 = true;
-      const diagAddr = ramBase + csBase + ip;
-      let diagDump = '';
-      for (let d = 0; d < 16; d++) diagDump += mem8[diagAddr + d].toString(16).padStart(2, '0') + ' ';
-      console.log('[JIT-BOOT-DIAG1] ENTERING detection: csSel=0x' + csSel.toString(16) +
-        ' csBase=0x' + csBase.toString(16) + ' ip=0x' + ip.toString(16) +
-        ' ramBase=0x' + ramBase.toString(16) + ' testAddr=0x' + diagAddr.toString(16) +
-        ' cr0=0x' + cr0.toString(16) + ' protMode=' + protMode);
-      console.log('[JIT-BOOT-DIAG1] code@testAddr: ' + diagDump);
+  // After ISOLINUX loads the kernel to 0x100000, it may get stuck in a shuffle
+  // loop or I/O loop. Detect this by counting execBlock calls while the kernel
+  // is present but boot hasn't progressed.
+  if (!execBlock._directBootDone && !protMode && csBase < 0xF0000) {
+    if (!execBlock._dbCallCount) execBlock._dbCallCount = 0;
+    execBlock._dbCallCount++;
+    // Check every 50000 calls (~200M insns at 4096/call)
+    if (execBlock._dbCallCount % 50000 === 0) {
+      // Check if kernel code is present at 0x100000
+      const kBase = highRamPtr;
+      const hasKernel = kBase && (
+        mem8[kBase] !== 0 || mem8[kBase+1] !== 0 || mem8[kBase+2] !== 0 || mem8[kBase+3] !== 0);
+      if (hasKernel && !execBlock._dbKernelSeen) {
+        execBlock._dbKernelSeen = execBlock._dbCallCount;
+        console.log('[JIT-BOOT] Kernel detected at 0x100000 after ' +
+          execBlock._dbCallCount + ' calls. Waiting for bootloader to finish...');
+      }
+      // If kernel was seen 100K+ calls ago (~400M insns) and we're still in
+      // real mode, bootloader is stuck. Normal boot needs ~42M insns total.
+      if (execBlock._dbKernelSeen &&
+          (execBlock._dbCallCount - execBlock._dbKernelSeen) >= 100000) {
+        console.log('[JIT-BOOT] Bootloader stuck! Kernel loaded but still in real mode after ' +
+          execBlock._dbCallCount + ' calls (kernel first seen at ' + execBlock._dbKernelSeen + ')');
+        console.log('[JIT-BOOT] CS=0x' + csSel.toString(16) + ' csBase=0x' + csBase.toString(16) +
+          ' IP=0x' + ip.toString(16));
+        // Fall through to direct boot below
+      } else {
+        // Not ready yet — don't fall through
+        execBlock._dbCallCount; // no-op, just skip
+      }
     }
+    // Trigger conditions: either stuck timeout OR original zero-code detection
+    const triggerStuck = execBlock._dbKernelSeen &&
+      (execBlock._dbCallCount - execBlock._dbKernelSeen) >= 200000;
     const testAddr = ramBase + csBase + ip;
     let zeroCount = 0;
     for (let t = 0; t < 16; t++) if (mem8[testAddr + t] === 0) zeroCount++;
-    if (!execBlock._dbDiag2) {
-      execBlock._dbDiag2 = true;
-      console.log('[JIT-BOOT-DIAG2] zeroCount=' + zeroCount + ' (need >= 12)');
-    }
-    if (zeroCount >= 12) {
+    const triggerZeros = (zeroCount >= 12 && ip >= 0x1a00 && ip <= 0x1c00);
+    if (triggerStuck || triggerZeros) {
       console.log('[JIT-BOOT] ISOLINUX shuffle corrupted code at CS=0x' +
         csSel.toString(16) + ' (phys 0x' + csBase.toString(16) + ') IP=0x' + ip.toString(16));
 
       // Scan multiple locations for HdrS magic — PGM/mem8 may diverge after bcopy32
-      const hdrCandidates = [csBase, 0x10000, 0x90000, 0x20000, 0x80000];
+      const hdrCandidates = [csBase, 0x10000, 0x90000, 0x7C00, 0x20000, 0x80000];
       let hdrPhys = -1;
       for (let ci = 0; ci < hdrCandidates.length; ci++) {
         const cand = hdrCandidates[ci];
@@ -892,53 +914,120 @@ function execBlock(cpuP, ramB, maxInsn) {
           ' (' + cpSize + ' bytes)');
         for (let i = 0; i < cpSize; i++) mem8[setupBase + i] = mem8[srcBase + i];
       } else if (hdrPhys < 0) {
-        // Hardcoded FossaPup64 boot_params — write minimal Linux boot header
-        // Clear first 0x300 bytes
-        for (let i = 0; i < 0x300; i++) mem8[setupBase + i] = 0;
-        // Boot signature at 0x1FE
-        mem8[setupBase + 0x1FE] = 0x55;
-        mem8[setupBase + 0x1FF] = 0xAA;
-        // Setup header at 0x200
-        // jump instruction (2 bytes): eb 66 (jmp +0x66)
-        mem8[setupBase + 0x200] = 0xEB;
-        mem8[setupBase + 0x201] = 0x66;
-        // 'HdrS' magic at 0x202
-        mem8[setupBase + 0x202] = 0x48; // H
-        mem8[setupBase + 0x203] = 0x64; // d
-        mem8[setupBase + 0x204] = 0x72; // r
-        mem8[setupBase + 0x205] = 0x53; // S
-        // Protocol version 2.13 at 0x206
+        // No setup header found anywhere. Jump DIRECTLY to protected-mode
+        // kernel at 0x100000, bypassing real-mode setup entirely.
+        console.log('[JIT-BOOT] No HdrS found — direct PM entry to kernel at 0x100000');
+        // Diagnostics: dump what mem8 sees at candidate locations
+        for (let ci = 0; ci < 4; ci++) {
+          const cand = [csBase, 0x10000, 0x90000, 0x7C00][ci];
+          if (cand >= 0xA0000) continue;
+          let d = '';
+          for (let b = 0; b < 16; b++)
+            d += mem8[ramBase + cand + 0x200 + b].toString(16).padStart(2, '0') + ' ';
+          console.log('[JIT-BOOT-DIAG] phys 0x' + cand.toString(16) + '+0x200: ' + d);
+        }
+
+        // Write minimal boot_params at 0x90000 for the kernel
+        for (let i = 0; i < 0x1000; i++) mem8[setupBase + i] = 0;
+        // e820 memory map: entries at offset 0xD00 (boot_params.e820_table)
+        // Entry format: 20 bytes each (addr:8, size:8, type:4)
+        const e820Base = 0xD00;
+        // Entry 0: 0x0 - 0x9FC00 usable
+        writeDword(setupBase + e820Base + 0, 0);
+        writeDword(setupBase + e820Base + 4, 0);
+        writeDword(setupBase + e820Base + 8, 0x9FC00);
+        writeDword(setupBase + e820Base + 12, 0);
+        writeDword(setupBase + e820Base + 16, 1);
+        // Entry 1: 0x100000 - RAM_TOP usable
+        writeDword(setupBase + e820Base + 20, 0x100000);
+        writeDword(setupBase + e820Base + 24, 0);
+        const ramTop = highRamEnd ? (0x100000 + (highRamEnd - 0x100000)) : 0x2000000;
+        writeDword(setupBase + e820Base + 28, ramTop - 0x100000);
+        writeDword(setupBase + e820Base + 32, 0);
+        writeDword(setupBase + e820Base + 36, 1);
+        mem8[setupBase + 0x1E8] = 2; // e820_entries count
+        // HdrS signature for kernel validation
+        mem8[setupBase + 0x202] = 0x48;
+        mem8[setupBase + 0x203] = 0x64;
+        mem8[setupBase + 0x204] = 0x72;
+        mem8[setupBase + 0x205] = 0x53;
+        // Protocol 2.13
         mem8[setupBase + 0x206] = 0x0D;
         mem8[setupBase + 0x207] = 0x02;
-        // setup_sects at 0x1F1
-        mem8[setupBase + 0x1F1] = 32;
-        // loadflags at 0x211: LOADED_HIGH (1) | CAN_USE_HEAP (0x80)
-        mem8[setupBase + 0x211] = 0x81;
-        // heap_end_ptr at 0x224: 0xDE00 (typical)
-        mem8[setupBase + 0x224] = 0x00;
-        mem8[setupBase + 0x225] = 0xDE;
-        // type_of_loader at 0x210: 0xFF (unknown)
+        // loadflags: LOADED_HIGH
+        mem8[setupBase + 0x211] = 0x01;
+        // type_of_loader
         mem8[setupBase + 0x210] = 0xFF;
-        // code32_start at 0x214: 0x100000
-        mem8[setupBase + 0x214] = 0x00;
-        mem8[setupBase + 0x215] = 0x00;
-        mem8[setupBase + 0x216] = 0x10;
-        mem8[setupBase + 0x217] = 0x00;
-
-        // Write command line at 0x99000
-        const cmdline = 'pmedia=cd initrd=/initrd.gz BOOT_IMAGE=/vmlinuz';
+        // code32_start
+        writeDword(setupBase + 0x214, 0x100000);
+        // Command line
+        const cmdline = 'pmedia=cd BOOT_IMAGE=/vmlinuz';
         for (let i = 0; i < cmdline.length; i++)
           mem8[ramBase + 0x99000 + i] = cmdline.charCodeAt(i);
         mem8[ramBase + 0x99000 + cmdline.length] = 0;
-        // cmd_line_ptr at 0x228: 0x99000
-        mem8[setupBase + 0x228] = 0x00;
-        mem8[setupBase + 0x229] = 0x90;
-        mem8[setupBase + 0x22A] = 0x09;
-        mem8[setupBase + 0x22B] = 0x00;
-        console.log('[JIT-BOOT] Wrote hardcoded boot_params + cmdline');
+        writeDword(setupBase + 0x228, 0x99000);
+
+        // Write GDT at 0x1000 in guest RAM
+        const gdtBase = ramBase + 0x1000;
+        // Null descriptor (entry 0)
+        for (let i = 0; i < 8; i++) mem8[gdtBase + i] = 0;
+        // Code32 descriptor (entry 1, selector 0x08): base=0, limit=4GB, 32-bit code
+        // limit_lo=FFFF, base_lo=0000, base_mid=00, access=9A, flags_limit=CF, base_hi=00
+        mem8[gdtBase + 8] = 0xFF; mem8[gdtBase + 9] = 0xFF; // limit 15:0
+        mem8[gdtBase + 10] = 0; mem8[gdtBase + 11] = 0;     // base 15:0
+        mem8[gdtBase + 12] = 0;                              // base 23:16
+        mem8[gdtBase + 13] = 0x9A;                           // P=1 DPL=0 S=1 type=A(exec/read)
+        mem8[gdtBase + 14] = 0xCF;                           // G=1 D=1 limit 19:16=F
+        mem8[gdtBase + 15] = 0;                              // base 31:24
+        // Data32 descriptor (entry 2, selector 0x10): base=0, limit=4GB, 32-bit data
+        mem8[gdtBase + 16] = 0xFF; mem8[gdtBase + 17] = 0xFF;
+        mem8[gdtBase + 18] = 0; mem8[gdtBase + 19] = 0;
+        mem8[gdtBase + 20] = 0;
+        mem8[gdtBase + 21] = 0x92;                           // P=1 DPL=0 S=1 type=2(read/write)
+        mem8[gdtBase + 22] = 0xCF;
+        mem8[gdtBase + 23] = 0;
+
+        // Set GDTR in CPUMCTX
+        wr64(R_GDTR_BASE, 0x1000);
+        wr16(R_GDTR_LIMIT, 23);
+
+        // Set CR0: enable PE (protected mode)
+        wr32(R_CR0, (cr0 | 1) & ~0x80000000); // PE=1, PG=0
+
+        // Set CS = 0x08 (code32)
+        wr16(S_CS + SEG_SEL, 0x08);
+        wr64(S_CS + SEG_BASE, 0);
+        wr32(S_CS + SEG_LIMIT, 0xFFFFFFFF);
+        wr32(S_CS + SEG_ATTR, 0xC09B); // G=1 D=1 P=1 S=1 type=B
+
+        // Set DS/ES/SS/FS/GS = 0x10 (data32)
+        const dataAttr = 0xC093; // G=1 D=1 P=1 S=1 type=3
+        for (const seg of [S_DS, S_ES, S_SS, S_FS, S_GS]) {
+          wr16(seg + SEG_SEL, 0x10);
+          wr64(seg + SEG_BASE, 0);
+          wr32(seg + SEG_LIMIT, 0xFFFFFFFF);
+          wr32(seg + SEG_ATTR, dataAttr);
+        }
+
+        // EIP = 0x100000 (startup_32 entry)
+        wr32(R_IP, 0x100000);
+        // ESI = boot_params address (0x90000)
+        sr32(6, 0x90000); // ESI = reg index 6
+        // Clear other registers
+        sr32(0, 0); sr32(1, 0); sr32(2, 0); sr32(3, 0);
+        sr32(5, 0); sr32(7, 0); // EBP=0, EDI=0
+        sr32(4, 0x90000); // ESP = some safe stack
+        // Disable interrupts
+        wr32(R_FLAGS, 2); // just the reserved bit
+
+        execBlock._directBootDone = true;
+        console.log('[JIT-BOOT] Direct PM boot: EIP=0x100000 ESI=0x90000 CR0=0x' +
+          ((cr0 | 1) & ~0x80000000).toString(16));
+        console.log('[JIT-BOOT] Jumping directly to startup_32!');
+        return 0;
       }
 
-      // If we have a header source (found or hardcoded), copy command line
+      // If we have a header source, copy command line and setup code
       if (hdrPhys >= 0) {
         const srcBase = (hdrPhys === 0x90000) ? setupBase : ramBase + hdrPhys;
         const cmdPtr = mem8[srcBase + 0x228] | (mem8[srcBase + 0x229] << 8) |
@@ -3942,6 +4031,8 @@ let protModeDiagDone = false;
 // gdtr at 0x01C6: cbGdt(u16) at +0, pGdt(u64) at +2
 // idtr at 0x01D6: cbIdt(u16) at +0, pIdt(u64) at +2
 const R_GDTR = 0x01C6;
+const R_GDTR_LIMIT = 0x01C6;  // cbGdt (u16)
+const R_GDTR_BASE = 0x01C8;   // pGdt (u64)
 const R_IDTR = 0x01D6;
 
 function execBlockWrapped(cpuP, ramB, maxInsn, highRamP, highRamSz) {

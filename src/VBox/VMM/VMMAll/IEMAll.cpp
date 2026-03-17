@@ -2626,12 +2626,29 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                                 && uCS == 0x10
                                 && (pVCpu->cpum.GstCtx.cr0 & X86_CR0_PE)
                                 && pVCpu->cpum.GstCtx.rip >= UINT64_C(0x100000)
-                                && (++s_cFBCheckCounter % 10000) == 0) /* check every 10K insns */
+                                && (++s_cFBCheckCounter % 100000) == 0) /* check every 100K insns */
                             {
                                 /* Check for HdrS signature at guest 0x90202 */
                                 uint8_t abHdrS[4];
                                 PGMPhysRead(pVM, (RTGCPHYS)0x90202, abHdrS, 4, PGMACCESSORIGIN_IEM);
-                                if (abHdrS[0] == 'H' && abHdrS[1] == 'd' && abHdrS[2] == 'r' && abHdrS[3] == 'S')
+                                /* Also check 0x10202 (some bootloaders load setup to 0x10000) */
+                                uint8_t abHdrS2[4];
+                                PGMPhysRead(pVM, (RTGCPHYS)0x10202, abHdrS2, 4, PGMACCESSORIGIN_IEM);
+                                /* Log first few checks and then every 10th */
+                                static uint32_t s_cFBLog = 0;
+                                if (++s_cFBLog <= 3 || (s_cFBLog % 10) == 0)
+                                {
+                                    RTPrintf("[FAST-BOOT-CHK] #%u EIP=%#llx @0x90202=%02x%02x%02x%02x @0x10202=%02x%02x%02x%02x\n",
+                                             s_cFBLog,
+                                             (unsigned long long)pVCpu->cpum.GstCtx.rip,
+                                             abHdrS[0], abHdrS[1], abHdrS[2], abHdrS[3],
+                                             abHdrS2[0], abHdrS2[1], abHdrS2[2], abHdrS2[3]);
+                                    RTStrmFlush(g_pStdOut);
+                                }
+                                bool fFound = (abHdrS[0] == 'H' && abHdrS[1] == 'd' && abHdrS[2] == 'r' && abHdrS[3] == 'S');
+                                if (!fFound)
+                                    fFound = (abHdrS2[0] == 'H' && abHdrS2[1] == 'd' && abHdrS2[2] == 'r' && abHdrS2[3] == 'S');
+                                if (fFound)
                                 {
                                 s_fFastBootTried = true;
                                 RTPrintf("[FAST-BOOT-CPP] Detected kernel decompressor at EIP=%#llx, HdrS found — attempting JS decompress\n",

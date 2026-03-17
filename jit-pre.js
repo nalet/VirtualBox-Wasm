@@ -5109,25 +5109,57 @@ function fastBootDecompress() {
     ' segments=' + elf.segs.length);
 
   const TOTAL_RAM = 0x100000 + highRamSize;
+  console.error('[FAST-BOOT] hp=0x' + hp.toString(16) + ' highRamSize=0x' +
+    highRamSize.toString(16) + ' TOTAL_RAM=0x' + TOTAL_RAM.toString(16) +
+    ' typeof_hrp=' + typeof highRamPtr);
+
+  // Log first 16 bytes of vmlinux at seg[0].offset (what we'll copy)
+  if (elf.segs.length > 0) {
+    const s0 = elf.segs[0];
+    const srcBytes = [];
+    for (let i = 0; i < 16; i++) srcBytes.push(vmlinux[s0.offset + i].toString(16).padStart(2,'0'));
+    console.error('[FAST-BOOT] vmlinux @offset=' + s0.offset + ': ' + srcBytes.join(' '));
+  }
+
+  let segsLoaded = 0;
   for (let si = 0; si < elf.segs.length; si++) {
     const seg = elf.segs[si];
     const pa = Number(seg.paddr);
+    const fits = (pa >= 0x100000 && pa + seg.memsz <= TOTAL_RAM);
     console.error('[FAST-BOOT] seg[' + si + '] paddr=0x' + pa.toString(16) +
       ' vaddr=0x' + seg.vaddr.toString(16) +
-      ' filesz=' + seg.filesz + ' memsz=' + seg.memsz);
-    if (pa >= 0x100000 && pa + seg.memsz <= TOTAL_RAM) {
+      ' filesz=' + seg.filesz + ' memsz=' + seg.memsz +
+      (fits ? ' LOAD' : ' SKIP(oom)'));
+    if (fits) {
       const dst = hp + (pa - 0x100000);
       if (seg.filesz > 0)
         mf.set(vmlinux.subarray(seg.offset, seg.offset + seg.filesz), dst);
       if (seg.memsz > seg.filesz)
         mf.fill(0, dst + seg.filesz, dst + seg.memsz);
+      segsLoaded++;
     }
   }
+
+  // Verify entry point bytes in guest RAM after copy
+  const entryPA = Number(elf.entry);
+  const entryOff = hp + (entryPA - 0x100000);
+  const vfy = new Uint8Array(wasmMemory.buffer);
+  const entryBytes = [];
+  for (let i = 0; i < 16; i++) entryBytes.push(vfy[entryOff + i].toString(16).padStart(2,'0'));
+  console.error('[FAST-BOOT] VERIFY @GPA=0x' + entryPA.toString(16) +
+    ' wasm_off=0x' + entryOff.toString(16) + ': ' + entryBytes.join(' ') +
+    ' (loaded ' + segsLoaded + '/' + elf.segs.length + ' segs)');
 
   // Refresh mem8 — Wasm buffer may have grown during XZ decompression (malloc)
   mem8 = new Uint8Array(wasmMemory.buffer);
 
-  const cr3val = buildPageTables64(TOTAL_RAM);
+  let cr3val;
+  try {
+    cr3val = buildPageTables64(TOTAL_RAM);
+  } catch (e) {
+    console.error('[FAST-BOOT] buildPageTables64 FAILED: ' + e.message + '\n' + e.stack);
+    cr3val = 0;
+  }
   // Verify page tables were written correctly
   const ptBase = Number(highRamPtr) + (0x800000 - 0x100000);
   const ptView = new DataView(wasmMemory.buffer);

@@ -2743,6 +2743,17 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                                         RTStrmPrintf(g_pStdErr, "[FAST-BOOT-CPP] Entering 64-bit kernel: RIP=%#018llx RSI=%#010x CR3=%#010llx\n",
                                                  (unsigned long long)pCtx->rip, (unsigned)pCtx->rsi,
                                                  (unsigned long long)pCtx->cr3);
+                                        /* Verify bytes at entry point via PGM */
+                                        {
+                                            uint8_t abEntry[16];
+                                            int rcPgm = PGMPhysRead(pVCpu->CTX_SUFF(pVM), pCtx->rip, abEntry, 16, PGMACCESSORIGIN_IEM);
+                                            RTStrmPrintf(g_pStdErr, "[FAST-BOOT-CPP] PGMPhysRead(@RIP=%#llx) rc=%d: %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x\n",
+                                                     (unsigned long long)pCtx->rip, rcPgm,
+                                                     abEntry[0], abEntry[1], abEntry[2], abEntry[3],
+                                                     abEntry[4], abEntry[5], abEntry[6], abEntry[7],
+                                                     abEntry[8], abEntry[9], abEntry[10], abEntry[11],
+                                                     abEntry[12], abEntry[13], abEntry[14], abEntry[15]);
+                                        }
                                         RTStrmFlush(g_pStdErr);
                                         /* Re-init decoder for new mode */
                                         iemReInitDecoder(pVCpu);

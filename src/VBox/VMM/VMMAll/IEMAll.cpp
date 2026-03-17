@@ -1731,16 +1731,17 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                             }
                         }
 
-                        /* Force-enable IF after 200M insns if kernel is stuck with
-                           IF=0 in 64-bit mode.  This unsticks calibration/init loops
-                           that depend on timer interrupts (jiffies) which can't fire
-                           while IF=0.  The IDT is already set up at this point. */
+                        /* Force-enable IF if kernel is stuck with IF=0 AFTER
+                           decompression completes (RIP in high virtual addresses).
+                           The decompressor runs with IF=0 legitimately; forcing IF=1
+                           during decompression corrupts it.  Only trigger once the
+                           kernel has jumped to decompressed code (RIP > 0xFFFF8000...). */
                         {
                             static bool s_fForceIF = false;
                             if (!s_fForceIF
-                                && g_cWasmVirtualInstructions >= 200000000
                                 && (pVCpu->cpum.GstCtx.msrEFER & MSR_K6_EFER_LMA)
-                                && !(pVCpu->cpum.GstCtx.eflags.u & X86_EFL_IF))
+                                && !(pVCpu->cpum.GstCtx.eflags.u & X86_EFL_IF)
+                                && pVCpu->cpum.GstCtx.rip > UINT64_C(0xFFFF800000000000))
                             {
                                 s_fForceIF = true;
                                 pVCpu->cpum.GstCtx.eflags.u |= X86_EFL_IF;
@@ -1750,13 +1751,14 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                             }
                         }
 
-                        /* One-shot stack dump at 300M insns to identify stuck function */
+                        /* One-shot stack dump to identify stuck function — only after
+                           kernel has entered decompressed code (high virtual addresses) */
                         {
                             static bool s_fStackDumped = false;
                             if (!s_fStackDumped
-                                && g_cWasmVirtualInstructions >= 300000000
                                 && (pVCpu->cpum.GstCtx.msrEFER & MSR_K6_EFER_LMA)
-                                && !(pVCpu->cpum.GstCtx.eflags.u & X86_EFL_IF))
+                                && !(pVCpu->cpum.GstCtx.eflags.u & X86_EFL_IF)
+                                && pVCpu->cpum.GstCtx.rip > UINT64_C(0xFFFF800000000000))
                             {
                                 s_fStackDumped = true;
                                 RTPrintf("[STUCK-DIAG] RIP=%#018llx RSP=%#018llx RBP=%#018llx\n",

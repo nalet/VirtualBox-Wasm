@@ -2625,13 +2625,13 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                         /* Trace first 20 instructions after 64-bit kernel entry */
                         if (s_fFB64Active && s_cBootInsns <= 20)
                         {
-                            RTPrintf("[FB64-TRACE] #%llu RIP=%#018llx RSP=%#018llx CR0=%#010llx EFER=%#010llx\n",
+                            RTStrmPrintf(g_pStdErr, "[FB64-TRACE] #%llu RIP=%#018llx RSP=%#018llx CR0=%#010llx EFER=%#010llx\n",
                                      (unsigned long long)s_cBootInsns,
                                      (unsigned long long)pVCpu->cpum.GstCtx.rip,
                                      (unsigned long long)pVCpu->cpum.GstCtx.rsp,
                                      (unsigned long long)pVCpu->cpum.GstCtx.cr0,
                                      (unsigned long long)pVCpu->cpum.GstCtx.msrEFER);
-                            RTStrmFlush(g_pStdOut);
+                            RTStrmFlush(g_pStdErr);
                         }
 
                         uint16_t uCS = pVCpu->cpum.GstCtx.cs.Sel;
@@ -2697,7 +2697,7 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                                         uint64_t uEntry = *(uint64_t *)&abMeta64[8];
                                         uint32_t uBootParams = *(uint32_t *)&abMeta64[16];
 
-                                        RTPrintf("[FAST-BOOT-CPP] D64B: CR3=0x%08x entry=0x%016llx bp=0x%08x\n",
+                                        RTStrmPrintf(g_pStdErr, "[FAST-BOOT-CPP] D64B: CR3=0x%08x entry=0x%016llx bp=0x%08x\n",
                                                  uCR3, (unsigned long long)uEntry, uBootParams);
 
                                         pCtx->gdtr.pGdt  = 0x7300;
@@ -2740,10 +2740,10 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                                         s_cBootInsns = 0; /* reset trace counter */
                                         s_fFB64Active = true;
 
-                                        RTPrintf("[FAST-BOOT-CPP] Entering 64-bit kernel: RIP=%#018llx RSI=%#010x CR3=%#010llx\n",
+                                        RTStrmPrintf(g_pStdErr, "[FAST-BOOT-CPP] Entering 64-bit kernel: RIP=%#018llx RSI=%#010x CR3=%#010llx\n",
                                                  (unsigned long long)pCtx->rip, (unsigned)pCtx->rsi,
                                                  (unsigned long long)pCtx->cr3);
-                                        RTStrmFlush(g_pStdOut);
+                                        RTStrmFlush(g_pStdErr);
                                         /* Re-init decoder for new mode */
                                         iemReInitDecoder(pVCpu);
                                         continue;

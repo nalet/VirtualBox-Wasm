@@ -942,6 +942,10 @@ static DECLCALLBACK(int) pcbiosInitComplete(PPDMDEVINS pDevIns)
     uint64_t const  cbRamSize  = PDMDevHlpMMPhysGetRamSize(pDevIns);
     uint32_t const  cbBelow4GB = PDMDevHlpMMPhysGetRamSizeBelow4GB(pDevIns);
     uint64_t const  cbAbove4GB = PDMDevHlpMMPhysGetRamSizeAbove4GB(pDevIns);
+#ifdef __EMSCRIPTEN__
+    LogRel(("[BIOS-MEM] cbRamSize=%llu cbBelow4GB=%u cbAbove4GB=%llu\n",
+        (unsigned long long)cbRamSize, cbBelow4GB, (unsigned long long)cbAbove4GB));
+#endif
 
     /*
      * Memory sizes.

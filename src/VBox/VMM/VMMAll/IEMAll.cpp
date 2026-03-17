@@ -236,6 +236,182 @@ extern "C" {
     EMSCRIPTEN_KEEPALIVE int    wasmGetDelayValid(void) { return s_fDelayInfoValid; }
 }
 
+/* ── Guest CPUID & physical memory diagnostics ── */
+static volatile uint32_t s_fCpuidDumped = 0;
+static PVMCC s_pVMForRead = NULL;
+static uint8_t s_abGuestReadBuf[4096];
+
+static void wasmDumpGuestCpuid(PVMCPUCC pVCpu)
+{
+    if (s_fCpuidDumped)
+        return;
+    s_fCpuidDumped = 1;
+    s_pVMForRead = pVCpu->CTX_SUFF(pVM);
+
+    uint32_t eax, ebx, ecx, edx;
+
+    /* CPUID leaf 0 — vendor */
+    CPUMGetGuestCpuId(pVCpu, 0, 0, -1, &eax, &ebx, &ecx, &edx);
+    char szVendor[13];
+    *(uint32_t *)&szVendor[0] = ebx;
+    *(uint32_t *)&szVendor[4] = edx;
+    *(uint32_t *)&szVendor[8] = ecx;
+    szVendor[12] = '\0';
+    RTPrintf("[CPUID-DIAG] Leaf 0: maxLeaf=%u vendor='%s'\n", eax, szVendor);
+
+    /* CPUID leaf 1 — features */
+    CPUMGetGuestCpuId(pVCpu, 1, 0, -1, &eax, &ebx, &ecx, &edx);
+    RTPrintf("[CPUID-DIAG] Leaf 1: EAX=%#x EBX=%#x ECX=%#x EDX=%#x\n", eax, ebx, ecx, edx);
+    RTPrintf("[CPUID-DIAG]   PSE=%d PAE=%d PGE=%d SSE2=%d FXSR=%d\n",
+             !!(edx & RT_BIT(3)), !!(edx & RT_BIT(6)), !!(edx & RT_BIT(13)),
+             !!(edx & RT_BIT(26)), !!(edx & RT_BIT(24)));
+
+    /* CPUID leaf 0x80000001 — extended features */
+    CPUMGetGuestCpuId(pVCpu, 0x80000001, 0, -1, &eax, &ebx, &ecx, &edx);
+    RTPrintf("[CPUID-DIAG] Leaf 80000001h: EAX=%#x EDX=%#x\n", eax, edx);
+    RTPrintf("[CPUID-DIAG]   NX=%d LM=%d 1GB-pages=%d\n",
+             !!(edx & RT_BIT(20)), !!(edx & RT_BIT(29)), !!(edx & RT_BIT(26)));
+
+    /* CPUID leaf 0x80000008 — address widths */
+    CPUMGetGuestCpuId(pVCpu, 0x80000008, 0, -1, &eax, &ebx, &ecx, &edx);
+    RTPrintf("[CPUID-DIAG] Leaf 80000008h: phys=%u virt=%u\n",
+             eax & 0xff, (eax >> 8) & 0xff);
+
+    /* CR4 — check PSE/PAE/PGE bits */
+    RTPrintf("[CPUID-DIAG] CR4=%#llx  (PSE=%d PAE=%d PGE=%d)\n",
+             (unsigned long long)pVCpu->cpum.GstCtx.cr4,
+             !!(pVCpu->cpum.GstCtx.cr4 & RT_BIT(4)),
+             !!(pVCpu->cpum.GstCtx.cr4 & RT_BIT(5)),
+             !!(pVCpu->cpum.GstCtx.cr4 & RT_BIT(7)));
+
+    /* ── IVT check: where does INT 15h point? ── */
+    {
+        uint8_t abIvt[4];
+        RT_ZERO(abIvt);
+        PGMPhysRead(pVCpu->CTX_SUFF(pVM), 0x54, abIvt, 4, PGMACCESSORIGIN_DEBUGGER);
+        uint16_t off = *(uint16_t *)&abIvt[0];
+        uint16_t seg = *(uint16_t *)&abIvt[2];
+        RTPrintf("[IVT-DIAG] INT 15h vector = %04x:%04x (linear %#x)\n",
+                 seg, off, ((uint32_t)seg << 4) + off);
+    }
+
+    /* ── BDA: base memory size ── */
+    {
+        uint8_t abBda[2];
+        RT_ZERO(abBda);
+        PGMPhysRead(pVCpu->CTX_SUFF(pVM), 0x413, abBda, 2, PGMACCESSORIGIN_DEBUGGER);
+        uint16_t cbBaseMem = *(uint16_t *)abBda;
+        RTPrintf("[BDA-DIAG] Base memory = %u KB\n", cbBaseMem);
+    }
+
+    /* ── PGM physical memory accessibility check ── */
+    {
+        static const RTGCPHYS aTestAddrs[] = {
+            0x100000, 0xA00000, 0x3200000, 0x6400000, 0x7F00000
+        };
+        for (unsigned t = 0; t < RT_ELEMENTS(aTestAddrs); t++)
+        {
+            uint8_t abTest[4];
+            int rc = PGMPhysRead(pVCpu->CTX_SUFF(pVM), aTestAddrs[t], abTest, 4, PGMACCESSORIGIN_DEBUGGER);
+            RTPrintf("[PGM-DIAG] Read phys %#llx: rc=%d data=%02x%02x%02x%02x\n",
+                     (unsigned long long)aTestAddrs[t], rc,
+                     abTest[0], abTest[1], abTest[2], abTest[3]);
+        }
+    }
+
+    /* ── E820 scan: check boot_params at various physical addresses ── */
+    uint8_t abBuf[32];
+    for (uint32_t base = 0x10000; base <= 0x90000; base += 0x10000)
+    {
+        RT_ZERO(abBuf);
+        PGMPhysRead(pVCpu->CTX_SUFF(pVM), (RTGCPHYS)base + 0x1E8, abBuf, 4, PGMACCESSORIGIN_DEBUGGER);
+        uint32_t e820Count = *(uint32_t *)abBuf;
+        if (e820Count > 0 && e820Count <= 128)
+        {
+            RTPrintf("[E820-DIAG] Candidate boot_params at phys 0x%x: e820_entries=%u\n",
+                     base, e820Count);
+            uint8_t abE820[160]; /* 8 entries * 20 bytes */
+            RT_ZERO(abE820);
+            unsigned cbRead = RT_MIN(e820Count * 20, sizeof(abE820));
+            PGMPhysRead(pVCpu->CTX_SUFF(pVM), (RTGCPHYS)base + 0x2D0, abE820, cbRead, PGMACCESSORIGIN_DEBUGGER);
+            for (unsigned e = 0; e < 8 && e < e820Count; e++)
+            {
+                uint64_t addr = *(uint64_t *)&abE820[e * 20];
+                uint64_t size = *(uint64_t *)&abE820[e * 20 + 8];
+                uint32_t type = *(uint32_t *)&abE820[e * 20 + 16];
+                RTPrintf("[E820-DIAG]   [%u] addr=%#llx size=%#llx type=%u\n",
+                         e, (unsigned long long)addr, (unsigned long long)size, type);
+            }
+        }
+    }
+
+    /* ── Also try to find E820 via kernel's internal structure.
+     * The kernel's __e820_table is at an unknown virtual address, but we can
+     * search physical memory near the kernel base for the E820 signature pattern:
+     * a usable entry starting at 0 with size ~0x9FC00 followed by reserved at 0x9FC00. ── */
+    {
+        PVMCC pVM = pVCpu->CTX_SUFF(pVM);
+        /* Scan from 1MB to 32MB in 4KB steps, looking for the E820 pattern */
+        for (RTGCPHYS scan = 0x100000; scan < 0x2000000; scan += 0x1000)
+        {
+            uint8_t abScan[40]; /* 2 E820 entries */
+            RT_ZERO(abScan);
+            int rc = PGMPhysRead(pVM, scan, abScan, sizeof(abScan), PGMACCESSORIGIN_DEBUGGER);
+            if (RT_FAILURE(rc))
+                continue;
+            uint64_t a0 = *(uint64_t *)&abScan[0];  /* first entry addr */
+            uint64_t s0 = *(uint64_t *)&abScan[8];  /* first entry size */
+            uint32_t t0 = *(uint32_t *)&abScan[16]; /* first entry type */
+            uint64_t a1 = *(uint64_t *)&abScan[20]; /* second entry addr */
+            uint32_t t1 = *(uint32_t *)&abScan[36]; /* second entry type */
+            /* Pattern: entry0 = {addr=0, size=0x9FC00, type=1}, entry1 = {addr=0x9FC00, type=2} */
+            if (a0 == 0 && s0 == 0x9FC00 && t0 == 1 && a1 == 0x9FC00 && t1 == 2)
+            {
+                RTPrintf("[E820-SCAN] Found E820 table at phys %#llx!\n",
+                         (unsigned long long)scan);
+                /* Dump up to 8 entries */
+                uint8_t abFull[160];
+                RT_ZERO(abFull);
+                PGMPhysRead(pVM, scan, abFull, sizeof(abFull), PGMACCESSORIGIN_DEBUGGER);
+                for (unsigned e = 0; e < 8; e++)
+                {
+                    uint64_t addr = *(uint64_t *)&abFull[e * 20];
+                    uint64_t size = *(uint64_t *)&abFull[e * 20 + 8];
+                    uint32_t type = *(uint32_t *)&abFull[e * 20 + 16];
+                    if (addr == 0 && size == 0 && type == 0)
+                        break;
+                    RTPrintf("[E820-SCAN]   [%u] addr=%#llx size=%#llx type=%u\n",
+                             e, (unsigned long long)addr, (unsigned long long)size, type);
+                }
+                break; /* found it, stop scanning */
+            }
+        }
+    }
+
+    RTStrmFlush(g_pStdOut);
+}
+
+/* Guest physical memory read — callable from JS via Module._wasmReadGuestPhys() */
+extern "C" {
+    EMSCRIPTEN_KEEPALIVE int wasmReadGuestPhys(double dGCPhys, int cb)
+    {
+        RTGCPHYS GCPhys = (RTGCPHYS)(uint64_t)dGCPhys;
+        if (cb <= 0 || cb > (int)sizeof(s_abGuestReadBuf))
+            cb = sizeof(s_abGuestReadBuf);
+        RT_ZERO(s_abGuestReadBuf);
+        if (!s_pVMForRead)
+            return -1;
+        int rc = PGMPhysRead(s_pVMForRead, GCPhys, s_abGuestReadBuf, cb, PGMACCESSORIGIN_DEBUGGER);
+        return rc;
+    }
+    EMSCRIPTEN_KEEPALIVE double wasmGetGuestReadByte(int off)
+    {
+        if (off < 0 || off >= (int)sizeof(s_abGuestReadBuf))
+            return -1;
+        return (double)s_abGuestReadBuf[off];
+    }
+}
+
 static void iemJitEnsureInit(PVMCC pVM)
 {
     /* Fast path: fully initialised (high RAM is optional — don't block on it) */
@@ -1556,6 +1732,7 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                                             s_uDelayRip = curRip;
                                             RTPrintf("[DELAY-ACCEL] Learned delay RIP=%#llx, enabling fast-path\n",
                                                 (unsigned long long)curRip);
+                                            wasmDumpGuestCpuid(pVCpu);
                                         }
                                         /* Store caller info in globals (readable from JS via Module._wasmGetDelay*())
                                          * and log periodically.  Update every time so JS always sees current caller. */

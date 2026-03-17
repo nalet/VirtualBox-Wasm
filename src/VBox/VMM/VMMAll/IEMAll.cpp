@@ -2606,92 +2606,96 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                                  s_uLastCS, (unsigned long long)pVCpu->cpum.GstCtx.rip,
                                  (unsigned long long)pVCpu->cpum.GstCtx.cr0);
                         RTStrmFlush(g_pStdOut);
-
-                        /* Try JS fast boot right when 32-bit PM boot starts —
-                           BEFORE the decompressor runs millions of instructions.
-                           The JIT already loaded the kernel to 0x100000 and set
-                           boot_params at 0x90000.  Call JS to decompress payload,
-                           build page tables, and write D64B metadata at 0x7200. */
-                        if (!(pVCpu->cpum.GstCtx.msrEFER & MSR_K6_EFER_LMA))
-                        {
-                            RTPrintf("[FAST-BOOT-CPP] Attempting JS fast boot decompress...\n");
-                            RTStrmFlush(g_pStdOut);
-                            int rcFB = wasmFastBootDecompress();
-                            if (rcFB == 1)
-                            {
-                                /* Read D64B metadata written by JS */
-                                uint8_t abMeta64[20];
-                                PGMPhysRead(pVM, (RTGCPHYS)0x7200, abMeta64, sizeof(abMeta64), PGMACCESSORIGIN_IEM);
-                                uint32_t uMagic64 = *(uint32_t *)&abMeta64[0];
-                                if (uMagic64 == 0x42343644) /* "D64B" */
-                                {
-                                    PCPUMCTX pCtx = &pVCpu->cpum.GstCtx;
-                                    uint32_t uCR3 = *(uint32_t *)&abMeta64[4];
-                                    uint64_t uEntry = *(uint64_t *)&abMeta64[8];
-                                    uint32_t uBootParams = *(uint32_t *)&abMeta64[16];
-
-                                    RTPrintf("[FAST-BOOT-CPP] D64B: CR3=0x%08x entry=0x%016llx bp=0x%08x\n",
-                                             uCR3, (unsigned long long)uEntry, uBootParams);
-
-                                    /* Set up GDT from guest 0x7300 (written by JS) */
-                                    pCtx->gdtr.pGdt  = 0x7300;
-                                    pCtx->gdtr.cbGdt = 31;
-
-                                    /* Enable paging + long mode */
-                                    pCtx->cr3 = uCR3;
-                                    pCtx->cr4 = X86_CR4_PAE | X86_CR4_PSE;
-                                    pCtx->cr0 = X86_CR0_PE | X86_CR0_PG | X86_CR0_ET
-                                              | X86_CR0_NE | X86_CR0_WP | X86_CR0_MP;
-                                    pCtx->msrEFER = MSR_K6_EFER_LME | MSR_K6_EFER_LMA | MSR_K6_EFER_NXE;
-
-                                    /* CS = 64-bit code segment (selector 0x10) */
-                                    pCtx->cs.Sel      = 0x10;
-                                    pCtx->cs.ValidSel = 0x10;
-                                    pCtx->cs.fFlags   = CPUMSELREG_FLAGS_VALID;
-                                    pCtx->cs.u64Base  = 0;
-                                    pCtx->cs.u32Limit = UINT32_MAX;
-                                    pCtx->cs.Attr.u   = 0xA09B;
-
-                                    /* DS=ES=SS=FS=GS = 64-bit data (selector 0x18) */
-                                    PCPUMSELREG apS[] = { &pCtx->ds, &pCtx->es, &pCtx->fs, &pCtx->gs, &pCtx->ss };
-                                    for (unsigned i = 0; i < RT_ELEMENTS(apS); i++)
-                                    {
-                                        apS[i]->Sel      = 0x18;
-                                        apS[i]->ValidSel = 0x18;
-                                        apS[i]->fFlags   = CPUMSELREG_FLAGS_VALID;
-                                        apS[i]->u64Base  = 0;
-                                        apS[i]->u32Limit = UINT32_MAX;
-                                        apS[i]->Attr.u   = 0xC093;
-                                    }
-
-                                    pCtx->rip = uEntry;
-                                    pCtx->rsi = uBootParams;
-                                    pCtx->rax = 0; pCtx->rbx = 0; pCtx->rcx = 0; pCtx->rdx = 0;
-                                    pCtx->rdi = 0; pCtx->rbp = 0;
-                                    pCtx->rsp = 0x9FFC0;
-                                    pCtx->rflags.u = X86_EFL_1;
-                                    pCtx->idtr.pIdt = 0;
-                                    pCtx->idtr.cbIdt = 0;
-                                    pCtx->cr2 = 0;
-
-                                    VMCPU_FF_SET(pVCpu, VMCPU_FF_PGM_SYNC_CR3);
-
-                                    RTPrintf("[FAST-BOOT-CPP] Entering 64-bit kernel: RIP=%#018llx RSI=%#010x\n",
-                                             (unsigned long long)pCtx->rip, (unsigned)pCtx->rsi);
-                                    RTStrmFlush(g_pStdOut);
-                                }
-                                else
-                                    RTPrintf("[FAST-BOOT-CPP] D64B magic mismatch: 0x%08x\n", uMagic64);
-                            }
-                            else
-                                RTPrintf("[FAST-BOOT-CPP] JS decompress returned %d (falling back to slow boot)\n", rcFB);
-                            RTStrmFlush(g_pStdOut);
-                        }
                     }
                     if (s_fBootActive)
                     {
                         s_cBootInsns++;
                         uint16_t uCS = pVCpu->cpum.GstCtx.cs.Sel;
+
+                        /* Fast boot: detect 32-bit PM startup_32 running and
+                           decompress the kernel in JS instead of letting IEM
+                           run the decompressor for 20+ minutes.
+                           Trigger: CS=0x10, EIP in kernel range, PE set, LMA not set.
+                           Must wait until kernel code is actually at 0x100000
+                           (setup header at 0x90000 has HdrS). */
+                        {
+                            static bool s_fFastBootTried = false;
+                            if (!s_fFastBootTried
+                                && uCS == 0x10
+                                && (pVCpu->cpum.GstCtx.cr0 & X86_CR0_PE)
+                                && !(pVCpu->cpum.GstCtx.msrEFER & MSR_K6_EFER_LMA)
+                                && pVCpu->cpum.GstCtx.rip >= UINT64_C(0x100000)
+                                && pVCpu->cpum.GstCtx.rip < UINT64_C(0x1000000))
+                            {
+                                s_fFastBootTried = true;
+                                RTPrintf("[FAST-BOOT-CPP] Detected startup_32 at EIP=%#llx — attempting JS decompress\n",
+                                         (unsigned long long)pVCpu->cpum.GstCtx.rip);
+                                RTStrmFlush(g_pStdOut);
+                                int rcFB = wasmFastBootDecompress();
+                                if (rcFB == 1)
+                                {
+                                    uint8_t abMeta64[20];
+                                    PGMPhysRead(pVM, (RTGCPHYS)0x7200, abMeta64, sizeof(abMeta64), PGMACCESSORIGIN_IEM);
+                                    uint32_t uMagic64 = *(uint32_t *)&abMeta64[0];
+                                    if (uMagic64 == 0x42343644) /* "D64B" */
+                                    {
+                                        PCPUMCTX pCtx = &pVCpu->cpum.GstCtx;
+                                        uint32_t uCR3 = *(uint32_t *)&abMeta64[4];
+                                        uint64_t uEntry = *(uint64_t *)&abMeta64[8];
+                                        uint32_t uBootParams = *(uint32_t *)&abMeta64[16];
+
+                                        RTPrintf("[FAST-BOOT-CPP] D64B: CR3=0x%08x entry=0x%016llx bp=0x%08x\n",
+                                                 uCR3, (unsigned long long)uEntry, uBootParams);
+
+                                        pCtx->gdtr.pGdt  = 0x7300;
+                                        pCtx->gdtr.cbGdt = 31;
+                                        pCtx->cr3 = uCR3;
+                                        pCtx->cr4 = X86_CR4_PAE | X86_CR4_PSE;
+                                        pCtx->cr0 = X86_CR0_PE | X86_CR0_PG | X86_CR0_ET
+                                                  | X86_CR0_NE | X86_CR0_WP | X86_CR0_MP;
+                                        pCtx->msrEFER = MSR_K6_EFER_LME | MSR_K6_EFER_LMA | MSR_K6_EFER_NXE;
+
+                                        pCtx->cs.Sel = 0x10; pCtx->cs.ValidSel = 0x10;
+                                        pCtx->cs.fFlags = CPUMSELREG_FLAGS_VALID;
+                                        pCtx->cs.u64Base = 0; pCtx->cs.u32Limit = UINT32_MAX;
+                                        pCtx->cs.Attr.u = 0xA09B;
+
+                                        PCPUMSELREG apS[] = { &pCtx->ds, &pCtx->es, &pCtx->fs, &pCtx->gs, &pCtx->ss };
+                                        for (unsigned i = 0; i < RT_ELEMENTS(apS); i++)
+                                        {
+                                            apS[i]->Sel = 0x18; apS[i]->ValidSel = 0x18;
+                                            apS[i]->fFlags = CPUMSELREG_FLAGS_VALID;
+                                            apS[i]->u64Base = 0; apS[i]->u32Limit = UINT32_MAX;
+                                            apS[i]->Attr.u = 0xC093;
+                                        }
+
+                                        pCtx->rip = uEntry;
+                                        pCtx->rsi = uBootParams;
+                                        pCtx->rax = 0; pCtx->rbx = 0; pCtx->rcx = 0; pCtx->rdx = 0;
+                                        pCtx->rdi = 0; pCtx->rbp = 0;
+                                        pCtx->rsp = 0x9FFC0;
+                                        pCtx->rflags.u = X86_EFL_1;
+                                        pCtx->idtr.pIdt = 0; pCtx->idtr.cbIdt = 0;
+                                        pCtx->cr2 = 0;
+
+                                        VMCPU_FF_SET(pVCpu, VMCPU_FF_PGM_SYNC_CR3);
+
+                                        RTPrintf("[FAST-BOOT-CPP] Entering 64-bit kernel: RIP=%#018llx RSI=%#010x\n",
+                                                 (unsigned long long)pCtx->rip, (unsigned)pCtx->rsi);
+                                        RTStrmFlush(g_pStdOut);
+                                        /* Re-init decoder for new mode */
+                                        iemReInitDecoder(pVCpu);
+                                        continue;
+                                    }
+                                    else
+                                        RTPrintf("[FAST-BOOT-CPP] D64B magic mismatch: 0x%08x\n", uMagic64);
+                                }
+                                else
+                                    RTPrintf("[FAST-BOOT-CPP] JS decompress returned %d (slow boot)\n", rcFB);
+                                RTStrmFlush(g_pStdOut);
+                            }
+                        }
+
                         /* Detailed trace: first 200 IEM instructions after boot */
                         if (s_cBootInsns <= 200)
                         {

@@ -202,6 +202,209 @@ globalThis.VBoxJIT = (function() {
     highRamEnd = 1048576 + size;
     console.log("[JIT] High RAM set: ptr=0x" + ptr.toString(16) + " size=" + (size >> 20) + "MB range=0x100000-0x" + highRamEnd.toString(16));
   }
+  // ── Gzip/DEFLATE decompressor for fast kernel boot ──
+  // Decompresses bzImage kernel payload in JavaScript, skipping the 20-minute
+  // IEM instruction-by-instruction decompression of the kernel's startup_64 code.
+  function jsGunzip(input) {
+    if (input[0] !== 31 || input[1] !== 139) return null;
+    // not gzip
+    if (input[2] !== 8) return null;
+    // must be deflate method
+    const flags = input[3];
+    let pos = 10;
+    if (flags & 4) {
+      const xlen = input[pos] | (input[pos + 1] << 8);
+      pos += 2 + xlen;
+    }
+    if (flags & 8) {
+      while (input[pos++] !== 0) ;
+    }
+    if (flags & 16) {
+      while (input[pos++] !== 0) ;
+    }
+    if (flags & 2) pos += 2;
+    return jsInflate(input, pos);
+  }
+  function jsInflate(data, pos) {
+    let outBuf = new Uint8Array(32 * 1024 * 1024);
+    // 32MB initial
+    let outPos = 0;
+    let bitBuf = 0, bitCnt = 0;
+    function bits(n) {
+      while (bitCnt < n) {
+        bitBuf |= data[pos++] << bitCnt;
+        bitCnt += 8;
+      }
+      const v = bitBuf & ((1 << n) - 1);
+      bitBuf >>>= n;
+      bitCnt -= n;
+      return v;
+    }
+    function grow(need) {
+      while (outPos + need > outBuf.length) {
+        const b = new Uint8Array(outBuf.length * 2);
+        b.set(outBuf);
+        outBuf = b;
+      }
+    }
+    function buildTree(lens, n) {
+      const cnt = new Uint16Array(16), offs = new Uint16Array(16);
+      for (let i = 0; i < n; i++) cnt[lens[i]]++;
+      for (let i = 1; i < 16; i++) offs[i] = offs[i - 1] + cnt[i - 1];
+      const syms = new Uint16Array(n);
+      for (let i = 0; i < n; i++) if (lens[i]) syms[offs[lens[i]]++] = i;
+      return {
+        cnt,
+        syms
+      };
+    }
+    function decode(t) {
+      let code = 0, first = 0, idx = 0;
+      for (let len = 1; len <= 15; len++) {
+        code |= bits(1);
+        const c = t.cnt[len];
+        if (code < first + c) return t.syms[idx + (code - first)];
+        idx += c;
+        first = (first + c) << 1;
+        code <<= 1;
+      }
+      return -1;
+    }
+    const lenBase = [ 3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31, 35, 43, 51, 59, 67, 83, 99, 115, 131, 163, 195, 227, 258 ];
+    const lenXtra = [ 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 0 ];
+    const dstBase = [ 1, 2, 3, 4, 5, 7, 9, 13, 17, 25, 33, 49, 65, 97, 129, 193, 257, 385, 513, 769, 1025, 1537, 2049, 3073, 4097, 6145, 8193, 12289, 16385, 24577 ];
+    const dstXtra = [ 0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13, 13 ];
+    let fixLit, fixDst;
+    function buildFixed() {
+      const l = new Uint8Array(288);
+      for (let i = 0; i < 144; i++) l[i] = 8;
+      for (let i = 144; i < 256; i++) l[i] = 9;
+      for (let i = 256; i < 280; i++) l[i] = 7;
+      for (let i = 280; i < 288; i++) l[i] = 8;
+      fixLit = buildTree(l, 288);
+      const d = new Uint8Array(30);
+      for (let i = 0; i < 30; i++) d[i] = 5;
+      fixDst = buildTree(d, 30);
+    }
+    let bfinal = 0;
+    while (!bfinal) {
+      bfinal = bits(1);
+      const btype = bits(2);
+      if (btype === 0) {
+        bitBuf = 0;
+        bitCnt = 0;
+        const len = data[pos] | (data[pos + 1] << 8);
+        pos += 4;
+        grow(len);
+        for (let i = 0; i < len; i++) outBuf[outPos++] = data[pos++];
+      } else {
+        let lt, dt;
+        if (btype === 1) {
+          if (!fixLit) buildFixed();
+          lt = fixLit;
+          dt = fixDst;
+        } else {
+          const hlit = bits(5) + 257, hdist = bits(5) + 1, hclen = bits(4) + 4;
+          const clOrd = [ 16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15 ];
+          const cl = new Uint8Array(19);
+          for (let i = 0; i < hclen; i++) cl[clOrd[i]] = bits(3);
+          const clT = buildTree(cl, 19);
+          const all = new Uint8Array(hlit + hdist);
+          let ai = 0;
+          while (ai < hlit + hdist) {
+            const s = decode(clT);
+            if (s < 16) {
+              all[ai++] = s;
+            } else if (s === 16) {
+              const r = bits(2) + 3, p = all[ai - 1];
+              for (let j = 0; j < r; j++) all[ai++] = p;
+            } else if (s === 17) {
+              ai += bits(3) + 3;
+            } else {
+              ai += bits(7) + 11;
+            }
+          }
+          lt = buildTree(all.subarray(0, hlit), hlit);
+          dt = buildTree(all.subarray(hlit), hdist);
+        }
+        for (;;) {
+          const s = decode(lt);
+          if (s < 256) {
+            grow(1);
+            outBuf[outPos++] = s;
+          } else if (s === 256) break; else {
+            const li = s - 257, length = lenBase[li] + bits(lenXtra[li]);
+            const di = decode(dt), dist = dstBase[di] + bits(dstXtra[di]);
+            grow(length);
+            for (let j = 0; j < length; j++) outBuf[outPos + j] = outBuf[outPos - dist + j];
+            outPos += length;
+          }
+        }
+      }
+    }
+    return outBuf.subarray(0, outPos);
+  }
+  // Parse ELF64 binary, return entry point and PT_LOAD segments
+  function parseELF64(data) {
+    if (data[0] !== 127 || data[1] !== 69 || data[2] !== 76 || data[3] !== 70) return null;
+    if (data[4] !== 2) return null;
+    // must be ELFCLASS64
+    const edv = new DataView(data.buffer, data.byteOffset, data.byteLength);
+    const entry = edv.getBigUint64(24, true);
+    const phoff = Number(edv.getBigUint64(32, true));
+    const phentsz = edv.getUint16(54, true);
+    const phnum = edv.getUint16(56, true);
+    const segs = [];
+    for (let i = 0; i < phnum; i++) {
+      const o = phoff + i * phentsz;
+      if (edv.getUint32(o, true) !== 1) continue;
+      // PT_LOAD only
+      segs.push({
+        offset: Number(edv.getBigUint64(o + 8, true)),
+        vaddr: edv.getBigUint64(o + 16, true),
+        paddr: edv.getBigUint64(o + 24, true),
+        filesz: Number(edv.getBigUint64(o + 32, true)),
+        memsz: Number(edv.getBigUint64(o + 40, true))
+      });
+    }
+    return {
+      entry,
+      segs
+    };
+  }
+  // Build x86-64 4-level page tables in guest RAM for kernel fast boot.
+  // Maps identity (GPA=GVA) + kernel high half (0xFFFFFFFF80000000+GPA).
+  // Uses 2MB pages for efficiency. Returns CR3 value (GPA of PML4).
+  function buildPageTables64(totalRAM) {
+    const PT_GPA = 8388608;
+    // place at guest 8MB
+    const pt = highRamPtr + (PT_GPA - 1048576);
+    // wasm offset
+    const pdv = new DataView(mem8.buffer, 0);
+    // Clear 32KB for page tables
+    mem8.fill(0, pt, pt + 32768);
+    const P = 1, W = 2, PS = 128;
+    // Present, Writable, PageSize(2MB)
+    const pml4 = pt;
+    const pdptLo = pt + 4096;
+    const pdptHi = pt + 8192;
+    const pdLo = pt + 12288;
+    const pdHi = pt + 16384;
+    // PML4[0] → PDPT-low (identity)
+    pdv.setBigUint64(pml4, BigInt(PT_GPA + 4096) | BigInt(P | W), true);
+    // PML4[511] → PDPT-high (kernel at 0xFFFFFFFF80000000)
+    pdv.setBigUint64(pml4 + 511 * 8, BigInt(PT_GPA + 8192) | BigInt(P | W), true);
+    // PDPT-low[0] → PD-low
+    pdv.setBigUint64(pdptLo, BigInt(PT_GPA + 12288) | BigInt(P | W), true);
+    // PDPT-high[510] → PD-high (0xFFFFFFFF80000000 = PML4[511]:PDPT[510])
+    pdv.setBigUint64(pdptHi + 510 * 8, BigInt(PT_GPA + 16384) | BigInt(P | W), true);
+    // PD-low: identity-map first 1GB using 2MB pages
+    const nPages = Math.min(512, Math.ceil(totalRAM / 2097152));
+    for (let i = 0; i < nPages; i++) pdv.setBigUint64(pdLo + i * 8, BigInt(i * 2097152) | BigInt(P | W | PS), true);
+    // PD-high: same mapping for kernel virtual addresses
+    for (let i = 0; i < nPages; i++) pdv.setBigUint64(pdHi + i * 8, BigInt(i * 2097152) | BigInt(P | W | PS), true);
+    return PT_GPA;
+  }
   // MMIO fault flag: set when a guest memory access goes to an MMIO address
   // (outside Wasm linear memory). The main loop checks this flag and bails
   // to IEM so the instruction is re-executed via the PGM MMIO handler.
@@ -5241,28 +5444,95 @@ globalThis.VBoxJIT = (function() {
                 dv.setUint16(bp + 16, 16, true);
                 // orig_video_points (char height)
                 console.log("[DIRECT-BOOT] e820: " + e820idx + " entries, RAM=" + (TOTAL_RAM >> 20) + "MB");
-                // Signal C++ to set VCPU registers for kernel entry.
-                // JS DataView writes to CPUMSELREG fields are not visible to C++
-                // (Emscripten MEMORY64 SharedArrayBuffer issue), so we only set
-                // CR2 magic here and let C++ do the actual register setup.
-                // The boot_params at guest 0x10000 have setup_sects so C++ can
-                // compute ENTRY_SEG. We also write the setup_sects value to
-                // guest RAM at 0x7000 as metadata for C++.
-                const SETUP_SEG = SETUP_GPA >>> 4;
-                // 0x1000
-                const ENTRY_SEG = SETUP_SEG + 32;
-                // 0x1020
-                // Write direct-boot metadata at guest 0x7000 for C++ to read
-                dv.setUint16(ramBase + 28672, ENTRY_SEG, true);
-                // CS selector
-                dv.setUint16(ramBase + 28674, SETUP_SEG, true);
-                // DS/ES/SS selector
-                dv.setUint32(ramBase + 28676, 1145196367, true);
-                // "DBOOT" magic (little-endian "BOOT" + 'D')
-                // CR2 magic — this DataView write IS visible to C++
-                wr32(R_CR2, 3235822174);
-                _directBootDone = true;
-                console.log("[DIRECT-BOOT] Kernel loaded! entrySeg=0x" + ENTRY_SEG.toString(16) + " setupSeg=0x" + SETUP_SEG.toString(16) + " initrd@0x" + INITRD_GPA.toString(16) + " (" + (initrdLen >> 10) + "KB) — C++ will set VCPU regs");
+                // ── Fast kernel decompression (skip 20-min IEM decompressor) ──
+                // Try to decompress the bzImage payload in JavaScript and jump
+                // directly to the decompressed kernel in 64-bit mode.
+                let fastBootDone = false;
+                if (protoVer >= 520) {
+                  const payloadOff = dv.getUint32(stageBase + 584, true);
+                  const payloadLen = dv.getUint32(stageBase + 588, true);
+                  if (payloadOff > 0 && payloadLen > 0) {
+                    const payloadStart = stageBase + pmKernelOff + payloadOff;
+                    console.log("[FAST-BOOT] payload_offset=0x" + payloadOff.toString(16) + " payload_length=" + payloadLen + " magic=0x" + mem8[payloadStart].toString(16).padStart(2, "0") + mem8[payloadStart + 1].toString(16).padStart(2, "0"));
+                    const t0 = performance.now();
+                    const compressed = mem8.subarray(payloadStart, payloadStart + payloadLen);
+                    const vmlinux = jsGunzip(compressed);
+                    if (vmlinux) {
+                      const dt = (performance.now() - t0) | 0;
+                      console.log("[FAST-BOOT] Decompressed kernel: " + vmlinux.length + " bytes (" + (vmlinux.length >> 20) + "MB) in " + dt + "ms");
+                      const elf = parseELF64(vmlinux);
+                      if (elf) {
+                        console.log("[FAST-BOOT] ELF entry=0x" + elf.entry.toString(16) + " segments=" + elf.segs.length);
+                        // Load PT_LOAD segments into guest RAM
+                        for (let si = 0; si < elf.segs.length; si++) {
+                          const seg = elf.segs[si];
+                          const paddr = Number(seg.paddr);
+                          console.log("[FAST-BOOT] seg[" + si + "] paddr=0x" + paddr.toString(16) + " vaddr=0x" + seg.vaddr.toString(16) + " filesz=" + seg.filesz + " memsz=" + seg.memsz);
+                          if (paddr >= 1048576 && paddr + seg.memsz <= 1048576 + highRamSize) {
+                            const dst = highRamPtr + (paddr - 1048576);
+                            // Copy file data
+                            if (seg.filesz > 0) mem8.set(vmlinux.subarray(seg.offset, seg.offset + seg.filesz), dst);
+                            // Zero BSS (memsz > filesz)
+                            if (seg.memsz > seg.filesz) mem8.fill(0, dst + seg.filesz, dst + seg.memsz);
+                          } else {
+                            console.warn("[FAST-BOOT] seg[" + si + "] paddr out of range, skipping");
+                          }
+                        }
+                        // Build page tables for 64-bit mode
+                        const cr3 = buildPageTables64(TOTAL_RAM);
+                        console.log("[FAST-BOOT] Page tables at GPA 0x" + cr3.toString(16));
+                        // Write 64-bit boot metadata at guest 0x7200 for C++
+                        const meta = ramBase + 29184;
+                        dv.setUint32(meta, 1110718020, true);
+                        // "D64B" magic
+                        dv.setUint32(meta + 4, cr3, true);
+                        // CR3 (page table GPA)
+                        // Entry point (64-bit)
+                        dv.setBigUint64(meta + 8, elf.entry, true);
+                        dv.setUint32(meta + 16, SETUP_GPA, true);
+                        // boot_params GPA
+                        // Write GDT at guest 0x7300
+                        const gdtGPA = 29440;
+                        const gdt = ramBase + gdtGPA;
+                        dv.setBigUint64(gdt, 0n, true);
+                        // null descriptor
+                        // 0x08: 32-bit code (unused, for compatibility)
+                        dv.setBigUint64(gdt + 8, 58434644969848831n, true);
+                        // 0x10: 64-bit code (L=1, D=0)
+                        dv.setBigUint64(gdt + 16, 49428545226735615n, true);
+                        // 0x18: 64-bit data
+                        dv.setBigUint64(gdt + 24, 58426948388454399n, true);
+                        // Signal C++ for 64-bit direct entry
+                        wr32(R_CR2, 3595239425);
+                        _directBootDone = true;
+                        fastBootDone = true;
+                        console.log("[FAST-BOOT] 64-bit kernel ready! entry=0x" + elf.entry.toString(16) + " CR3=0x" + cr3.toString(16) + " — C++ will set VCPU regs for long mode");
+                      } else {
+                        console.warn("[FAST-BOOT] ELF parse failed, falling back to slow boot");
+                      }
+                    } else {
+                      console.log("[FAST-BOOT] Not gzip (or decompress failed), falling back to slow boot");
+                    }
+                  }
+                }
+                if (!fastBootDone) {
+                  // ── Fallback: 32-bit boot protocol (slow, goes through IEM decompressor) ──
+                  const SETUP_SEG = SETUP_GPA >>> 4;
+                  // 0x1000
+                  const ENTRY_SEG = SETUP_SEG + 32;
+                  // 0x1020
+                  // Write direct-boot metadata at guest 0x7000 for C++ to read
+                  dv.setUint16(ramBase + 28672, ENTRY_SEG, true);
+                  // CS selector
+                  dv.setUint16(ramBase + 28674, SETUP_SEG, true);
+                  // DS/ES/SS selector
+                  dv.setUint32(ramBase + 28676, 1145196367, true);
+                  // "DBOOT" magic (little-endian "BOOT" + 'D')
+                  // CR2 magic — this DataView write IS visible to C++
+                  wr32(R_CR2, 3235822174);
+                  _directBootDone = true;
+                  console.log("[DIRECT-BOOT] Kernel loaded (slow path)! entrySeg=0x" + ENTRY_SEG.toString(16) + " initrd@0x" + INITRD_GPA.toString(16) + " (" + (initrdLen >> 10) + "KB) — C++ will set VCPU regs");
+                }
                 // Return 0 (bail to IEM) so C++ can intercept via CR2 magic
                 return 0;
               } else {

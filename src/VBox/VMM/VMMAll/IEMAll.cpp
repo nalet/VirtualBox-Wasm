@@ -2368,6 +2368,85 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                        enter the kernel at code32_start in protected mode with flat
                        segments, bypassing all real-mode BIOS calls. */
                     {
+                        /* ── 64-bit fast boot: kernel decompressed in JS ── */
+                        static bool s_fFastBoot64Detected = false;
+                        if (!s_fFastBoot64Detected && pVCpu->cpum.GstCtx.cr2 == UINT64_C(0xD64B0001))
+                        {
+                            /* Read metadata from guest 0x7200 */
+                            uint8_t abMeta64[20];
+                            PGMPhysRead(pVM, (RTGCPHYS)0x7200, abMeta64, sizeof(abMeta64), PGMACCESSORIGIN_IEM);
+                            uint32_t uMagic64 = *(uint32_t *)&abMeta64[0];
+
+                            if (uMagic64 == 0x42343644) /* "D64B" */
+                            {
+                                s_fFastBoot64Detected = true;
+                                PCPUMCTX pCtx = &pVCpu->cpum.GstCtx;
+
+                                uint32_t uCR3 = *(uint32_t *)&abMeta64[4];
+                                uint64_t uEntry = *(uint64_t *)&abMeta64[8];
+                                uint32_t uBootParams = *(uint32_t *)&abMeta64[16];
+
+                                RTPrintf("[FAST-BOOT-64] CR3=0x%08x entry=0x%016llx boot_params=0x%08x\n",
+                                         uCR3, (unsigned long long)uEntry, uBootParams);
+
+                                /* Set up GDT from guest 0x7300 (written by JS) */
+                                pCtx->gdtr.pGdt  = 0x7300;
+                                pCtx->gdtr.cbGdt = 31; /* 4 entries */
+
+                                /* Enable paging + long mode */
+                                pCtx->cr3 = uCR3;
+                                pCtx->cr4 = X86_CR4_PAE | X86_CR4_PSE;
+                                pCtx->cr0 = X86_CR0_PE | X86_CR0_PG | X86_CR0_ET
+                                          | X86_CR0_NE | X86_CR0_WP | X86_CR0_MP;
+                                pCtx->msrEFER = MSR_K6_EFER_LME | MSR_K6_EFER_LMA | MSR_K6_EFER_NXE;
+
+                                /* CS = 64-bit code segment (selector 0x10) */
+                                pCtx->cs.Sel      = 0x10;
+                                pCtx->cs.ValidSel = 0x10;
+                                pCtx->cs.fFlags   = CPUMSELREG_FLAGS_VALID;
+                                pCtx->cs.u64Base  = 0;
+                                pCtx->cs.u32Limit = UINT32_MAX;
+                                pCtx->cs.Attr.u   = 0xA09B; /* G=1 L=1 P=1 DPL=0 code/r/a */
+
+                                /* DS=ES=SS=FS=GS = 64-bit data (selector 0x18) */
+                                PCPUMSELREG apSegs64[] = { &pCtx->ds, &pCtx->es, &pCtx->fs, &pCtx->gs, &pCtx->ss };
+                                for (unsigned i = 0; i < RT_ELEMENTS(apSegs64); i++)
+                                {
+                                    apSegs64[i]->Sel      = 0x18;
+                                    apSegs64[i]->ValidSel = 0x18;
+                                    apSegs64[i]->fFlags   = CPUMSELREG_FLAGS_VALID;
+                                    apSegs64[i]->u64Base  = 0;
+                                    apSegs64[i]->u32Limit = UINT32_MAX;
+                                    apSegs64[i]->Attr.u   = 0xC093; /* G=1 D=1 P=1 DPL=0 data/w/a */
+                                }
+
+                                /* RIP = kernel entry point (virtual address) */
+                                pCtx->rip = uEntry;
+                                /* RSI = boot_params physical address */
+                                pCtx->rsi = uBootParams;
+                                /* Zero other GP regs */
+                                pCtx->rax = 0; pCtx->rbx = 0; pCtx->rcx = 0; pCtx->rdx = 0;
+                                pCtx->rdi = 0; pCtx->rbp = 0;
+                                pCtx->rsp = 0x9FFC0; /* temporary stack in conventional memory */
+                                /* RFLAGS: IF=0 */
+                                pCtx->rflags.u = X86_EFL_1;
+                                /* Empty IDT — kernel sets up its own */
+                                pCtx->idtr.pIdt  = 0;
+                                pCtx->idtr.cbIdt = 0;
+
+                                pCtx->cr2 = 0; /* clear magic */
+
+                                /* Notify PGM about the mode change + new CR3 */
+                                VMCPU_FF_SET(pVCpu, VMCPU_FF_PGM_SYNC_CR3);
+
+                                RTPrintf("[FAST-BOOT-64] Entering 64-bit kernel: RIP=%#018llx RSI=%#010x CR0=%#010x CR3=%#010x EFER=%#06x\n",
+                                         (unsigned long long)pCtx->rip, (unsigned)pCtx->rsi,
+                                         (unsigned)pCtx->cr0, (unsigned)pCtx->cr3,
+                                         (unsigned)pCtx->msrEFER);
+                                RTStrmFlush(g_pStdOut);
+                            }
+                        }
+
                         static bool s_fDirectBootDetected = false;
                         if (!s_fDirectBootDetected && pVCpu->cpum.GstCtx.cr2 == UINT64_C(0xC0DEBA5E))
                         {
@@ -2507,11 +2586,14 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                     static uint16_t s_uLastCS = 0;
                     static uint64_t s_cBootInsns = 0;
                     static uint64_t s_cLastReport = 0;
-                    if (!s_fBootActive && pVCpu->cpum.GstCtx.cr2 == UINT64_C(0xC0DEBA5E))
+                    if (!s_fBootActive
+                        && (   pVCpu->cpum.GstCtx.cr2 == UINT64_C(0xC0DEBA5E)
+                            || (pVCpu->cpum.GstCtx.msrEFER & MSR_K6_EFER_LMA)))
                     {
                         s_fBootActive = true;
                         s_uLastCS = pVCpu->cpum.GstCtx.cs.Sel;
-                        RTPrintf("[DBOOT] Kernel boot active (32-bit PM), CS=%04x EIP=%08llx CR0=%08llx\n",
+                        RTPrintf("[DBOOT] Kernel boot active (%s), CS=%04x RIP=%#018llx CR0=%08llx\n",
+                                 (pVCpu->cpum.GstCtx.msrEFER & MSR_K6_EFER_LMA) ? "64-bit LM" : "32-bit PM",
                                  s_uLastCS, (unsigned long long)pVCpu->cpum.GstCtx.rip,
                                  (unsigned long long)pVCpu->cpum.GstCtx.cr0);
                         RTStrmFlush(g_pStdOut);

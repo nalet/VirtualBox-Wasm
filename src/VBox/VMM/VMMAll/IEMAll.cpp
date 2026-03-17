@@ -1621,6 +1621,11 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                                         /* ── Inject E820 memory map for 128 MB RAM ── */
                                         RTPrintf("[E820-FIX] Injecting E820 map (ISOLINUX failed to provide one)\n");
 
+                                        /* Only entries within the 128MB RAM range — no high-address
+                                         * entries (I/O APIC, Local APIC, BIOS ROM at 0xFECxxxxx+).
+                                         * High-address entries cause the kernel to allocate struct page
+                                         * for the entire 4GB address space (~1M pages), taking 70+ hours
+                                         * under IEM.  With only 128MB entries, max_pfn = 32K pages. */
                                         struct { uint64_t addr; uint64_t size; uint32_t type; } __attribute__((packed))
                                         aEntries[] = {
                                             { UINT64_C(0x000000000000), UINT64_C(0x000000009FC00), 1 }, /* usable: 0-639KB */
@@ -1628,9 +1633,6 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                                             { UINT64_C(0x0000000E8000), UINT64_C(0x000000018000),  2 }, /* reserved: BIOS area */
                                             { UINT64_C(0x000000100000), UINT64_C(0x000007EF0000),  1 }, /* usable: 1MB - ~127.9MB */
                                             { UINT64_C(0x000007FF0000), UINT64_C(0x000000010000),  3 }, /* ACPI reclaim: 64KB at top */
-                                            { UINT64_C(0x0000FEC00000), UINT64_C(0x000000001000),  2 }, /* reserved: I/O APIC */
-                                            { UINT64_C(0x0000FEE00000), UINT64_C(0x000000001000),  2 }, /* reserved: Local APIC */
-                                            { UINT64_C(0x0000FFFC0000), UINT64_C(0x000000040000),  2 }, /* reserved: BIOS ROM */
                                         };
 
                                         /* Write e820_entries count */
@@ -1711,9 +1713,6 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                                             { UINT64_C(0x0000000E8000), UINT64_C(0x000000018000),  2 },
                                             { UINT64_C(0x000000100000), UINT64_C(0x000007EF0000),  1 },
                                             { UINT64_C(0x000007FF0000), UINT64_C(0x000000010000),  3 },
-                                            { UINT64_C(0x0000FEC00000), UINT64_C(0x000000001000),  2 },
-                                            { UINT64_C(0x0000FEE00000), UINT64_C(0x000000001000),  2 },
-                                            { UINT64_C(0x0000FFFC0000), UINT64_C(0x000000040000),  2 },
                                         };
                                         uint8_t cnt = (uint8_t)RT_ELEMENTS(aE);
                                         PGMPhysWrite(pVMInj, 0x10000 + 0x1E8, &cnt, 1, PGMACCESSORIGIN_DEBUGGER);

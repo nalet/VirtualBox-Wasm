@@ -838,16 +838,29 @@ function execBlock(cpuP, ramB, maxInsn) {
   if (!execBlock._directBootDone && !protMode && csBase < 0xF0000) {
     if (!execBlock._dbCallCount) execBlock._dbCallCount = 0;
     execBlock._dbCallCount++;
+
+    // Track whether we've ever been in a bootloader segment (not BIOS).
+    // BIOS uses CS=F000 (filtered above), CS=0000, CS=C000 (VGA BIOS).
+    // ISOLINUX uses CS=07C0, 9000, etc. — mid-range segments.
+    if (!execBlock._dbSeenBootloader && csSel !== 0 && csSel !== 0xF000 &&
+        csSel !== 0xC000 && csSel !== 0xC800 && csBase < 0xF0000 && csBase >= 0x600) {
+      execBlock._dbSeenBootloader = true;
+      console.log('[JIT-BOOT] Bootloader segment detected: CS=0x' + csSel.toString(16) +
+        ' csBase=0x' + csBase.toString(16) + ' at call ' + execBlock._dbCallCount);
+    }
+
     // Check every 50000 calls (~200M insns at 4096/call)
     if (execBlock._dbCallCount % 50000 === 0) {
-      // Check if kernel code is present at 0x100000
+      // Check if kernel code is present at 0x100000 — but only if we've been
+      // in a bootloader segment (avoids false positive from BIOS memory test)
       const kBase = highRamPtr;
-      const hasKernel = kBase && (
+      const hasKernel = execBlock._dbSeenBootloader && kBase && (
         mem8[kBase] !== 0 || mem8[kBase+1] !== 0 || mem8[kBase+2] !== 0 || mem8[kBase+3] !== 0);
       if (hasKernel && !execBlock._dbKernelSeen) {
         execBlock._dbKernelSeen = execBlock._dbCallCount;
         console.log('[JIT-BOOT] Kernel detected at 0x100000 after ' +
-          execBlock._dbCallCount + ' calls. Waiting for bootloader to finish...');
+          execBlock._dbCallCount + ' calls (bootloader at CS=0x' +
+          csSel.toString(16) + '). Waiting for bootloader to finish...');
       }
       // If kernel was seen 100K+ calls ago (~400M insns) and we're still in
       // real mode, bootloader is stuck. Normal boot needs ~42M insns total.
@@ -865,7 +878,7 @@ function execBlock(cpuP, ramB, maxInsn) {
     }
     // Trigger conditions: either stuck timeout OR original zero-code detection
     const triggerStuck = execBlock._dbKernelSeen &&
-      (execBlock._dbCallCount - execBlock._dbKernelSeen) >= 200000;
+      (execBlock._dbCallCount - execBlock._dbKernelSeen) >= 100000;
     const testAddr = ramBase + csBase + ip;
     let zeroCount = 0;
     for (let t = 0; t < 16; t++) if (mem8[testAddr + t] === 0) zeroCount++;

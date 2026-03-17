@@ -1224,53 +1224,42 @@ globalThis.VBoxJIT = (function() {
           for (let i = 0; i < cmdline.length; i++) mem8[ramBase + 626688 + i] = cmdline.charCodeAt(i);
           mem8[ramBase + 626688 + cmdline.length] = 0;
           writeDword(setupBase + 552, 626688);
-          // Write GDT at 0x1000 in guest RAM
+          // Write GDT at 0x1000 — Linux boot protocol: __BOOT_CS=0x10, __BOOT_DS=0x18
           const gdtBase = ramBase + 4096;
-          // Null descriptor (entry 0)
-          for (let i = 0; i < 8; i++) mem8[gdtBase + i] = 0;
-          // Code32 descriptor (entry 1, selector 0x08): base=0, limit=4GB, 32-bit code
-          // limit_lo=FFFF, base_lo=0000, base_mid=00, access=9A, flags_limit=CF, base_hi=00
-          mem8[gdtBase + 8] = 255;
-          mem8[gdtBase + 9] = 255;
-          // limit 15:0
-          mem8[gdtBase + 10] = 0;
-          mem8[gdtBase + 11] = 0;
-          // base 15:0
-          mem8[gdtBase + 12] = 0;
-          // base 23:16
-          mem8[gdtBase + 13] = 154;
-          // P=1 DPL=0 S=1 type=A(exec/read)
-          mem8[gdtBase + 14] = 207;
-          // G=1 D=1 limit 19:16=F
-          mem8[gdtBase + 15] = 0;
-          // base 31:24
-          // Data32 descriptor (entry 2, selector 0x10): base=0, limit=4GB, 32-bit data
+          for (let i = 0; i < 32; i++) mem8[gdtBase + i] = 0;
+          // 4 entries
+          // Entry 2 (0x10): __BOOT_CS — flat code32
           mem8[gdtBase + 16] = 255;
           mem8[gdtBase + 17] = 255;
           mem8[gdtBase + 18] = 0;
           mem8[gdtBase + 19] = 0;
           mem8[gdtBase + 20] = 0;
-          mem8[gdtBase + 21] = 146;
-          // P=1 DPL=0 S=1 type=2(read/write)
+          mem8[gdtBase + 21] = 154;
           mem8[gdtBase + 22] = 207;
           mem8[gdtBase + 23] = 0;
-          // Set GDTR in CPUMCTX
+          // Entry 3 (0x18): __BOOT_DS — flat data32
+          mem8[gdtBase + 24] = 255;
+          mem8[gdtBase + 25] = 255;
+          mem8[gdtBase + 26] = 0;
+          mem8[gdtBase + 27] = 0;
+          mem8[gdtBase + 28] = 0;
+          mem8[gdtBase + 29] = 146;
+          mem8[gdtBase + 30] = 207;
+          mem8[gdtBase + 31] = 0;
+          // Set GDTR (4 entries = 32 bytes, limit = 31)
           wr64(R_GDTR_BASE, 4096);
-          wr16(R_GDTR_LIMIT, 23);
-          // Set CR0: enable PE (protected mode)
+          wr16(R_GDTR_LIMIT, 31);
+          // Set CR0: PE=1, PG=0
           wr32(R_CR0, (cr0 | 1) & ~2147483648);
-          // PE=1, PG=0
-          // Set CS = 0x08 (code32)
-          wr16(S_CS + SEG_SEL, 8);
+          // CS = 0x10 (__BOOT_CS)
+          wr16(S_CS + SEG_SEL, 16);
           wr64(S_CS + SEG_BASE, 0);
           wr32(S_CS + SEG_LIMIT, 4294967295);
           wr32(S_CS + SEG_ATTR, 49307);
-          // G=1 D=1 P=1 S=1 type=B
-          // Set DS/ES/SS/FS/GS = 0x10 (data32)
+          // DS/ES/SS/FS/GS = 0x18 (__BOOT_DS)
           const dataAttr = 49299;
-          // G=1 D=1 P=1 S=1 type=3
           for (const seg of [ S_DS, S_ES, S_SS, S_FS, S_GS ]) {
-            wr16(seg + SEG_SEL, 16);
+            wr16(seg + SEG_SEL, 24);
             wr64(seg + SEG_BASE, 0);
             wr32(seg + SEG_LIMIT, 4294967295);
             wr32(seg + SEG_ATTR, dataAttr);
@@ -1341,40 +1330,44 @@ globalThis.VBoxJIT = (function() {
         console.log("[JIT-BOOT] Direct PM boot to startup_32 at 0x" + code32addr.toString(16));
         console.log("[JIT-BOOT] ramdisk=0x" + rdImg.toString(16) + " size=0x" + rdSz.toString(16));
         // Write GDT at 0x1000 in guest RAM
+        // Linux boot protocol requires __BOOT_CS=0x10, __BOOT_DS=0x18
         const gdtB = ramBase + 4096;
-        for (let i = 0; i < 24; i++) mem8[gdtB + i] = 0;
-        // Code32 (selector 0x08): flat 32-bit code
-        mem8[gdtB + 8] = 255;
-        mem8[gdtB + 9] = 255;
-        mem8[gdtB + 10] = 0;
-        mem8[gdtB + 11] = 0;
-        mem8[gdtB + 12] = 0;
-        mem8[gdtB + 13] = 154;
-        mem8[gdtB + 14] = 207;
-        mem8[gdtB + 15] = 0;
-        // Data32 (selector 0x10): flat 32-bit data
+        for (let i = 0; i < 32; i++) mem8[gdtB + i] = 0;
+        // clear 4 entries
+        // Entry 0 (0x00): null descriptor — already zeroed
+        // Entry 1 (0x08): unused (keep null for safety)
+        // Entry 2 (0x10): __BOOT_CS — flat 32-bit code
         mem8[gdtB + 16] = 255;
         mem8[gdtB + 17] = 255;
         mem8[gdtB + 18] = 0;
         mem8[gdtB + 19] = 0;
         mem8[gdtB + 20] = 0;
-        mem8[gdtB + 21] = 146;
+        mem8[gdtB + 21] = 154;
         mem8[gdtB + 22] = 207;
         mem8[gdtB + 23] = 0;
-        // Set GDTR
+        // Entry 3 (0x18): __BOOT_DS — flat 32-bit data
+        mem8[gdtB + 24] = 255;
+        mem8[gdtB + 25] = 255;
+        mem8[gdtB + 26] = 0;
+        mem8[gdtB + 27] = 0;
+        mem8[gdtB + 28] = 0;
+        mem8[gdtB + 29] = 146;
+        mem8[gdtB + 30] = 207;
+        mem8[gdtB + 31] = 0;
+        // Set GDTR (4 entries = 32 bytes, limit = 31)
         wr64(R_GDTR_BASE, 4096);
-        wr16(R_GDTR_LIMIT, 23);
+        wr16(R_GDTR_LIMIT, 31);
         // CR0: PE=1, PG=0
         wr32(R_CR0, (cr0 | 1) & ~2147483648);
-        // CS = 0x08 flat code32
-        wr16(S_CS + SEG_SEL, 8);
+        // CS = 0x10 (__BOOT_CS, flat code32)
+        wr16(S_CS + SEG_SEL, 16);
         wr64(S_CS + SEG_BASE, 0);
         wr32(S_CS + SEG_LIMIT, 4294967295);
         wr32(S_CS + SEG_ATTR, 49307);
-        // DS/ES/SS/FS/GS = 0x10 flat data32
+        // DS/ES/SS/FS/GS = 0x18 (__BOOT_DS, flat data32)
         const dA = 49299;
         for (const sg of [ S_DS, S_ES, S_SS, S_FS, S_GS ]) {
-          wr16(sg + SEG_SEL, 16);
+          wr16(sg + SEG_SEL, 24);
           wr64(sg + SEG_BASE, 0);
           wr32(sg + SEG_LIMIT, 4294967295);
           wr32(sg + SEG_ATTR, dA);
@@ -5671,42 +5664,42 @@ globalThis.VBoxJIT = (function() {
             for (let ci = 0; ci < cmdline.length; ci++) mem8[rb + 626688 + ci] = cmdline.charCodeAt(ci);
             mem8[rb + 626688 + cmdline.length] = 0;
             writeDword(setupBase + 552, 626688);
-            // Write GDT at 0x1000 in guest RAM
+            // Write GDT — Linux boot protocol: __BOOT_CS=0x10, __BOOT_DS=0x18
             const gdtBase = rb + 4096;
-            for (let i = 0; i < 24; i++) mem8[gdtBase + i] = 0;
-            // null descriptor
-            // Code32 descriptor (selector 0x08)
-            mem8[gdtBase + 8] = 255;
-            mem8[gdtBase + 9] = 255;
-            mem8[gdtBase + 10] = 0;
-            mem8[gdtBase + 11] = 0;
-            mem8[gdtBase + 12] = 0;
-            mem8[gdtBase + 13] = 154;
-            mem8[gdtBase + 14] = 207;
-            mem8[gdtBase + 15] = 0;
-            // Data32 descriptor (selector 0x10)
+            for (let i = 0; i < 32; i++) mem8[gdtBase + i] = 0;
+            // 4 entries
+            // Entry 2 (0x10): __BOOT_CS — flat code32
             mem8[gdtBase + 16] = 255;
             mem8[gdtBase + 17] = 255;
             mem8[gdtBase + 18] = 0;
             mem8[gdtBase + 19] = 0;
             mem8[gdtBase + 20] = 0;
-            mem8[gdtBase + 21] = 146;
+            mem8[gdtBase + 21] = 154;
             mem8[gdtBase + 22] = 207;
             mem8[gdtBase + 23] = 0;
-            // Set GDTR
+            // Entry 3 (0x18): __BOOT_DS — flat data32
+            mem8[gdtBase + 24] = 255;
+            mem8[gdtBase + 25] = 255;
+            mem8[gdtBase + 26] = 0;
+            mem8[gdtBase + 27] = 0;
+            mem8[gdtBase + 28] = 0;
+            mem8[gdtBase + 29] = 146;
+            mem8[gdtBase + 30] = 207;
+            mem8[gdtBase + 31] = 0;
+            // Set GDTR (4 entries, limit=31)
             wr64(R_GDTR_BASE, 4096);
-            wr16(R_GDTR_LIMIT, 23);
-            // Set CR0: PE=1, PG=0
+            wr16(R_GDTR_LIMIT, 31);
+            // CR0: PE=1, PG=0
             wr32(R_CR0, (cr0S | 1) & ~2147483648);
-            // Set CS = 0x08 (flat code32)
-            wr16(S_CS + SEG_SEL, 8);
+            // CS = 0x10 (__BOOT_CS)
+            wr16(S_CS + SEG_SEL, 16);
             wr64(S_CS + SEG_BASE, 0);
             wr32(S_CS + SEG_LIMIT, 4294967295);
             wr32(S_CS + SEG_ATTR, 49307);
-            // Set DS/ES/SS/FS/GS = 0x10 (flat data32)
+            // DS/ES/SS/FS/GS = 0x18 (__BOOT_DS)
             const dAttr = 49299;
             for (const seg of [ S_DS, S_ES, S_SS, S_FS, S_GS ]) {
-              wr16(seg + SEG_SEL, 16);
+              wr16(seg + SEG_SEL, 24);
               wr64(seg + SEG_BASE, 0);
               wr32(seg + SEG_LIMIT, 4294967295);
               wr32(seg + SEG_ATTR, dAttr);
@@ -5726,7 +5719,7 @@ globalThis.VBoxJIT = (function() {
             // ESP
             // Disable interrupts
             wr32(R_FLAGS, 2);
-            console.log("[JIT-STUCK-BOOT] PM state set: CR0=0x" + ((cr0S | 1) & ~2147483648).toString(16) + " CS=0x08 EIP=0x100000 ESI=0x90000");
+            console.log("[JIT-STUCK-BOOT] PM state set: CR0=0x" + ((cr0S | 1) & ~2147483648).toString(16) + " CS=0x10 EIP=0x100000 ESI=0x90000");
             console.log("[JIT-STUCK-BOOT] Jumping to startup_32!");
             // Reset stuck counter to prevent re-triggering
             stuckCount = 0;

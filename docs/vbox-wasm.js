@@ -6334,7 +6334,7 @@ globalThis.VBoxJIT = (function() {
     const elf = parseELF64(vmView);
     if (!elf) {
       console.error("[FAST-BOOT] ELF parse failed");
-      Module._free(vmlinuxPtr);
+      Module._free(BigInt(vmlinuxPtr));
       return 0;
     }
     console.error("[FAST-BOOT] ELF entry=0x" + elf.entry.toString(16) + " segments=" + elf.segs.length);
@@ -6363,7 +6363,7 @@ globalThis.VBoxJIT = (function() {
     }
     console.error("[FAST-BOOT] Loaded " + segsLoaded + "/" + elf.segs.length + " segments via PGM");
     // Free decompressed vmlinux buffer
-    Module._free(vmlinuxPtr);
+    Module._free(BigInt(vmlinuxPtr));
     vmlinuxPtr = 0;
     // Refresh mem8 for page table and low-RAM writes
     mem8 = new Uint8Array(wasmMemory.buffer);
@@ -6399,10 +6399,10 @@ globalThis.VBoxJIT = (function() {
         ptDv.setBigUint64(ptOff + 16384 + i * 8, BigInt(i * 2097152) | BigInt(P | W | PS), true);
       }
       // Write page tables to guest RAM via PGM
-      const rcPT = Module._wasmPGMPhysWrite(BigInt(PT_GPA), ptBuf, PT_SIZE);
+      const rcPT = Module._wasmPGMPhysWrite(BigInt(PT_GPA), BigInt(ptBuf), PT_SIZE);
       if (rcPT !== 0) console.error("[FAST-BOOT] PGMPhysWrite page tables FAILED rc=" + rcPT);
     }
-    Module._free(ptBuf);
+    Module._free(BigInt(ptBuf));
     const cr3val = PT_GPA;
     console.error("[FAST-BOOT] Page tables written to GPA 0x" + cr3val.toString(16) + " via PGM");
     // Determine where boot_params actually lives (where HdrS was found)

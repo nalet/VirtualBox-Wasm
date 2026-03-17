@@ -1031,6 +1031,11 @@ globalThis.VBoxJIT = (function() {
     // Trace kernel setup code (CS=0x9020) for debugging direct boot
     if (!execBlock._kernelTraceCount) execBlock._kernelTraceCount = 0;
     const csSel = rr16(S_CS);
+    // Debug: log once when CS=0x9000 and IP is in the ISOLINUX stuck range
+    if (!execBlock._cs9diag && csSel === 36864 && ip >= 6656 && ip <= 7168) {
+      execBlock._cs9diag = true;
+      console.log("[JIT-CS9-DIAG] csSel=0x" + csSel.toString(16) + " csBase=0x" + csBase.toString(16) + " ip=0x" + ip.toString(16) + " cr0=0x" + cr0.toString(16) + " protMode=" + protMode + " csDefBig=" + csDefBig + " flags=0x" + flags.toString(16) + " _directBootDone=" + !!execBlock._directBootDone);
+    }
     if (csSel === 36896 && execBlock._kernelTraceCount < 20) {
       execBlock._kernelTraceCount++;
       const c0 = mem8[ramBase + csBase + ip];
@@ -1090,9 +1095,21 @@ globalThis.VBoxJIT = (function() {
     // making mem8[ramBase+...] and PGM's physical memory diverge.
     // Detection: IP in 0x1a00-0x1c00, code is mostly zeros, real mode, not BIOS.
     if (!execBlock._directBootDone && ip >= 6656 && ip <= 7168 && !protMode && csBase < 983040) {
+      if (!execBlock._dbDiag1) {
+        execBlock._dbDiag1 = true;
+        const diagAddr = ramBase + csBase + ip;
+        let diagDump = "";
+        for (let d = 0; d < 16; d++) diagDump += mem8[diagAddr + d].toString(16).padStart(2, "0") + " ";
+        console.log("[JIT-BOOT-DIAG1] ENTERING detection: csSel=0x" + csSel.toString(16) + " csBase=0x" + csBase.toString(16) + " ip=0x" + ip.toString(16) + " ramBase=0x" + ramBase.toString(16) + " testAddr=0x" + diagAddr.toString(16) + " cr0=0x" + cr0.toString(16) + " protMode=" + protMode);
+        console.log("[JIT-BOOT-DIAG1] code@testAddr: " + diagDump);
+      }
       const testAddr = ramBase + csBase + ip;
       let zeroCount = 0;
       for (let t = 0; t < 16; t++) if (mem8[testAddr + t] === 0) zeroCount++;
+      if (!execBlock._dbDiag2) {
+        execBlock._dbDiag2 = true;
+        console.log("[JIT-BOOT-DIAG2] zeroCount=" + zeroCount + " (need >= 12)");
+      }
       if (zeroCount >= 12) {
         console.log("[JIT-BOOT] ISOLINUX shuffle corrupted code at CS=0x" + csSel.toString(16) + " (phys 0x" + csBase.toString(16) + ") IP=0x" + ip.toString(16));
         // Scan multiple locations for HdrS magic — PGM/mem8 may diverge after bcopy32

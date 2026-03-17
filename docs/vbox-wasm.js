@@ -6285,16 +6285,16 @@ globalThis.VBoxJIT = (function() {
           if (match) {
             xzSrc = addr;
             xzSrcGPA = 1048576 + (addr - hp);
-            console.log("[FAST-BOOT-JS] Found relocated XZ at GPA=0x" + xzSrcGPA.toString(16) + " (using this instead of 0x" + (1048576 + compOff).toString(16) + ")");
+            console.error("[FAST-BOOT] Found relocated XZ at GPA=0x" + xzSrcGPA.toString(16));
             break;
           }
         }
       }
       const finalSrcBI = BigInt(xzSrc);
-      console.log("[FAST-BOOT-JS] XZ decompress: src=GPA 0x" + xzSrcGPA.toString(16) + " len=" + compLen + " cap=" + dstCap);
+      console.error("[FAST-BOOT] XZ src=GPA 0x" + xzSrcGPA.toString(16) + " len=" + compLen);
       const rc = Module._wasmXzDecompress(finalSrcBI, compLen, dstBI, dstCap, outBI);
       if (rc !== 0) {
-        console.log("[FAST-BOOT-JS] XZ decompression failed, rc=" + rc);
+        console.error("[FAST-BOOT] XZ decompression FAILED rc=" + rc);
         Module._free(pDstRaw);
         Module._free(pOutLenRaw);
         return 0;
@@ -6303,7 +6303,7 @@ globalThis.VBoxJIT = (function() {
       const m2 = new Uint8Array(wasmMemory.buffer);
       const dv3 = new DataView(wasmMemory.buffer);
       const outLen = dv3.getUint32(Number(outBI), true);
-      console.log("[FAST-BOOT-JS] XZ decompressed: " + outLen + " bytes (" + (outLen >> 20) + "MB)");
+      console.error("[FAST-BOOT] XZ decompressed: " + outLen + " bytes (" + (outLen >> 20) + "MB)");
       vmlinux = new Uint8Array(outLen);
       vmlinux.set(m2.subarray(Number(dstBI), Number(dstBI) + outLen));
       Module._free(pDstRaw);
@@ -6315,25 +6315,25 @@ globalThis.VBoxJIT = (function() {
     }
     if (!vmlinux) {
       const magic = m[compStart].toString(16).padStart(2, "0") + m[compStart + 1].toString(16).padStart(2, "0");
-      console.log("[FAST-BOOT-JS] Decompression failed, magic=0x" + magic);
+      console.error("[FAST-BOOT] Decompression failed, magic=0x" + magic);
       return 0;
     }
     const dt = (performance.now() - t0) | 0;
-    console.log("[FAST-BOOT-JS] Decompressed: " + vmlinux.length + " bytes (" + (vmlinux.length >> 20) + "MB) in " + dt + "ms");
+    console.error("[FAST-BOOT] Decompressed: " + vmlinux.length + " bytes (" + (vmlinux.length >> 20) + "MB) in " + dt + "ms");
     // Refresh memory views (buffer may have grown after malloc/decompress)
     const mf = new Uint8Array(wasmMemory.buffer);
     const dvf = new DataView(wasmMemory.buffer);
     const elf = parseELF64(vmlinux);
     if (!elf) {
-      console.log("[FAST-BOOT-JS] ELF parse failed");
+      console.error("[FAST-BOOT] ELF parse failed");
       return 0;
     }
-    console.log("[FAST-BOOT-JS] ELF entry=0x" + elf.entry.toString(16) + " segments=" + elf.segs.length);
+    console.error("[FAST-BOOT] ELF entry=0x" + elf.entry.toString(16) + " segments=" + elf.segs.length);
     const TOTAL_RAM = 1048576 + highRamSize;
     for (let si = 0; si < elf.segs.length; si++) {
       const seg = elf.segs[si];
       const pa = Number(seg.paddr);
-      console.log("[FAST-BOOT-JS] seg[" + si + "] paddr=0x" + pa.toString(16) + " vaddr=0x" + seg.vaddr.toString(16) + " filesz=" + seg.filesz + " memsz=" + seg.memsz);
+      console.error("[FAST-BOOT] seg[" + si + "] paddr=0x" + pa.toString(16) + " vaddr=0x" + seg.vaddr.toString(16) + " filesz=" + seg.filesz + " memsz=" + seg.memsz);
       if (pa >= 1048576 && pa + seg.memsz <= TOTAL_RAM) {
         const dst = hp + (pa - 1048576);
         if (seg.filesz > 0) mf.set(vmlinux.subarray(seg.offset, seg.offset + seg.filesz), dst);

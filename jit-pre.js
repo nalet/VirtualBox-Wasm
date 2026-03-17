@@ -5054,19 +5054,18 @@ function fastBootDecompress() {
         if (match) {
           xzSrc = addr;
           xzSrcGPA = 0x100000 + (addr - hp);
-          console.log('[FAST-BOOT-JS] Found relocated XZ at GPA=0x' +
-            xzSrcGPA.toString(16) + ' (using this instead of 0x' +
-            (0x100000 + compOff).toString(16) + ')');
+          console.error('[FAST-BOOT] Found relocated XZ at GPA=0x' +
+            xzSrcGPA.toString(16));
           break;
         }
       }
     }
     const finalSrcBI = BigInt(xzSrc);
-    console.log('[FAST-BOOT-JS] XZ decompress: src=GPA 0x' + xzSrcGPA.toString(16) +
-      ' len=' + compLen + ' cap=' + dstCap);
+    console.error('[FAST-BOOT] XZ src=GPA 0x' + xzSrcGPA.toString(16) +
+      ' len=' + compLen);
     const rc = Module._wasmXzDecompress(finalSrcBI, compLen, dstBI, dstCap, outBI);
     if (rc !== 0) {
-      console.log('[FAST-BOOT-JS] XZ decompression failed, rc=' + rc);
+      console.error('[FAST-BOOT] XZ decompression FAILED rc=' + rc);
       Module._free(pDstRaw);
       Module._free(pOutLenRaw);
       return 0;
@@ -5075,7 +5074,7 @@ function fastBootDecompress() {
     const m2 = new Uint8Array(wasmMemory.buffer);
     const dv3 = new DataView(wasmMemory.buffer);
     const outLen = dv3.getUint32(Number(outBI), true);
-    console.log('[FAST-BOOT-JS] XZ decompressed: ' + outLen + ' bytes (' +
+    console.error('[FAST-BOOT] XZ decompressed: ' + outLen + ' bytes (' +
       (outLen >> 20) + 'MB)');
     vmlinux = new Uint8Array(outLen);
     vmlinux.set(m2.subarray(Number(dstBI), Number(dstBI) + outLen));
@@ -5090,11 +5089,11 @@ function fastBootDecompress() {
   if (!vmlinux) {
     const magic = m[compStart].toString(16).padStart(2,'0') +
       m[compStart+1].toString(16).padStart(2,'0');
-    console.log('[FAST-BOOT-JS] Decompression failed, magic=0x' + magic);
+    console.error('[FAST-BOOT] Decompression failed, magic=0x' + magic);
     return 0;
   }
   const dt = (performance.now() - t0) | 0;
-  console.log('[FAST-BOOT-JS] Decompressed: ' + vmlinux.length + ' bytes (' +
+  console.error('[FAST-BOOT] Decompressed: ' + vmlinux.length + ' bytes (' +
     (vmlinux.length >> 20) + 'MB) in ' + dt + 'ms');
 
   // Refresh memory views (buffer may have grown after malloc/decompress)
@@ -5103,17 +5102,17 @@ function fastBootDecompress() {
 
   const elf = parseELF64(vmlinux);
   if (!elf) {
-    console.log('[FAST-BOOT-JS] ELF parse failed');
+    console.error('[FAST-BOOT] ELF parse failed');
     return 0;
   }
-  console.log('[FAST-BOOT-JS] ELF entry=0x' + elf.entry.toString(16) +
+  console.error('[FAST-BOOT] ELF entry=0x' + elf.entry.toString(16) +
     ' segments=' + elf.segs.length);
 
   const TOTAL_RAM = 0x100000 + highRamSize;
   for (let si = 0; si < elf.segs.length; si++) {
     const seg = elf.segs[si];
     const pa = Number(seg.paddr);
-    console.log('[FAST-BOOT-JS] seg[' + si + '] paddr=0x' + pa.toString(16) +
+    console.error('[FAST-BOOT] seg[' + si + '] paddr=0x' + pa.toString(16) +
       ' vaddr=0x' + seg.vaddr.toString(16) +
       ' filesz=' + seg.filesz + ' memsz=' + seg.memsz);
     if (pa >= 0x100000 && pa + seg.memsz <= TOTAL_RAM) {

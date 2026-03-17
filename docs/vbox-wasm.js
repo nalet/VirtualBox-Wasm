@@ -6155,6 +6155,149 @@ globalThis.VBoxJIT = (function() {
     }
     return n;
   }
+  // ── Fast boot: decompress kernel payload in JS, called from C++ (IEMAll.cpp) ──
+  // Scans guest RAM at 0x100000+ for the compressed kernel payload, decompresses it,
+  // parses the ELF64, loads segments, builds page tables, and writes D64B metadata.
+  // Returns 1 on success, 0 on failure.
+  function fastBootDecompress() {
+    if (!highRamPtr || !ramBase) {
+      console.log("[FAST-BOOT-JS] No highRamPtr or ramBase");
+      return 0;
+    }
+    const m = new Uint8Array(wasmMemory.buffer);
+    const dv2 = new DataView(wasmMemory.buffer);
+    const rb = Number(ramBase);
+    const hp = Number(highRamPtr);
+    const setupBase = rb + 589824;
+    // Try to get payload_offset from setup header at 0x90000
+    let payOff = 0, payLen = 0;
+    const hasHdrS = (m[setupBase + 514] === 72 && m[setupBase + 515] === 100 && m[setupBase + 516] === 114 && m[setupBase + 517] === 83);
+    if (hasHdrS) {
+      const proto = m[setupBase + 518] | (m[setupBase + 519] << 8);
+      if (proto >= 520) {
+        payOff = m[setupBase + 584] | (m[setupBase + 585] << 8) | (m[setupBase + 586] << 16) | (m[setupBase + 587] << 24);
+        payLen = m[setupBase + 588] | (m[setupBase + 589] << 8) | (m[setupBase + 590] << 16) | (m[setupBase + 591] << 24);
+      }
+      console.log("[FAST-BOOT-JS] HdrS found, proto=0x" + proto.toString(16) + " payOff=0x" + payOff.toString(16) + " payLen=" + payLen);
+    } else {
+      console.log("[FAST-BOOT-JS] No HdrS at 0x90000");
+    }
+    // If setup header didn't provide payload info, scan kernel image for
+    // compression magic (gzip 0x1F8B, xz 0xFD37, lzma 0x5D00, bzip2 0x425A)
+    let compStart = 0, compLen = 0, compType = "";
+    if (payOff > 0 && payLen > 0) {
+      compStart = hp + payOff;
+      // payload_offset is relative to 0x100000
+      compLen = payLen;
+      compType = "header";
+    } else {
+      // Scan first 2MB of kernel image for compression signatures
+      const scanLen = Math.min(2 * 1024 * 1024, highRamSize);
+      console.log("[FAST-BOOT-JS] Scanning 0x100000+" + (scanLen >> 10) + "KB for compressed payload...");
+      for (let off = 0; off < scanLen - 6; off++) {
+        const b0 = m[hp + off], b1 = m[hp + off + 1];
+        if (b0 === 31 && b1 === 139 && m[hp + off + 2] === 8) {
+          compStart = hp + off;
+          compLen = highRamSize - off;
+          // assume rest is payload
+          compType = "gzip@0x" + (1048576 + off).toString(16);
+          console.log("[FAST-BOOT-JS] Found gzip at GPA 0x" + (1048576 + off).toString(16));
+          break;
+        }
+        if (b0 === 253 && b1 === 55 && m[hp + off + 2] === 122 && m[hp + off + 3] === 88 && m[hp + off + 4] === 90 && m[hp + off + 5] === 0) {
+          compType = "xz@0x" + (1048576 + off).toString(16);
+          console.log("[FAST-BOOT-JS] Found XZ at GPA 0x" + (1048576 + off).toString(16) + " — XZ not supported, cannot fast-boot");
+          return 0;
+        }
+        if (b0 === 93 && b1 === 0 && m[hp + off + 2] === 0) {
+          compType = "lzma@0x" + (1048576 + off).toString(16);
+          console.log("[FAST-BOOT-JS] Found LZMA at GPA 0x" + (1048576 + off).toString(16) + " — LZMA not supported");
+          return 0;
+        }
+        if (b0 === 40 && b1 === 181 && m[hp + off + 2] === 47 && m[hp + off + 3] === 253) {
+          compType = "zstd@0x" + (1048576 + off).toString(16);
+          console.log("[FAST-BOOT-JS] Found zstd at GPA 0x" + (1048576 + off).toString(16) + " — zstd not supported");
+          return 0;
+        }
+      }
+    }
+    if (!compStart) {
+      console.log("[FAST-BOOT-JS] No compressed payload found");
+      // Dump first 32 bytes at 0x100000 for debugging
+      let d = "";
+      for (let i = 0; i < 32; i++) d += m[hp + i].toString(16).padStart(2, "0") + " ";
+      console.log("[FAST-BOOT-JS] @0x100000: " + d);
+      return 0;
+    }
+    console.log("[FAST-BOOT-JS] Decompressing " + compType + " (" + (compLen > 1024 * 1024 ? (compLen >> 20) + "MB" : (compLen >> 10) + "KB") + ")...");
+    const t0 = performance.now();
+    const comp = m.subarray(compStart, compStart + compLen);
+    const vmlinux = jsGunzip(comp);
+    if (!vmlinux) {
+      const magic = m[compStart].toString(16).padStart(2, "0") + m[compStart + 1].toString(16).padStart(2, "0");
+      console.log("[FAST-BOOT-JS] Decompression failed, magic=0x" + magic);
+      return 0;
+    }
+    const dt = (performance.now() - t0) | 0;
+    console.log("[FAST-BOOT-JS] Decompressed: " + vmlinux.length + " bytes (" + (vmlinux.length >> 20) + "MB) in " + dt + "ms");
+    const elf = parseELF64(vmlinux);
+    if (!elf) {
+      console.log("[FAST-BOOT-JS] ELF parse failed");
+      return 0;
+    }
+    console.log("[FAST-BOOT-JS] ELF entry=0x" + elf.entry.toString(16) + " segments=" + elf.segs.length);
+    const TOTAL_RAM = 1048576 + highRamSize;
+    for (let si = 0; si < elf.segs.length; si++) {
+      const seg = elf.segs[si];
+      const pa = Number(seg.paddr);
+      console.log("[FAST-BOOT-JS] seg[" + si + "] paddr=0x" + pa.toString(16) + " vaddr=0x" + seg.vaddr.toString(16) + " filesz=" + seg.filesz + " memsz=" + seg.memsz);
+      if (pa >= 1048576 && pa + seg.memsz <= TOTAL_RAM) {
+        const dst = hp + (pa - 1048576);
+        if (seg.filesz > 0) m.set(vmlinux.subarray(seg.offset, seg.offset + seg.filesz), dst);
+        if (seg.memsz > seg.filesz) m.fill(0, dst + seg.filesz, dst + seg.memsz);
+      }
+    }
+    const cr3val = buildPageTables64(TOTAL_RAM);
+    console.log("[FAST-BOOT-JS] Page tables at GPA 0x" + cr3val.toString(16));
+    // Copy boot_params to 0x10000 (safe location for kernel)
+    for (let i = 0; i < 4096; i++) m[rb + 65536 + i] = m[setupBase + i];
+    // Ensure serial console in command line
+    const cmdPtr = m[setupBase + 552] | (m[setupBase + 553] << 8) | (m[setupBase + 554] << 16) | (m[setupBase + 555] << 24);
+    if (cmdPtr > 0 && cmdPtr < 655360) {
+      let cmdLen = 0;
+      for (let i = 0; i < 256; i++) {
+        if (m[rb + cmdPtr + i] === 0) {
+          cmdLen = i;
+          break;
+        }
+      }
+      for (let i = 0; i < cmdLen; i++) m[rb + 626688 + i] = m[rb + cmdPtr + i];
+      const serialOpts = " console=ttyS0,115200 earlyprintk=serial,ttyS0,115200 loglevel=7";
+      for (let i = 0; i < serialOpts.length; i++) m[rb + 626688 + cmdLen + i] = serialOpts.charCodeAt(i);
+      m[rb + 626688 + cmdLen + serialOpts.length] = 0;
+      dv2.setUint32(rb + 65536 + 552, 626688, true);
+    }
+    // Write D64B metadata at guest 0x7200
+    dv2.setUint32(rb + 29184, 1110718020, true);
+    // "D64B"
+    dv2.setUint32(rb + 29188, cr3val, true);
+    // CR3
+    dv2.setBigUint64(rb + 29192, elf.entry, true);
+    // entry point (64-bit)
+    dv2.setUint32(rb + 29200, 65536, true);
+    // boot_params GPA
+    // Write GDT at guest 0x7300
+    dv2.setBigUint64(rb + 29440, 0n, true);
+    // null
+    dv2.setBigUint64(rb + 29448, 58434644969848831n, true);
+    // 32-bit code
+    dv2.setBigUint64(rb + 29456, 49428545226735615n, true);
+    // 64-bit code
+    dv2.setBigUint64(rb + 29464, 58426948388454399n, true);
+    // data
+    console.log("[FAST-BOOT-JS] Ready! entry=0x" + elf.entry.toString(16) + " CR3=0x" + cr3val.toString(16) + " boot_params=0x10000");
+    return 1;
+  }
   // ── Public API ──
   return {
     _a20: 1,
@@ -6180,7 +6323,8 @@ globalThis.VBoxJIT = (function() {
         size: highRamSize,
         end: highRamEnd
       };
-    }
+    },
+    fastBootDecompress
   };
 })();
 
@@ -12238,6 +12382,11 @@ function wasmJitSetRomBuffer(pvROM, cbROM, uGCPhysStart) {
   if (typeof globalThis.VBoxJIT !== "undefined" && globalThis.VBoxJIT.setRomBuffer) globalThis.VBoxJIT.setRomBuffer(Number(pvROM), cbROM, uGCPhysStart);
 }
 
+function wasmFastBootDecompress() {
+  if (typeof globalThis.VBoxJIT !== "undefined" && globalThis.VBoxJIT.fastBootDecompress) return globalThis.VBoxJIT.fastBootDecompress();
+  return 0;
+}
+
 // Imports from the Wasm binary.
 var _main, _wasmJitSetGuestRAM, _wasmJitGetGuestRAM, _pthread_self, _wasmDisplayGetFB, _wasmDisplayGetWidth, _wasmDisplayGetHeight, _wasmDisplayCheckDirty, _wasmDisplayGetFBSize, _wasmDisplayRefresh, _wasmDisplayGetRefreshCount, _wasmDisplayGetUpdateRectCount, _wasmKbdPutScancode, _wasmKbdDrainQueue, _wasmKbdGetWritePtr, _wasmKbdGetReadPtr, _wasmKbdGetBufPtr, _wasmKbdGetBufSize, _wasmGetDelayRip, _wasmGetDelayRsp, _wasmGetDelayRbp, _wasmGetDelayRet, _wasmGetDelayValid, _wasmReadGuestPhys, _wasmGetGuestReadByte, _malloc, __emscripten_tls_init, __emscripten_proxy_main, __emscripten_thread_init, __emscripten_thread_crashed, _htonl, _htons, _ntohs, __emscripten_run_js_on_main_thread_done, __emscripten_run_js_on_main_thread, __emscripten_thread_free_data, __emscripten_thread_exit, __emscripten_check_mailbox, _setThrew, _emscripten_stack_set_limits, __emscripten_stack_restore, __emscripten_stack_alloc, _emscripten_stack_get_current, __indirect_function_table, wasmTable;
 
@@ -12427,6 +12576,7 @@ function assignWasmImports() {
     /** @export */ memory: wasmMemory,
     /** @export */ proc_exit: _proc_exit,
     /** @export */ wasmCallFuncPtrTrampoline,
+    /** @export */ wasmFastBootDecompress,
     /** @export */ wasmJitExecBlock,
     /** @export */ wasmJitLog,
     /** @export */ wasmJitSetA20,

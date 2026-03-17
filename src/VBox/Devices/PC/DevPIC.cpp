@@ -249,18 +249,6 @@ DECLINLINE(void) pic_set_irq1(PPICSTATE pPic, int irq, int level, uint32_t uTagS
             pPic->auTags[irq] |= RT_BIT_32(31);
     }
 
-#ifdef __EMSCRIPTEN__
-    /* Wasm stuck-ISR watchdog: when a new interrupt edge fires on an IRQ
-       line whose ISR bit is still set (handler failed to send EOI), force-
-       clear the ISR so the new interrupt can be delivered.  Without this,
-       a single missed EOI permanently blocks all same-or-lower-priority
-       interrupts and the guest loops forever. */
-    if (level && (pPic->isr & mask))
-    {
-        pPic->isr &= ~mask;
-    }
-#endif
-
     DumpPICState(pPic, "pic_set_irq1");
 }
 

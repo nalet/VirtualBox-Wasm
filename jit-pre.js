@@ -4041,6 +4041,72 @@ function execBlockWrapped(cpuP, ramB, maxInsn, highRamP, highRamSz) {
         ' avg=' + (statTotalInsns / Math.max(1, statTotalCalls - statFallbacks)).toFixed(1) +
         ' @' + statLastCSIP + ' ' + ifStr + ' code=' + statLastCodeBytes +
         ' top=[' + topStr + ']');
+
+      // Stuck-loop diagnostic: dump register state and IVT entries
+      refreshViews();
+      const cr0 = rr32(R_CR0);
+      const cr4 = rr32(R_CR4);
+      const eip = rr32(R_IP);
+      const csSel = rr16(S_CS + SEG_SEL);
+      const csBaseVal = Number(dv.getBigUint64(cpuPtr + S_CS + SEG_BASE, true));
+      const dsSel = rr16(S_DS + SEG_SEL);
+      const ssSel = rr16(S_SS + SEG_SEL);
+      const sp = rr16(R_SP);
+      const ax = rr16(R_AX);
+      const bx = rr16(R_BX);
+      const cx = rr16(R_CX);
+      const dx = rr16(R_DX);
+      const si = rr16(R_SI);
+      const di = rr16(R_DI);
+      const fl = rr32(R_FLAGS);
+      console.log('[JIT-STATE] CS=' + csSel.toString(16) + ':' + eip.toString(16) +
+        ' csBase=0x' + csBaseVal.toString(16) +
+        ' DS=' + dsSel.toString(16) + ' SS=' + ssSel.toString(16) + ':' + sp.toString(16) +
+        ' FL=0x' + fl.toString(16));
+      console.log('[JIT-STATE] AX=' + ax.toString(16) + ' BX=' + bx.toString(16) +
+        ' CX=' + cx.toString(16) + ' DX=' + dx.toString(16) +
+        ' SI=' + si.toString(16) + ' DI=' + di.toString(16) +
+        ' CR0=0x' + cr0.toString(16) + ' CR4=0x' + cr4.toString(16));
+
+      // Dump code bytes at current CS:IP (physical = csBase + IP)
+      const phys = csBaseVal + eip;
+      if (phys < 0xA0000 && ramBase) {
+        const codeBytes = [];
+        for (let ci = 0; ci < 16; ci++) codeBytes.push(mem8[ramBase + phys + ci].toString(16).padStart(2,'0'));
+        console.log('[JIT-STATE] code @0x' + phys.toString(16) + ': ' + codeBytes.join(' '));
+      }
+
+      // Dump IVT[8] (INT 8 = PIT timer handler) and IVT[0x15] (INT 15h = BIOS services)
+      if (ramBase) {
+        const int8off  = mem8[ramBase + 0x20] | (mem8[ramBase + 0x21] << 8);
+        const int8seg  = mem8[ramBase + 0x22] | (mem8[ramBase + 0x23] << 8);
+        const int15off = mem8[ramBase + 0x54] | (mem8[ramBase + 0x55] << 8);
+        const int15seg = mem8[ramBase + 0x56] | (mem8[ramBase + 0x57] << 8);
+        const int19off = mem8[ramBase + 0x64] | (mem8[ramBase + 0x65] << 8);
+        const int19seg = mem8[ramBase + 0x66] | (mem8[ramBase + 0x67] << 8);
+        console.log('[JIT-IVT] INT8=' + int8seg.toString(16) + ':' + int8off.toString(16) +
+          ' INT15=' + int15seg.toString(16) + ':' + int15off.toString(16) +
+          ' INT19=' + int19seg.toString(16) + ':' + int19off.toString(16));
+
+        // Dump boot_params signature at 0x1F1 (HDR offset) and setup_sects
+        const hdrSig = mem8[ramBase + 0x901F1] | (mem8[ramBase + 0x901F2] << 8);
+        const setupSects = mem8[ramBase + 0x901F1];
+        const bootSig = mem8[ramBase + 0x901FE] | (mem8[ramBase + 0x901FF] << 8);
+        console.log('[JIT-BOOT] @0x901F1: setup_sects=0x' + setupSects.toString(16) +
+          ' boot_sig=0x' + bootSig.toString(16).padStart(4,'0'));
+
+        // Dump stack top (SS:SP)
+        const ssBase = ssSel * 16;
+        const stackDump = [];
+        for (let si = 0; si < 16; si += 2) {
+          const off = ssBase + ((sp + si) & 0xFFFF);
+          if (off < 0xA0000) {
+            const w = mem8[ramBase + off] | (mem8[ramBase + off + 1] << 8);
+            stackDump.push(w.toString(16).padStart(4,'0'));
+          }
+        }
+        console.log('[JIT-STATE] stack @' + ssSel.toString(16) + ':' + sp.toString(16) + ': ' + stackDump.join(' '));
+      }
     }
   }
   return n;

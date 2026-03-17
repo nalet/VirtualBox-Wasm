@@ -2417,6 +2417,7 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                                 pCtx->cr0 = X86_CR0_PE | X86_CR0_PG | X86_CR0_ET
                                           | X86_CR0_NE | X86_CR0_WP | X86_CR0_MP;
                                 pCtx->msrEFER = MSR_K6_EFER_LME | MSR_K6_EFER_LMA | MSR_K6_EFER_NXE;
+                                PGMNotifyNxeChanged(pVCpu, true);
 
                                 /* CS = 64-bit code segment (selector 0x10) */
                                 pCtx->cs.Sel      = 0x10;
@@ -2707,6 +2708,7 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                                         pCtx->cr0 = X86_CR0_PE | X86_CR0_PG | X86_CR0_ET
                                                   | X86_CR0_NE | X86_CR0_WP | X86_CR0_MP;
                                         pCtx->msrEFER = MSR_K6_EFER_LME | MSR_K6_EFER_LMA | MSR_K6_EFER_NXE;
+                                        PGMNotifyNxeChanged(pVCpu, true);
 
                                         pCtx->cs.Sel = 0x10; pCtx->cs.ValidSel = 0x10;
                                         pCtx->cs.fFlags = CPUMSELREG_FLAGS_VALID;

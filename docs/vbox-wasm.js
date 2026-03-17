@@ -6184,9 +6184,9 @@ globalThis.VBoxJIT = (function() {
     }
     // If setup header didn't provide payload info, scan kernel image for
     // compression magic (gzip 0x1F8B, xz 0xFD37, lzma 0x5D00, bzip2 0x425A)
-    let compStart = 0, compLen = 0, compType = "";
+    let compOff = -1, compLen = 0, compType = "";
     if (payOff > 0 && payLen > 0) {
-      compStart = hp + payOff;
+      compOff = payOff;
       // payload_offset is relative to 0x100000
       compLen = payLen;
       compType = "header";
@@ -6197,22 +6197,25 @@ globalThis.VBoxJIT = (function() {
       for (let off = 0; off < scanLen - 6; off++) {
         const b0 = m[hp + off], b1 = m[hp + off + 1];
         if (b0 === 31 && b1 === 139 && m[hp + off + 2] === 8) {
-          compStart = hp + off;
+          compOff = off;
           compLen = highRamSize - off;
-          // assume rest is payload
           compType = "gzip@0x" + (1048576 + off).toString(16);
           console.log("[FAST-BOOT-JS] Found gzip at GPA 0x" + (1048576 + off).toString(16));
           break;
         }
         if (b0 === 253 && b1 === 55 && m[hp + off + 2] === 122 && m[hp + off + 3] === 88 && m[hp + off + 4] === 90 && m[hp + off + 5] === 0) {
+          compOff = off;
+          compLen = highRamSize - off;
           compType = "xz@0x" + (1048576 + off).toString(16);
-          console.log("[FAST-BOOT-JS] Found XZ at GPA 0x" + (1048576 + off).toString(16) + " — XZ not supported, cannot fast-boot");
-          return 0;
+          console.log("[FAST-BOOT-JS] Found XZ at GPA 0x" + (1048576 + off).toString(16));
+          break;
         }
         if (b0 === 93 && b1 === 0 && m[hp + off + 2] === 0) {
+          compOff = off;
+          compLen = highRamSize - off;
           compType = "lzma@0x" + (1048576 + off).toString(16);
-          console.log("[FAST-BOOT-JS] Found LZMA at GPA 0x" + (1048576 + off).toString(16) + " — LZMA not supported");
-          return 0;
+          console.log("[FAST-BOOT-JS] Found LZMA at GPA 0x" + (1048576 + off).toString(16));
+          break;
         }
         if (b0 === 40 && b1 === 181 && m[hp + off + 2] === 47 && m[hp + off + 3] === 253) {
           compType = "zstd@0x" + (1048576 + off).toString(16);
@@ -6221,9 +6224,8 @@ globalThis.VBoxJIT = (function() {
         }
       }
     }
-    if (!compStart) {
+    if (compOff < 0) {
       console.log("[FAST-BOOT-JS] No compressed payload found");
-      // Dump first 32 bytes at 0x100000 for debugging
       let d = "";
       for (let i = 0; i < 32; i++) d += m[hp + i].toString(16).padStart(2, "0") + " ";
       console.log("[FAST-BOOT-JS] @0x100000: " + d);
@@ -6231,8 +6233,47 @@ globalThis.VBoxJIT = (function() {
     }
     console.log("[FAST-BOOT-JS] Decompressing " + compType + " (" + (compLen > 1024 * 1024 ? (compLen >> 20) + "MB" : (compLen >> 10) + "KB") + ")...");
     const t0 = performance.now();
-    const comp = m.subarray(compStart, compStart + compLen);
-    const vmlinux = jsGunzip(comp);
+    const compStart = hp + compOff;
+    let vmlinux = null;
+    const isXzOrLzma = compType.startsWith("xz") || compType.startsWith("lzma");
+    if (isXzOrLzma) {
+      // Use C-side liblzma via wasmXzDecompress(src, srcLen, dst, dstCap, pOutLen)
+      // Allocate 64MB output buffer via Module._malloc (returns BigInt in wasm64)
+      const dstCap = 64 * 1024 * 1024;
+      const pDst = Module._malloc(dstCap);
+      const pOutLen = Module._malloc(4);
+      // uint32_t
+      if (!pDst || !pOutLen) {
+        console.log("[FAST-BOOT-JS] malloc failed for XZ decompress buffer");
+        if (pDst) Module._free(pDst);
+        if (pOutLen) Module._free(pOutLen);
+        return 0;
+      }
+      console.log("[FAST-BOOT-JS] XZ decompress: src=0x" + compStart.toString(16) + " len=" + compLen + " dst=0x" + Number(pDst).toString(16) + " cap=" + dstCap);
+      // Source is already in wasm memory at compStart (hp + compOff)
+      // All pointer args must be BigInt for wasm64
+      const srcPtr = BigInt(compStart);
+      const rc = Module._wasmXzDecompress(srcPtr, compLen, pDst, dstCap, pOutLen);
+      if (rc !== 0) {
+        console.log("[FAST-BOOT-JS] XZ decompression failed, rc=" + rc);
+        Module._free(pDst);
+        Module._free(pOutLen);
+        return 0;
+      }
+      // Re-read memory views since buffer may have grown from malloc
+      const m2 = new Uint8Array(wasmMemory.buffer);
+      const dv3 = new DataView(wasmMemory.buffer);
+      const outLen = dv3.getUint32(Number(pOutLen), true);
+      console.log("[FAST-BOOT-JS] XZ decompressed: " + outLen + " bytes (" + (outLen >> 20) + "MB)");
+      vmlinux = new Uint8Array(outLen);
+      vmlinux.set(m2.subarray(Number(pDst), Number(pDst) + outLen));
+      Module._free(pDst);
+      Module._free(pOutLen);
+    } else {
+      // gzip — use jsGunzip
+      const comp = m.subarray(compStart, compStart + compLen);
+      vmlinux = jsGunzip(comp);
+    }
     if (!vmlinux) {
       const magic = m[compStart].toString(16).padStart(2, "0") + m[compStart + 1].toString(16).padStart(2, "0");
       console.log("[FAST-BOOT-JS] Decompression failed, magic=0x" + magic);
@@ -6240,6 +6281,9 @@ globalThis.VBoxJIT = (function() {
     }
     const dt = (performance.now() - t0) | 0;
     console.log("[FAST-BOOT-JS] Decompressed: " + vmlinux.length + " bytes (" + (vmlinux.length >> 20) + "MB) in " + dt + "ms");
+    // Refresh memory views (buffer may have grown after malloc/decompress)
+    const mf = new Uint8Array(wasmMemory.buffer);
+    const dvf = new DataView(wasmMemory.buffer);
     const elf = parseELF64(vmlinux);
     if (!elf) {
       console.log("[FAST-BOOT-JS] ELF parse failed");
@@ -6253,47 +6297,47 @@ globalThis.VBoxJIT = (function() {
       console.log("[FAST-BOOT-JS] seg[" + si + "] paddr=0x" + pa.toString(16) + " vaddr=0x" + seg.vaddr.toString(16) + " filesz=" + seg.filesz + " memsz=" + seg.memsz);
       if (pa >= 1048576 && pa + seg.memsz <= TOTAL_RAM) {
         const dst = hp + (pa - 1048576);
-        if (seg.filesz > 0) m.set(vmlinux.subarray(seg.offset, seg.offset + seg.filesz), dst);
-        if (seg.memsz > seg.filesz) m.fill(0, dst + seg.filesz, dst + seg.memsz);
+        if (seg.filesz > 0) mf.set(vmlinux.subarray(seg.offset, seg.offset + seg.filesz), dst);
+        if (seg.memsz > seg.filesz) mf.fill(0, dst + seg.filesz, dst + seg.memsz);
       }
     }
     const cr3val = buildPageTables64(TOTAL_RAM);
     console.log("[FAST-BOOT-JS] Page tables at GPA 0x" + cr3val.toString(16));
     // Copy boot_params to 0x10000 (safe location for kernel)
-    for (let i = 0; i < 4096; i++) m[rb + 65536 + i] = m[setupBase + i];
+    for (let i = 0; i < 4096; i++) mf[rb + 65536 + i] = mf[rb + 589824 + i];
     // Ensure serial console in command line
-    const cmdPtr = m[setupBase + 552] | (m[setupBase + 553] << 8) | (m[setupBase + 554] << 16) | (m[setupBase + 555] << 24);
+    const cmdPtr = mf[rb + 589824 + 552] | (mf[rb + 589824 + 553] << 8) | (mf[rb + 589824 + 554] << 16) | (mf[rb + 589824 + 555] << 24);
     if (cmdPtr > 0 && cmdPtr < 655360) {
       let cmdLen = 0;
       for (let i = 0; i < 256; i++) {
-        if (m[rb + cmdPtr + i] === 0) {
+        if (mf[rb + cmdPtr + i] === 0) {
           cmdLen = i;
           break;
         }
       }
-      for (let i = 0; i < cmdLen; i++) m[rb + 626688 + i] = m[rb + cmdPtr + i];
+      for (let i = 0; i < cmdLen; i++) mf[rb + 626688 + i] = mf[rb + cmdPtr + i];
       const serialOpts = " console=ttyS0,115200 earlyprintk=serial,ttyS0,115200 loglevel=7";
-      for (let i = 0; i < serialOpts.length; i++) m[rb + 626688 + cmdLen + i] = serialOpts.charCodeAt(i);
-      m[rb + 626688 + cmdLen + serialOpts.length] = 0;
-      dv2.setUint32(rb + 65536 + 552, 626688, true);
+      for (let i = 0; i < serialOpts.length; i++) mf[rb + 626688 + cmdLen + i] = serialOpts.charCodeAt(i);
+      mf[rb + 626688 + cmdLen + serialOpts.length] = 0;
+      dvf.setUint32(rb + 65536 + 552, 626688, true);
     }
     // Write D64B metadata at guest 0x7200
-    dv2.setUint32(rb + 29184, 1110718020, true);
+    dvf.setUint32(rb + 29184, 1110718020, true);
     // "D64B"
-    dv2.setUint32(rb + 29188, cr3val, true);
+    dvf.setUint32(rb + 29188, cr3val, true);
     // CR3
-    dv2.setBigUint64(rb + 29192, elf.entry, true);
+    dvf.setBigUint64(rb + 29192, elf.entry, true);
     // entry point (64-bit)
-    dv2.setUint32(rb + 29200, 65536, true);
+    dvf.setUint32(rb + 29200, 65536, true);
     // boot_params GPA
     // Write GDT at guest 0x7300
-    dv2.setBigUint64(rb + 29440, 0n, true);
+    dvf.setBigUint64(rb + 29440, 0n, true);
     // null
-    dv2.setBigUint64(rb + 29448, 58434644969848831n, true);
+    dvf.setBigUint64(rb + 29448, 58434644969848831n, true);
     // 32-bit code
-    dv2.setBigUint64(rb + 29456, 49428545226735615n, true);
+    dvf.setBigUint64(rb + 29456, 49428545226735615n, true);
     // 64-bit code
-    dv2.setBigUint64(rb + 29464, 58426948388454399n, true);
+    dvf.setBigUint64(rb + 29464, 58426948388454399n, true);
     // data
     console.log("[FAST-BOOT-JS] Ready! entry=0x" + elf.entry.toString(16) + " CR3=0x" + cr3val.toString(16) + " boot_params=0x10000");
     return 1;
@@ -12388,12 +12432,14 @@ function wasmFastBootDecompress() {
 }
 
 // Imports from the Wasm binary.
-var _main, _wasmJitSetGuestRAM, _wasmJitGetGuestRAM, _pthread_self, _wasmDisplayGetFB, _wasmDisplayGetWidth, _wasmDisplayGetHeight, _wasmDisplayCheckDirty, _wasmDisplayGetFBSize, _wasmDisplayRefresh, _wasmDisplayGetRefreshCount, _wasmDisplayGetUpdateRectCount, _wasmKbdPutScancode, _wasmKbdDrainQueue, _wasmKbdGetWritePtr, _wasmKbdGetReadPtr, _wasmKbdGetBufPtr, _wasmKbdGetBufSize, _wasmGetDelayRip, _wasmGetDelayRsp, _wasmGetDelayRbp, _wasmGetDelayRet, _wasmGetDelayValid, _wasmReadGuestPhys, _wasmGetGuestReadByte, _malloc, __emscripten_tls_init, __emscripten_proxy_main, __emscripten_thread_init, __emscripten_thread_crashed, _htonl, _htons, _ntohs, __emscripten_run_js_on_main_thread_done, __emscripten_run_js_on_main_thread, __emscripten_thread_free_data, __emscripten_thread_exit, __emscripten_check_mailbox, _setThrew, _emscripten_stack_set_limits, __emscripten_stack_restore, __emscripten_stack_alloc, _emscripten_stack_get_current, __indirect_function_table, wasmTable;
+var _main, _wasmJitSetGuestRAM, _wasmJitGetGuestRAM, _wasmXzDecompress, _free, _pthread_self, _wasmDisplayGetFB, _wasmDisplayGetWidth, _wasmDisplayGetHeight, _wasmDisplayCheckDirty, _wasmDisplayGetFBSize, _wasmDisplayRefresh, _wasmDisplayGetRefreshCount, _wasmDisplayGetUpdateRectCount, _wasmKbdPutScancode, _wasmKbdDrainQueue, _wasmKbdGetWritePtr, _wasmKbdGetReadPtr, _wasmKbdGetBufPtr, _wasmKbdGetBufSize, _wasmGetDelayRip, _wasmGetDelayRsp, _wasmGetDelayRbp, _wasmGetDelayRet, _wasmGetDelayValid, _wasmReadGuestPhys, _wasmGetGuestReadByte, _malloc, __emscripten_tls_init, __emscripten_proxy_main, __emscripten_thread_init, __emscripten_thread_crashed, _htonl, _htons, _ntohs, __emscripten_run_js_on_main_thread_done, __emscripten_run_js_on_main_thread, __emscripten_thread_free_data, __emscripten_thread_exit, __emscripten_check_mailbox, _setThrew, _emscripten_stack_set_limits, __emscripten_stack_restore, __emscripten_stack_alloc, _emscripten_stack_get_current, __indirect_function_table, wasmTable;
 
 function assignWasmExports(wasmExports) {
   _main = Module["_main"] = wasmExports["__main_argc_argv"];
   _wasmJitSetGuestRAM = Module["_wasmJitSetGuestRAM"] = wasmExports["wasmJitSetGuestRAM"];
   _wasmJitGetGuestRAM = Module["_wasmJitGetGuestRAM"] = wasmExports["wasmJitGetGuestRAM"];
+  _wasmXzDecompress = Module["_wasmXzDecompress"] = wasmExports["wasmXzDecompress"];
+  _free = Module["_free"] = wasmExports["free"];
   _pthread_self = wasmExports["pthread_self"];
   _wasmDisplayGetFB = Module["_wasmDisplayGetFB"] = wasmExports["wasmDisplayGetFB"];
   _wasmDisplayGetWidth = Module["_wasmDisplayGetWidth"] = wasmExports["wasmDisplayGetWidth"];
@@ -12416,7 +12462,7 @@ function assignWasmExports(wasmExports) {
   _wasmGetDelayValid = Module["_wasmGetDelayValid"] = wasmExports["wasmGetDelayValid"];
   _wasmReadGuestPhys = Module["_wasmReadGuestPhys"] = wasmExports["wasmReadGuestPhys"];
   _wasmGetGuestReadByte = Module["_wasmGetGuestReadByte"] = wasmExports["wasmGetGuestReadByte"];
-  _malloc = wasmExports["malloc"];
+  _malloc = Module["_malloc"] = wasmExports["malloc"];
   __emscripten_tls_init = wasmExports["_emscripten_tls_init"];
   __emscripten_proxy_main = Module["__emscripten_proxy_main"] = wasmExports["_emscripten_proxy_main"];
   __emscripten_thread_init = wasmExports["_emscripten_thread_init"];
@@ -12779,14 +12825,15 @@ function applySignatureConversions(wasmExports) {
   // First, make a copy of the incoming exports object
   wasmExports = Object.assign({}, wasmExports);
   var makeWrapper___PP = f => (a0, a1, a2) => f(a0, BigInt(a1 ? a1 : 0), BigInt(a2 ? a2 : 0));
+  var makeWrapper__p = f => a0 => f(BigInt(a0));
   var makeWrapper_p = f => () => Number(f());
   var makeWrapper_pp = f => a0 => Number(f(BigInt(a0)));
   var makeWrapper__p_____ = f => (a0, a1, a2, a3, a4, a5) => f(BigInt(a0), a1, a2, a3, a4, a5);
   var makeWrapper__pp_ = f => (a0, a1, a2) => f(BigInt(a0), BigInt(a1), a2);
   var makeWrapper___p_p_ = f => (a0, a1, a2, a3, a4) => f(a0, BigInt(a1), a2, BigInt(a3), a4);
-  var makeWrapper__p = f => a0 => f(BigInt(a0));
   var makeWrapper__pp = f => (a0, a1) => f(BigInt(a0), BigInt(a1));
   wasmExports["__main_argc_argv"] = makeWrapper___PP(wasmExports["__main_argc_argv"]);
+  wasmExports["free"] = makeWrapper__p(wasmExports["free"]);
   wasmExports["pthread_self"] = makeWrapper_p(wasmExports["pthread_self"]);
   wasmExports["malloc"] = makeWrapper_pp(wasmExports["malloc"]);
   wasmExports["_emscripten_thread_init"] = makeWrapper__p_____(wasmExports["_emscripten_thread_init"]);

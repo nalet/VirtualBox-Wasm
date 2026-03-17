@@ -6263,43 +6263,37 @@ globalThis.VBoxJIT = (function() {
       const srcBI = BigInt(compStart);
       const dstBI = BigInt(pDstRaw);
       const outBI = BigInt(pOutLenRaw);
-      // Dump bytes at key offsets for data integrity check
-      let d0 = "", d1m = "", d1m2 = "";
-      for (let i = 0; i < 16; i++) d0 += m[compStart + i].toString(16).padStart(2, "0");
-      const ofs1m = 1048499;
-      // ~1MB where lzma_code fails
-      for (let i = -8; i < 24; i++) d1m += m[compStart + ofs1m + i].toString(16).padStart(2, "0");
-      // Check if data is all zeros after 1MB
-      let nz = 0;
-      for (let i = ofs1m; i < ofs1m + 4096 && i < compLen; i++) {
-        if (m[compStart + i] !== 0) nz++;
-      }
-      console.log("[FAST-BOOT-JS] XZ data@0: " + d0);
-      console.log("[FAST-BOOT-JS] XZ data@1MB: " + d1m + " nonzero4k=" + nz);
-      console.log("[FAST-BOOT-JS] XZ decompress: src=0x" + compStart.toString(16) + " len=" + compLen + " dst=0x" + Number(dstBI).toString(16) + " cap=" + dstCap);
-      const rc = Module._wasmXzDecompress(srcBI, compLen, dstBI, dstCap, outBI);
-      if (rc !== 0) {
-        // Scan entire high RAM for XZ magic (FD 37 7A 58 5A 00)
-        // The kernel relocated itself and the compressed data may be elsewhere
-        console.log("[FAST-BOOT-JS] Scanning high RAM for XZ magic...");
-        const scanEnd = hp + highRamSize;
-        let xzLocations = [];
-        for (let addr = hp; addr < scanEnd - 6; addr += 1) {
-          if (m[addr] === 253 && m[addr + 1] === 55 && m[addr + 2] === 122 && m[addr + 3] === 88 && m[addr + 4] === 90 && m[addr + 5] === 0) {
-            const gpa = 1048576 + (addr - hp);
-            xzLocations.push({
-              addr,
-              gpa
-            });
-            if (xzLocations.length >= 10) break;
+      // The kernel relocates itself from 0x100000 to a higher address,
+      // which may corrupt the original data. Scan for relocated XZ copy.
+      // The relocated copy has identical XZ header bytes (first 16).
+      let xzSrc = compStart;
+      let xzSrcGPA = 1048576 + compOff;
+      const origHdr = [];
+      for (let i = 0; i < 16; i++) origHdr.push(m[compStart + i]);
+      // Scan high RAM for XZ magic with matching header
+      const scanEnd = hp + highRamSize;
+      for (let addr = hp + 1048576; addr < scanEnd - 6; addr++) {
+        if (m[addr] === 253 && m[addr + 1] === 55 && m[addr + 2] === 122 && m[addr + 3] === 88 && m[addr + 4] === 90 && m[addr + 5] === 0) {
+          // Check if header matches (same XZ stream params)
+          let match = true;
+          for (let i = 6; i < 16; i++) {
+            if (m[addr + i] !== origHdr[i]) {
+              match = false;
+              break;
+            }
+          }
+          if (match) {
+            xzSrc = addr;
+            xzSrcGPA = 1048576 + (addr - hp);
+            console.log("[FAST-BOOT-JS] Found relocated XZ at GPA=0x" + xzSrcGPA.toString(16) + " (using this instead of 0x" + (1048576 + compOff).toString(16) + ")");
+            break;
           }
         }
-        console.log("[FAST-BOOT-JS] Found " + xzLocations.length + " XZ locations:");
-        for (const loc of xzLocations) {
-          let d = "";
-          for (let i = 0; i < 16; i++) d += m[loc.addr + i].toString(16).padStart(2, "0");
-          console.log("[FAST-BOOT-JS]   GPA=0x" + loc.gpa.toString(16) + " data: " + d);
-        }
+      }
+      const finalSrcBI = BigInt(xzSrc);
+      console.log("[FAST-BOOT-JS] XZ decompress: src=GPA 0x" + xzSrcGPA.toString(16) + " len=" + compLen + " cap=" + dstCap);
+      const rc = Module._wasmXzDecompress(finalSrcBI, compLen, dstBI, dstCap, outBI);
+      if (rc !== 0) {
         console.log("[FAST-BOOT-JS] XZ decompression failed, rc=" + rc);
         Module._free(pDstRaw);
         Module._free(pOutLenRaw);

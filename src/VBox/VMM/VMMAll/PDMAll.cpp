@@ -193,7 +193,8 @@ VMMDECL(int) PDMIsaSetIrq(PVMCC pVM, uint8_t u8Irq, uint8_t u8Level, uint32_t uT
 #ifdef __EMSCRIPTEN__
         {
             static uint32_t s_cIsaToIoapic = 0;
-            if (++s_cIsaToIoapic <= 20 || (s_cIsaToIoapic % 5000) == 0)
+            ++s_cIsaToIoapic;
+            if (0) /* suppressed — PDM-ISA-IOAPIC */
             {
                 RTPrintf("[PDM-ISA-IOAPIC] #%u irq=%u level=%u pDevIns=%p pfnSetIrq=%p\n",
                          s_cIsaToIoapic, u8Irq, u8Level,

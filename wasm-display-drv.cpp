@@ -167,7 +167,7 @@ static DECLCALLBACK(void) wasmDispRefresh(PPDMIDISPLAYCONNECTOR pInterface)
         pThis->pPort->pfnUpdateDisplay(pThis->pPort);
 
     /* Log progress + framebuffer content diagnostics every 500 refreshes */
-    if (pThis->cRefreshCalls % 500 == 0)
+    if (pThis->cRefreshCalls % 50000 == 0) /* suppressed — was 500 */
     {
         uint32_t cNonZero = 0;
         int32_t  iFirstNZ = -1;

@@ -603,7 +603,8 @@ static void ioapicSignalIntrForRte(PPDMDEVINS pDevIns, PIOAPIC pThis, PIOAPICCC 
 #ifdef __EMSCRIPTEN__
         {
             static uint32_t s_cMaskedDrop = 0;
-            if (++s_cMaskedDrop <= 20 || (s_cMaskedDrop % 5000) == 0)
+            ++s_cMaskedDrop;
+            if (0) /* suppressed — IOAPIC-MASKED */
             {
                 RTPrintf("[IOAPIC-MASKED] #%u pin=%u rte=0x%016llx (vec=%u mask=%u)\n",
                          s_cMaskedDrop, idxRte, (unsigned long long)u64Rte,
@@ -1003,7 +1004,8 @@ static DECLCALLBACK(void) ioapicSetIrq(PPDMDEVINS pDevIns, PCIBDF uBusDevFn, int
 #ifdef __EMSCRIPTEN__
     {
         static uint32_t s_cSetIrq = 0;
-        if (++s_cSetIrq <= 30 || (iIrq == 2 && (s_cSetIrq % 2000) == 0))
+        ++s_cSetIrq;
+        if (0) /* suppressed — IOAPIC-IRQ */
         {
             RTPrintf("[IOAPIC-IRQ] #%u pin=%d level=%d rte=0x%016llx (mask=%u)\n",
                      s_cSetIrq, iIrq, iLevel,

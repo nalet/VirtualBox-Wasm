@@ -2261,7 +2261,8 @@ static DECLCALLBACK(VBOXSTRICTRC) apicSetLocalInterrupt(PVMCPUCC pVCpu, uint8_t 
 #ifdef __EMSCRIPTEN__
         {
             static uint32_t s_cLocalInt = 0;
-            if (++s_cLocalInt <= 30 || (s_cLocalInt % 5000) == 0)
+            ++s_cLocalInt;
+            if (0) /* suppressed — LAPIC-LINT */
             {
                 RTPrintf("[LAPIC-LINT] #%u pin=%u level=%u LVT=0x%08x masked=%u delivMode=%u\n",
                          s_cLocalInt, u8Pin, u8Level, uLvt,

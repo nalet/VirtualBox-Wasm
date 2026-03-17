@@ -1298,9 +1298,21 @@ globalThis.VBoxJIT = (function() {
           console.log("[JIT-BOOT] Jumping directly to startup_32!");
           return 0;
         }
-        // If we have a header source, copy command line and setup code
+        // If we have a header source, copy boot params (ramdisk/cmdline info)
+        // but ALWAYS do direct PM boot — real-mode setup triple-faults because
+        // ISOLINUX corrupted the IVT during its shuffle.
         if (hdrPhys >= 0) {
           const srcBase = (hdrPhys === 589824) ? setupBase : ramBase + hdrPhys;
+          // Copy key boot_params fields from ISOLINUX's loaded header
+          // to our boot_params at 0x90000
+          if (hdrPhys !== 589824) {
+            // Copy the entire header (up to 4K) to preserve all fields
+            const srcSects = mem8[srcBase + 497] || 32;
+            const cpSize = Math.min((srcSects + 1) * 512, 4096);
+            for (let i = 0; i < cpSize; i++) mem8[setupBase + i] = mem8[srcBase + i];
+            console.log("[JIT-BOOT] Copied header from 0x" + hdrPhys.toString(16) + " (" + cpSize + " bytes)");
+          }
+          // Copy command line to safe location
           const cmdPtr = mem8[srcBase + 552] | (mem8[srcBase + 553] << 8) | (mem8[srcBase + 554] << 16) | (mem8[srcBase + 555] << 24);
           let cmdLen = 0;
           if (cmdPtr > 0 && cmdPtr < 655360) {
@@ -1312,48 +1324,78 @@ globalThis.VBoxJIT = (function() {
                 break;
               }
             }
-            mem8[setupBase + 552] = 0;
-            mem8[setupBase + 553] = 144;
-            mem8[setupBase + 554] = 9;
-            mem8[setupBase + 555] = 0;
+            console.log("[JIT-BOOT] cmdline @0x" + cmdPtr.toString(16) + " (" + cmdLen + " bytes)");
           }
-          console.log("[JIT-BOOT] cmdline @0x" + cmdPtr.toString(16) + " (" + cmdLen + " bytes)");
+          // Set cmdline pointer in boot_params
+          writeDword(setupBase + 552, 626688);
         }
-        // Set CPU registers for kernel setup entry: CS=0x9020:0000
-        wr16(S_CS + SEG_SEL, 36896);
-        wr64(S_CS + SEG_BASE, 590336);
-        wrIP(0);
-        // DS = SS = ES = FS = GS = 0x9000
-        wr16(S_DS + SEG_SEL, 36864);
-        wr64(S_DS + SEG_BASE, 589824);
-        wr16(S_SS + SEG_SEL, 36864);
-        wr64(S_SS + SEG_BASE, 589824);
-        wr16(S_ES + SEG_SEL, 36864);
-        wr64(S_ES + SEG_BASE, 589824);
-        wr16(S_FS + SEG_SEL, 36864);
-        wr64(S_FS + SEG_BASE, 589824);
-        wr16(S_GS + SEG_SEL, 36864);
-        wr64(S_GS + SEG_BASE, 589824);
-        // SP: heap_end + 0x200
-        const heapEnd = mem8[setupBase + 548] | (mem8[setupBase + 549] << 8);
-        const sp = (heapEnd + 512) & 65535;
-        sr16(4, sp);
-        sr16(2, 128);
-        // DL = boot drive
-        sr32(0, 0);
-        sr32(1, 0);
-        sr32(3, 0);
-        sr32(5, 0);
-        sr32(6, 0);
-        sr32(7, 0);
-        // Disable interrupts
-        wr32(R_FLAGS, rr32(R_FLAGS) & ~512);
-        execBlock._directBootDone = true;
+        // Read ramdisk info from boot_params (whether from header or constructed)
         const rdImg = mem8[setupBase + 536] | (mem8[setupBase + 537] << 8) | (mem8[setupBase + 538] << 16) | (mem8[setupBase + 539] << 24);
         const rdSz = mem8[setupBase + 540] | (mem8[setupBase + 541] << 8) | (mem8[setupBase + 542] << 16) | (mem8[setupBase + 543] << 24);
         const code32 = mem8[setupBase + 532] | (mem8[setupBase + 533] << 8) | (mem8[setupBase + 534] << 16) | (mem8[setupBase + 535] << 24);
-        console.log("[JIT-BOOT] Direct boot: CS=9020:0000 SS=9000:" + sp.toString(16) + " code32=0x" + code32.toString(16) + " ramdisk=0x" + rdImg.toString(16) + " size=0x" + rdSz.toString(16));
-        console.log("[JIT-BOOT] Jumping to kernel real-mode setup!");
+        const code32addr = code32 || 1048576;
+        // Ensure loadflags has LOADED_HIGH
+        mem8[setupBase + 529] |= 1;
+        // Set type_of_loader if not set
+        if (!mem8[setupBase + 528]) mem8[setupBase + 528] = 255;
+        console.log("[JIT-BOOT] Direct PM boot to startup_32 at 0x" + code32addr.toString(16));
+        console.log("[JIT-BOOT] ramdisk=0x" + rdImg.toString(16) + " size=0x" + rdSz.toString(16));
+        // Write GDT at 0x1000 in guest RAM
+        const gdtB = ramBase + 4096;
+        for (let i = 0; i < 24; i++) mem8[gdtB + i] = 0;
+        // Code32 (selector 0x08): flat 32-bit code
+        mem8[gdtB + 8] = 255;
+        mem8[gdtB + 9] = 255;
+        mem8[gdtB + 10] = 0;
+        mem8[gdtB + 11] = 0;
+        mem8[gdtB + 12] = 0;
+        mem8[gdtB + 13] = 154;
+        mem8[gdtB + 14] = 207;
+        mem8[gdtB + 15] = 0;
+        // Data32 (selector 0x10): flat 32-bit data
+        mem8[gdtB + 16] = 255;
+        mem8[gdtB + 17] = 255;
+        mem8[gdtB + 18] = 0;
+        mem8[gdtB + 19] = 0;
+        mem8[gdtB + 20] = 0;
+        mem8[gdtB + 21] = 146;
+        mem8[gdtB + 22] = 207;
+        mem8[gdtB + 23] = 0;
+        // Set GDTR
+        wr64(R_GDTR_BASE, 4096);
+        wr16(R_GDTR_LIMIT, 23);
+        // CR0: PE=1, PG=0
+        wr32(R_CR0, (cr0 | 1) & ~2147483648);
+        // CS = 0x08 flat code32
+        wr16(S_CS + SEG_SEL, 8);
+        wr64(S_CS + SEG_BASE, 0);
+        wr32(S_CS + SEG_LIMIT, 4294967295);
+        wr32(S_CS + SEG_ATTR, 49307);
+        // DS/ES/SS/FS/GS = 0x10 flat data32
+        const dA = 49299;
+        for (const sg of [ S_DS, S_ES, S_SS, S_FS, S_GS ]) {
+          wr16(sg + SEG_SEL, 16);
+          wr64(sg + SEG_BASE, 0);
+          wr32(sg + SEG_LIMIT, 4294967295);
+          wr32(sg + SEG_ATTR, dA);
+        }
+        // EIP = startup_32
+        wr32(R_IP, code32addr);
+        // ESI = boot_params
+        sr32(6, 589824);
+        sr32(0, 0);
+        sr32(1, 0);
+        sr32(2, 0);
+        sr32(3, 0);
+        sr32(5, 0);
+        sr32(7, 0);
+        sr32(4, 589824);
+        // ESP
+        // EFLAGS: just reserved bit, no IF
+        wr32(R_FLAGS, 2);
+        execBlock._directBootDone = true;
+        _directBootDone = true;
+        console.log("[JIT-BOOT] PM state set. Jumping to startup_32!");
         return 0;
       }
     }

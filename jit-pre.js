@@ -5034,11 +5034,32 @@ function fastBootDecompress() {
     const srcBI = BigInt(compStart);
     const dstBI = BigInt(pDstRaw);
     const outBI = BigInt(pOutLenRaw);
+    // Dump bytes at key offsets for data integrity check
+    let d0 = '', d1m = '', d1m2 = '';
+    for (let i = 0; i < 16; i++) d0 += m[compStart+i].toString(16).padStart(2,'0');
+    const ofs1m = 1048499; // ~1MB where lzma_code fails
+    for (let i = -8; i < 24; i++) d1m += m[compStart+ofs1m+i].toString(16).padStart(2,'0');
+    // Check if data is all zeros after 1MB
+    let nz = 0;
+    for (let i = ofs1m; i < ofs1m + 4096 && i < compLen; i++) {
+      if (m[compStart+i] !== 0) nz++;
+    }
+    console.log('[FAST-BOOT-JS] XZ data@0: ' + d0);
+    console.log('[FAST-BOOT-JS] XZ data@1MB: ' + d1m + ' nonzero4k=' + nz);
     console.log('[FAST-BOOT-JS] XZ decompress: src=0x' + compStart.toString(16) +
       ' len=' + compLen + ' dst=0x' + Number(dstBI).toString(16) +
       ' cap=' + dstCap);
     const rc = Module._wasmXzDecompress(srcBI, compLen, dstBI, dstCap, outBI);
     if (rc !== 0) {
+      // Try reading from the relocated kernel instead (EIP was 0x2a2xxxx)
+      // Kernel relocated from 0x100000 to ~0x2a20000
+      const relocBase = rb + 0x2a20000;
+      let dr = '';
+      for (let i = 0; i < 16; i++) dr += m[relocBase+compOff+i].toString(16).padStart(2,'0');
+      let dr1m = '';
+      for (let i = -8; i < 24; i++) dr1m += m[relocBase+compOff+ofs1m+i].toString(16).padStart(2,'0');
+      console.log('[FAST-BOOT-JS] Relocated XZ @0x2a20000+payOff: ' + dr);
+      console.log('[FAST-BOOT-JS] Relocated XZ @1MB: ' + dr1m);
       console.log('[FAST-BOOT-JS] XZ decompression failed, rc=' + rc);
       Module._free(pDstRaw);
       Module._free(pOutLenRaw);

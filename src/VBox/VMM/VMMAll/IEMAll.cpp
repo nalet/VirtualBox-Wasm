@@ -2612,22 +2612,29 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                         s_cBootInsns++;
                         uint16_t uCS = pVCpu->cpum.GstCtx.cs.Sel;
 
-                        /* Fast boot: detect 32-bit PM startup_32 running and
+                        /* Fast boot: detect 32-bit PM kernel decompressor running and
                            decompress the kernel in JS instead of letting IEM
                            run the decompressor for 20+ minutes.
-                           Trigger: CS=0x10, EIP in kernel range, PE set, LMA not set.
-                           Must wait until kernel code is actually at 0x100000
-                           (setup header at 0x90000 has HdrS). */
+                           Trigger: CS=0x10, EIP >= 0x100000, PE set, HdrS at 0x90202.
+                           The HdrS check ensures the kernel setup header is actually
+                           loaded by ISOLINUX before we attempt decompression.
+                           Don't set tried=true until HdrS confirmed (retry otherwise). */
                         {
                             static bool s_fFastBootTried = false;
+                            static uint32_t s_cFBCheckCounter = 0;
                             if (!s_fFastBootTried
                                 && uCS == 0x10
                                 && (pVCpu->cpum.GstCtx.cr0 & X86_CR0_PE)
                                 && pVCpu->cpum.GstCtx.rip >= UINT64_C(0x100000)
-                                && pVCpu->cpum.GstCtx.rip < UINT64_C(0x1000000))
+                                && (++s_cFBCheckCounter % 10000) == 0) /* check every 10K insns */
                             {
+                                /* Check for HdrS signature at guest 0x90202 */
+                                uint8_t abHdrS[4];
+                                PGMPhysRead(pVM, (RTGCPHYS)0x90202, abHdrS, 4, PGMACCESSORIGIN_IEM);
+                                if (abHdrS[0] == 'H' && abHdrS[1] == 'd' && abHdrS[2] == 'r' && abHdrS[3] == 'S')
+                                {
                                 s_fFastBootTried = true;
-                                RTPrintf("[FAST-BOOT-CPP] Detected startup_32 at EIP=%#llx — attempting JS decompress\n",
+                                RTPrintf("[FAST-BOOT-CPP] Detected kernel decompressor at EIP=%#llx, HdrS found — attempting JS decompress\n",
                                          (unsigned long long)pVCpu->cpum.GstCtx.rip);
                                 RTStrmFlush(g_pStdOut);
                                 int rcFB = wasmFastBootDecompress();
@@ -2693,6 +2700,7 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                                     RTPrintf("[FAST-BOOT-CPP] JS decompress returned %d (slow boot)\n", rcFB);
                                 RTStrmFlush(g_pStdOut);
                             }
+                            } /* if HdrS found */
                         }
 
                         /* Detailed trace: first 200 IEM instructions after boot */

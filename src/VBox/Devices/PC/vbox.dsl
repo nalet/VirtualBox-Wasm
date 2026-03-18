@@ -206,17 +206,7 @@ DefinitionBlock ("DSDT.aml", "DSDT", 2, "VBOX  ", "VBOXBIOS", 2)
     // char) into DCHR (thus possibly writing the string to console)
     Method (\DBG, 1, NotSerialized)
     {
-        Store(Arg0, Local0)
-        Store(S2BF (Local0), Local1)
-        Store(SizeOf (Local1), Local0)
-        Decrement (Local0)
-        Store(Zero, Local2)
-        While (Local0)
-        {
-            Decrement (Local0)
-            Store (DerefOf (Index (Local1, Local2)), DCHR)
-            Increment (Local2)
-        }
+        // No-op: original While loop triggers AE_AML_LOOP_TIMEOUT at IEM speeds
     }
 
     // Microsoft Windows version indicator

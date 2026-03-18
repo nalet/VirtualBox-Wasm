@@ -1423,7 +1423,7 @@ globalThis.VBoxJIT = (function() {
           // code32_start
           writeDword(setupBase + 532, 1048576);
           // Command line
-          const cmdline = "pmedia=cd BOOT_IMAGE=/vmlinuz console=ttyS0,115200 earlyprintk=serial,ttyS0,115200 loglevel=7 idle=halt notsc clocksource=jiffies acpi=off";
+          const cmdline = "pmedia=cd BOOT_IMAGE=/vmlinuz console=ttyS0,115200 earlyprintk=serial,ttyS0,115200 loglevel=7 idle=halt notsc clocksource=jiffies acpi=off lapic";
           for (let i = 0; i < cmdline.length; i++) mem8[ramBase + 626688 + i] = cmdline.charCodeAt(i);
           mem8[ramBase + 626688 + cmdline.length] = 0;
           writeDword(setupBase + 552, 626688);
@@ -1519,7 +1519,7 @@ globalThis.VBoxJIT = (function() {
             console.log("[JIT-BOOT] cmdline @0x" + cmdPtr.toString(16) + " (" + cmdLen + " bytes)");
           }
           // Append serial console options to command line
-          const serialOpts = " console=ttyS0,115200 earlyprintk=serial,ttyS0,115200 loglevel=7 idle=halt notsc clocksource=jiffies acpi=off";
+          const serialOpts = " console=ttyS0,115200 earlyprintk=serial,ttyS0,115200 loglevel=7 idle=halt notsc clocksource=jiffies acpi=off lapic";
           for (let i = 0; i < serialOpts.length; i++) mem8[ramBase + 626688 + cmdLen + i] = serialOpts.charCodeAt(i);
           mem8[ramBase + 626688 + cmdLen + serialOpts.length] = 0;
           cmdLen += serialOpts.length;
@@ -5992,7 +5992,7 @@ globalThis.VBoxJIT = (function() {
             // Check if initrd was loaded (typically at ~0x1000000 for 32MB systems)
             // For now, we rely on the kernel finding it via initrd= cmdline or embedded
             // Command line
-            const cmdline = "pmedia=cd BOOT_IMAGE=/vmlinuz console=ttyS0,115200 earlyprintk=serial,ttyS0,115200 loglevel=7 idle=halt notsc clocksource=jiffies acpi=off";
+            const cmdline = "pmedia=cd BOOT_IMAGE=/vmlinuz console=ttyS0,115200 earlyprintk=serial,ttyS0,115200 loglevel=7 idle=halt notsc clocksource=jiffies acpi=off lapic";
             for (let ci = 0; ci < cmdline.length; ci++) mem8[rb + 626688 + ci] = cmdline.charCodeAt(ci);
             mem8[rb + 626688 + cmdline.length] = 0;
             writeDword(setupBase + 552, 626688);
@@ -6425,7 +6425,7 @@ globalThis.VBoxJIT = (function() {
         }
       }
       for (let i = 0; i < cmdLen; i++) mf[rb + 626688 + i] = mf[rb + cmdPtr + i];
-      const serialOpts = " console=ttyS0,115200 earlyprintk=serial,ttyS0,115200 loglevel=7 idle=halt notsc clocksource=jiffies acpi=off";
+      const serialOpts = " console=ttyS0,115200 earlyprintk=serial,ttyS0,115200 loglevel=7 idle=halt notsc clocksource=jiffies acpi=off lapic";
       for (let i = 0; i < serialOpts.length; i++) mf[rb + 626688 + cmdLen + i] = serialOpts.charCodeAt(i);
       mf[rb + 626688 + cmdLen + serialOpts.length] = 0;
       dvf.setUint32(rb + 65536 + 552, 626688, true);

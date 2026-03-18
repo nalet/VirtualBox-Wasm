@@ -637,7 +637,7 @@ static VBOXSTRICTRC pic_ioport_write(PPDMDEVINS pDevIns, PDEVPIC pThis, PDEVPICC
                 {
                     static uint32_t s_cImrWrite = 0;
                     uint8_t oldImr = pPic->imr;
-                    if (++s_cImrWrite <= 50 || (s_cImrWrite % 10000) == 0)
+                    if (++s_cImrWrite <= 5 || (s_cImrWrite % 50000) == 0)
                     {
                         RTPrintf("[PIC-IMR] #%u %s: old=0x%02x new=0x%02x (IRQ0 %s→%s)\n",
                                  s_cImrWrite,

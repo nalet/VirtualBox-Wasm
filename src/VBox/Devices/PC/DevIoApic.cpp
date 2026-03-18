@@ -819,7 +819,7 @@ static VBOXSTRICTRC ioapicSetRedirTableEntry(PPDMDEVINS pDevIns, PIOAPIC pThis, 
         {
             uint64_t const u64RteNew = pThis->au64RedirTable[idxRte];
             static uint32_t s_cRteWrite = 0;
-            if (++s_cRteWrite <= 100 || idxRte == 2 || (s_cRteWrite % 500) == 0)
+            if (++s_cRteWrite <= 5 || (s_cRteWrite % 5000) == 0)
             {
                 RTPrintf("[IOAPIC-RTE] #%u pin=%u %s old=0x%016llx new=0x%016llx (vec=%u mask=%u dest=%u)\n",
                          s_cRteWrite, idxRte,
@@ -1212,7 +1212,7 @@ static DECLCALLBACK(VBOXSTRICTRC) ioapicMmioRead(PPDMDEVINS pDevIns, void *pvUse
 #ifdef __EMSCRIPTEN__
     {
         static uint32_t s_cMmioRd = 0;
-        if (++s_cMmioRd <= 50 || (s_cMmioRd % 1000) == 0)
+        if (++s_cMmioRd <= 5 || (s_cMmioRd % 10000) == 0)
         {
             RTPrintf("[IOAPIC-MMIO-R] #%u off=0x%x val=0x%08x idx=%u\n",
                      s_cMmioRd, (unsigned)offReg, *puValue, pThis->u8Index);
@@ -1246,7 +1246,7 @@ static DECLCALLBACK(VBOXSTRICTRC) ioapicMmioWrite(PPDMDEVINS pDevIns, void *pvUs
 #ifdef __EMSCRIPTEN__
     {
         static uint32_t s_cMmioWr = 0;
-        if (++s_cMmioWr <= 50 || (s_cMmioWr % 1000) == 0)
+        if (++s_cMmioWr <= 5 || (s_cMmioWr % 10000) == 0)
         {
             RTPrintf("[IOAPIC-MMIO-W] #%u off=0x%x val=0x%08x idx=%u\n",
                      s_cMmioWr, (unsigned)offReg, uValue, pThis->u8Index);

@@ -2026,7 +2026,7 @@ int emR3ForcedActions(PVM pVM, PVMCPU pVCpu, int rc)
 #ifdef __EMSCRIPTEN__
                         {
                             static uint32_t s_cInject = 0;
-                            if (++s_cInject <= 10 || (s_cInject % 10000) == 0)
+                            if (++s_cInject <= 10 || (s_cInject % 100000) == 0)
                             {
                                 RTPrintf("[EM-IRQ] inject attempt #%u CS:IP=%04x:%08llx IF=%d FFs=%#RX64\n",
                                          s_cInject,
@@ -2058,7 +2058,7 @@ int emR3ForcedActions(PVM pVM, PVMCPU pVCpu, int rc)
 #ifdef __EMSCRIPTEN__
                             {
                                 static uint32_t s_cInjected = 0;
-                                if (++s_cInjected <= 10 || (s_cInjected % 10000) == 0)
+                                if (++s_cInjected <= 10 || (s_cInjected % 100000) == 0)
                                 {
                                     RTPrintf("[EM-IRQ] TRPMR3InjectEvent #%u rc2=%d fInjected=%d\n",
                                              s_cInjected, rc2, (int)fInjected);

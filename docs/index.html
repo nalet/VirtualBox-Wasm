@@ -574,7 +574,13 @@
     let printErrSuppressed = 0;
     let printErrLastReport = 0;
     var Module = {
-      print(text) { appendLine(text, 'log'); console.log(text); },
+      print(text) {
+        appendLine(text, 'log');
+        console.log(text);
+        /* accumulate serial/diag output for automated monitoring */
+        if (!window._serialCapture) window._serialCapture = [];
+        window._serialCapture.push(text);
+      },
       printErr(text) {
         printErrCount++;
         // Rate-limit stderr output: show first 200, then every 500th, to prevent

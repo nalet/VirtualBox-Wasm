@@ -1239,7 +1239,7 @@ function execBlock(cpuP, ramB, maxInsn) {
           console.log('[JIT-BOOT] cmdline @0x' + cmdPtr.toString(16) + ' (' + cmdLen + ' bytes)');
         }
         // Append serial console options to command line
-        const serialOpts = ' console=ttyS0,115200 earlyprintk=serial,ttyS0,115200 loglevel=7 idle=halt notsc clocksource=jiffies acpi=off nopti nospectre_v1 nospectre_v2 pci=lastbus=0 raid=noautodetect mitigations=off notrace';
+        const serialOpts = ' console=ttyS0,115200 earlyprintk=serial,ttyS0,115200 loglevel=7 idle=halt notsc clocksource=jiffies acpi=off nopti nospectre_v1 nospectre_v2 pci=lastbus=0 raid=noautodetect mitigations=off notrace lpj=100';
         for (let i = 0; i < serialOpts.length; i++)
           mem8[ramBase + 0x99000 + cmdLen + i] = serialOpts.charCodeAt(i);
         mem8[ramBase + 0x99000 + cmdLen + serialOpts.length] = 0;
@@ -5211,7 +5211,7 @@ function fastBootDecompress() {
       if (mf[rb + cmdPtr + i] === 0) { cmdLen = i; break; }
     }
     for (let i = 0; i < cmdLen; i++) mf[rb + 0x99000 + i] = mf[rb + cmdPtr + i];
-    const serialOpts = ' console=ttyS0,115200 earlyprintk=serial,ttyS0,115200 loglevel=7 idle=halt notsc clocksource=jiffies acpi=off nopti nospectre_v1 nospectre_v2 pci=lastbus=0 raid=noautodetect mitigations=off notrace';
+    const serialOpts = ' console=ttyS0,115200 earlyprintk=serial,ttyS0,115200 loglevel=7 idle=halt notsc clocksource=jiffies acpi=off nopti nospectre_v1 nospectre_v2 pci=lastbus=0 raid=noautodetect mitigations=off notrace lpj=100';
     for (let i = 0; i < serialOpts.length; i++)
       mf[rb + 0x99000 + cmdLen + i] = serialOpts.charCodeAt(i);
     mf[rb + 0x99000 + cmdLen + serialOpts.length] = 0;

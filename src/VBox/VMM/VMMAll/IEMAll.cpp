@@ -1421,9 +1421,23 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                     if (RT_UNLIKELY(!s_pVMForRead))
                         s_pVMForRead = pVCpu->CTX_SUFF(pVM);
 
-                    /* Use actual instruction count for the timer clock (no boost).
-                     * This gives a stable 100 ns/insn virtual clock rate. */
-                    g_cWasmVirtualInstructions = pVCpu->iem.s.cInstructions;
+                    /* Use accumulated instruction count for the timer clock (no boost).
+                     * pVCpu->iem.s.cInstructions is uint32_t and wraps at ~4.3B instructions.
+                     * Without wrap handling, g_cWasmVirtualInstructions regresses to 0 after
+                     * the wrap, causing the virtual clock to go backward. The timer's next
+                     * deadline (~430 seconds) is then permanently in the "future" from the
+                     * clock's perspective, so NO MORE timer interrupts ever fire. The kernel
+                     * is left without preemption and kernel_init never gets scheduled.
+                     * Fix: accumulate into a uint64 using wrap-aware uint32 subtraction.
+                     *      delta = (uint32)(curr - prev) handles wrap correctly. */
+                    {
+                        static uint32_t s_cPrevCInsn = 0;
+                        static uint64_t s_cAccumulated = 0;
+                        uint32_t uCurr = pVCpu->iem.s.cInstructions;
+                        s_cAccumulated += (uint32_t)(uCurr - s_cPrevCInsn);
+                        s_cPrevCInsn = uCurr;
+                        g_cWasmVirtualInstructions = s_cAccumulated;
+                    }
 
                     /* High-frequency __delay() fast path: once we've identified the
                      * delay loop address, check every 1000 instructions and skip it

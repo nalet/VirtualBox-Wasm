@@ -3,6 +3,7 @@ FROM virtualbox-wasm:latest
 # Copy only the changed files
 COPY src/VBox/VMM/VMMAll/IEMAll.cpp /build/vbox/src/VBox/VMM/VMMAll/IEMAll.cpp
 COPY src/VBox/VMM/VMMAll/TMAllVirtual.cpp /build/vbox/src/VBox/VMM/VMMAll/TMAllVirtual.cpp
+COPY src/VBox/VMM/VMMAll/target-x86/IEMAllCImpl-x86.cpp /build/vbox/src/VBox/VMM/VMMAll/target-x86/IEMAllCImpl-x86.cpp
 COPY jit-pre.js /build/vbox/jit-pre.js
 
 WORKDIR /build/vbox

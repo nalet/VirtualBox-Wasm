@@ -5199,6 +5199,16 @@ IEM_CIMPL_DEF_3(iemCImpl_lidt, uint8_t, iEffSeg, RTGCPTR, GCPtrEffSrc, IEMMODE, 
         if (   !IEM_IS_64BIT_CODE(pVCpu)
             || X86_IS_CANONICAL(GCPtrBase))
         {
+#ifdef __EMSCRIPTEN__
+            /* Trace IDT setup — diagnose why IRQ-ENABLE check doesn't fire. */
+            extern uint64_t g_cWasmVirtualInstructions; /* NOLINT */
+            RTPrintf("[LIDT] insns=%llu base=%#llx limit=%u IF=%d\n",
+                     (unsigned long long)g_cWasmVirtualInstructions,
+                     (unsigned long long)GCPtrBase,
+                     (unsigned)cbLimit,
+                     !!(pVCpu->cpum.GstCtx.rflags.u & X86_EFL_IF));
+            RTStrmFlush(g_pStdOut);
+#endif
             CPUMSetGuestIDTR(pVCpu, GCPtrBase, cbLimit);
             rcStrict = iemRegAddToRipAndFinishingClearingRF(pVCpu, cbInstr);
         }
@@ -7811,7 +7821,7 @@ IEM_CIMPL_DEF_0(iemCImpl_hlt)
 
 #ifdef __EMSCRIPTEN__
     {
-        extern volatile uint64_t g_cWasmVirtualInstructions;
+        extern uint64_t g_cWasmVirtualInstructions; /* NOLINT: matches non-volatile decl elsewhere in file */
         static uint32_t s_cHltCount = 0;
         s_cHltCount++;
         RTPrintf("[HLT] #%u EIP=%#llx IF=%d FFs=%#RX64 insns=%llu CR0=%#llx EFER=%#llx\n",

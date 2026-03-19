@@ -1538,7 +1538,7 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                         && pVCpu->cpum.GstCtx.cs.Sel == 0x10)
                     {
                         static bool     s_fIfForced       = false;
-                        static uint64_t s_cNextIdtCheck   = UINT64_C(500000000);
+                        static uint64_t s_cNextIdtCheck   = UINT64_C(10000000); /* 10M: catch IDT setup early */
                         if (!s_fIfForced && g_cWasmVirtualInstructions >= s_cNextIdtCheck)
                         {
                             s_cNextIdtCheck = g_cWasmVirtualInstructions + UINT64_C(2000000); /* 2M */
@@ -1575,14 +1575,19 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                         s_cNextDiag = g_cWasmVirtualInstructions
                                     + (s_uDelayRip ? UINT64_C(1000000000) : UINT64_C(500000000));
                         uint64_t fFFs = pVCpu->fLocalForcedActions;
-                        RTPrintf("[IEM-DIAG] insns=%llu CR2=%#llx CR0=%#llx EFER=%#llx IF=%d FFs=%#RX64 EIP=%#llx\n",
+                        RTPrintf("[IEM-DIAG] insns=%llu CR2=%#llx CR0=%#llx EFER=%#llx IF=%d FFs=%#RX64 EIP=%#llx RSP=%#llx\n",
                                  (unsigned long long)g_cWasmVirtualInstructions,
                                  (unsigned long long)pVCpu->cpum.GstCtx.cr2,
                                  (unsigned long long)pVCpu->cpum.GstCtx.cr0,
                                  (unsigned long long)pVCpu->cpum.GstCtx.msrEFER,
                                  !!(pVCpu->cpum.GstCtx.eflags.u & X86_EFL_IF),
                                  fFFs,
-                                 (unsigned long long)pVCpu->cpum.GstCtx.rip);
+                                 (unsigned long long)pVCpu->cpum.GstCtx.rip,
+                                 (unsigned long long)pVCpu->cpum.GstCtx.rsp);
+                        RTPrintf("[IEM-DIAG] IDTR base=%#llx size=%u GDTR base=%#llx\n",
+                                 (unsigned long long)pVCpu->cpum.GstCtx.idtr.pIdt,
+                                 (unsigned)pVCpu->cpum.GstCtx.idtr.cbIdt,
+                                 (unsigned long long)pVCpu->cpum.GstCtx.gdtr.pGdt);
 
                         /* Monitor jiffies_64 at physical 0x02406980 (jiffies virtual 0xffffffff82406980).
                          * The Linux 5.4 FossaPup64 kernel stores jiffies_64 here.

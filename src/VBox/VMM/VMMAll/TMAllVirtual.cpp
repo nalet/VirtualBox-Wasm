@@ -245,12 +245,13 @@ DECLINLINE(uint64_t) tmVirtualGetRawNanoTS(PVMCC pVM)
 #ifdef __EMSCRIPTEN__
     /* Under Emscripten, RTTimeSystemNanoTS() doesn't advance during synchronous
      * Wasm execution in worker threads.  Drive virtual time from the IEM
-     * instruction counter instead: 100 ns per instruction ≈ 10 MHz effective
-     * virtual clock.  This makes RDTSC (= cInstructions * 100) appear as a
-     * 1 GHz TSC, which is what the Linux kernel will measure during
-     * calibrate_delay() when comparing TSC against the PIT timer. */
+     * instruction counter instead: 1000 ns per instruction ≈ 1 MHz effective
+     * instruction throughput from the timer's perspective.  This makes virtual
+     * time advance ~10x faster than before, so the PIT (IRQ0) fires ~10x more
+     * frequently in wall-clock terms and the kernel's jiffies counter advances
+     * quickly enough to avoid boot stalls. */
     extern volatile uint64_t g_cWasmVirtualInstructions;
-    uint64_t u64 = g_cWasmVirtualInstructions * 100; /* 100 ns per instruction */
+    uint64_t u64 = g_cWasmVirtualInstructions * 1000; /* 1000 ns per instruction */
     RT_NOREF(pVM);
 #elif defined(IN_RING3)
     uint64_t u64 = pVM->tm.s.pfnVirtualGetRaw(&pVM->tm.s.VirtualGetRawData, NULL /*pExtra*/);
@@ -274,9 +275,9 @@ DECLINLINE(uint64_t) tmVirtualGetRawNanoTSEx(PVMCC pVM, uint64_t *puTscNow)
 {
 #ifdef __EMSCRIPTEN__
     extern volatile uint64_t g_cWasmVirtualInstructions;
-    uint64_t u64 = g_cWasmVirtualInstructions * 100;
+    uint64_t u64 = g_cWasmVirtualInstructions * 1000;
     if (puTscNow)
-        *puTscNow = g_cWasmVirtualInstructions * 100; /* match RDTSC */
+        *puTscNow = g_cWasmVirtualInstructions * 1000; /* match RDTSC */
     RT_NOREF(pVM);
 #else
     RTITMENANOTSEXTRA Extra;

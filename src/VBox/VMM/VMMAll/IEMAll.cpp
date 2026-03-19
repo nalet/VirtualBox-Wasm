@@ -1749,23 +1749,29 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                             }
                         }
 
-                        /* Force-enable IF if kernel is stuck with IF=0 AFTER
-                           decompression completes (RIP in high virtual addresses).
-                           The decompressor runs with IF=0 legitimately; forcing IF=1
-                           during decompression corrupts it.  Only trigger once the
-                           kernel has jumped to decompressed code (RIP > 0xFFFF8000...). */
+                        /* Repeatedly force-enable IF whenever the kernel is stuck with
+                           IF=0 in high virtual addresses. The decompressor legitimately
+                           runs with IF=0, but once the kernel is in decompressed code
+                           at >0xFFFF8000..., repeated IF=0 stalls indicate a busy-wait
+                           loop that will never be satisfied without interrupt delivery.
+                           Fire at most once per 300M instructions to give the kernel
+                           time to do useful work between force-enables. */
                         {
-                            static bool s_fForceIF = false;
-                            if (!s_fForceIF
-                                && (pVCpu->cpum.GstCtx.msrEFER & MSR_K6_EFER_LMA)
+                            static uint64_t s_uNextForceIF = 0;
+                            static uint32_t s_cForceIF     = 0;
+                            if ((pVCpu->cpum.GstCtx.msrEFER & MSR_K6_EFER_LMA)
                                 && !(pVCpu->cpum.GstCtx.eflags.u & X86_EFL_IF)
-                                && pVCpu->cpum.GstCtx.rip > UINT64_C(0xFFFF800000000000))
+                                && pVCpu->cpum.GstCtx.rip > UINT64_C(0xFFFF800000000000)
+                                && g_cWasmVirtualInstructions >= s_uNextForceIF)
                             {
-                                s_fForceIF = true;
+                                s_cForceIF++;
+                                s_uNextForceIF = g_cWasmVirtualInstructions + UINT64_C(300000000);
                                 pVCpu->cpum.GstCtx.eflags.u |= X86_EFL_IF;
-                                RTPrintf("[FORCE-IF] Enabling IF at insns=%llu RIP=%#llx — unsticking kernel init\n",
+                                RTPrintf("[FORCE-IF] #%u Enabling IF at insns=%llu RIP=%#llx — unsticking kernel init\n",
+                                    s_cForceIF,
                                     (unsigned long long)g_cWasmVirtualInstructions,
                                     (unsigned long long)pVCpu->cpum.GstCtx.rip);
+                                RTStrmFlush(g_pStdOut);
                             }
                         }
 

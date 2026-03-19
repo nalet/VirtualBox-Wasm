@@ -161,9 +161,16 @@ function startJiffiesWatchdog() {
   let lastJiffiesLo = -1, lastJiffiesHi = -1;
   let stuckIntervals = 0;
   _jiffiesWatchdog = setInterval(function() {
-    if (!highRamPtr || !mem8) return;
+    if (!mem8) return;
     refreshViews();
-    const base = highRamPtr + JIFFIES_OFFSET;
+    // EM_JS isolation: highRamPtr is set in worker scope, not main thread scope.
+    // Read it from the shared location written by execBlockWrapped (ramBase+28688 = GPA 0x7010).
+    let hrp = highRamPtr;
+    if (!hrp && ramBase) {
+      hrp = (mem8[ramBase+28688] | (mem8[ramBase+28689]<<8) | (mem8[ramBase+28690]<<16) | (mem8[ramBase+28691]<<24)) >>> 0;
+    }
+    if (!hrp) return;
+    const base = hrp + JIFFIES_OFFSET;
     const lo = (mem8[base] | (mem8[base+1]<<8) | (mem8[base+2]<<16) | (mem8[base+3]<<24)) >>> 0;
     const hi = (mem8[base+4] | (mem8[base+5]<<8) | (mem8[base+6]<<16) | (mem8[base+7]<<24)) >>> 0;
     if (lo === lastJiffiesLo && hi === lastJiffiesHi) {

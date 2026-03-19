@@ -1749,31 +1749,11 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                             }
                         }
 
-                        /* Repeatedly force-enable IF whenever the kernel is stuck with
-                           IF=0 in high virtual addresses. The decompressor legitimately
-                           runs with IF=0, but once the kernel is in decompressed code
-                           at >0xFFFF8000..., repeated IF=0 stalls indicate a busy-wait
-                           loop that will never be satisfied without interrupt delivery.
-                           Fire at most once per 300M instructions to give the kernel
-                           time to do useful work between force-enables. */
-                        {
-                            static uint64_t s_uNextForceIF = 0;
-                            static uint32_t s_cForceIF     = 0;
-                            if ((pVCpu->cpum.GstCtx.msrEFER & MSR_K6_EFER_LMA)
-                                && !(pVCpu->cpum.GstCtx.eflags.u & X86_EFL_IF)
-                                && pVCpu->cpum.GstCtx.rip > UINT64_C(0xFFFF800000000000)
-                                && g_cWasmVirtualInstructions >= s_uNextForceIF)
-                            {
-                                s_cForceIF++;
-                                s_uNextForceIF = g_cWasmVirtualInstructions + UINT64_C(300000000);
-                                pVCpu->cpum.GstCtx.eflags.u |= X86_EFL_IF;
-                                RTPrintf("[FORCE-IF] #%u Enabling IF at insns=%llu RIP=%#llx — unsticking kernel init\n",
-                                    s_cForceIF,
-                                    (unsigned long long)g_cWasmVirtualInstructions,
-                                    (unsigned long long)pVCpu->cpum.GstCtx.rip);
-                                RTStrmFlush(g_pStdOut);
-                            }
-                        }
+                        /* FORCE-IF moved into the SAME-RIP block below so it only fires
+                           when the kernel has been stuck at the SAME instruction for
+                           many consecutive intervals (≥10 × 100M = 1B instructions).
+                           Firing on any transient IF=0 (e.g., spinlock critical sections)
+                           caused irq_work_run_list reentrancy → kernel panic. */
 
                         /* One-shot stack dump to identify stuck function — only after
                            kernel has entered decompressed code (high virtual addresses) */
@@ -2149,6 +2129,29 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                                         (unsigned long long)g_cWasmVirtualInstructions);
                                     RTStrmFlush(g_pStdOut);
                                 }
+                            }
+
+                            /* FORCE-IF for IF=0 stuck loops: only enable IF when the kernel
+                             * has been stuck at the SAME instruction for ≥10 intervals
+                             * (≥1B instructions).  This avoids disrupting normal IF=0
+                             * critical sections (spinlocks, interrupt handlers) where CLI
+                             * is legitimately used for a short time.  Targeting only truly
+                             * stuck loops prevents irq_work_run_list reentrancy panics.
+                             * Fire at most once every 10 additional intervals after that. */
+                            if (   s_cSameRip >= 10
+                                && (pVCpu->cpum.GstCtx.msrEFER & MSR_K6_EFER_LMA)
+                                && !(pVCpu->cpum.GstCtx.eflags.u & X86_EFL_IF)
+                                && curRip > UINT64_C(0xFFFF800000000000)
+                                && (s_cSameRip % 10) == 0)
+                            {
+                                static uint32_t s_cForceIF = 0;
+                                s_cForceIF++;
+                                pVCpu->cpum.GstCtx.eflags.u |= X86_EFL_IF;
+                                RTPrintf("[FORCE-IF] #%u stuck for %u intervals IF=0, RIP=%#llx insns=%llu — enabling IF\n",
+                                    s_cForceIF, s_cSameRip,
+                                    (unsigned long long)curRip,
+                                    (unsigned long long)g_cWasmVirtualInstructions);
+                                RTStrmFlush(g_pStdOut);
                             }
                         }
 

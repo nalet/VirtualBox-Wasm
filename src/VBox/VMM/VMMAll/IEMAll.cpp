@@ -2132,17 +2132,17 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                             }
 
                             /* FORCE-IF for IF=0 stuck loops: only enable IF when the kernel
-                             * has been stuck at the SAME instruction for ≥10 intervals
-                             * (≥1B instructions).  This avoids disrupting normal IF=0
+                             * has been stuck at the SAME instruction for ≥5 intervals
+                             * (≥500M instructions).  This avoids disrupting normal IF=0
                              * critical sections (spinlocks, interrupt handlers) where CLI
                              * is legitimately used for a short time.  Targeting only truly
                              * stuck loops prevents irq_work_run_list reentrancy panics.
-                             * Fire at most once every 10 additional intervals after that. */
-                            if (   s_cSameRip >= 10
+                             * Fire at most once every 5 additional intervals after that. */
+                            if (   s_cSameRip >= 5
                                 && (pVCpu->cpum.GstCtx.msrEFER & MSR_K6_EFER_LMA)
                                 && !(pVCpu->cpum.GstCtx.eflags.u & X86_EFL_IF)
                                 && curRip > UINT64_C(0xFFFF800000000000)
-                                && (s_cSameRip % 10) == 0)
+                                && (s_cSameRip % 5) == 0)
                             {
                                 static uint32_t s_cForceIF = 0;
                                 s_cForceIF++;
@@ -2725,6 +2725,37 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                                  (pVCpu->cpum.GstCtx.msrEFER & MSR_K6_EFER_LMA) ? "64-bit LM" : "32-bit PM",
                                  s_uLastCS, (unsigned long long)pVCpu->cpum.GstCtx.rip,
                                  (unsigned long long)pVCpu->cpum.GstCtx.cr0);
+
+                        /* ── Patch kernel cmdline at boot-detect time ──
+                         * boot_params is at 0x10000 (set by ISOLINUX/bootloader).
+                         * cmd_line_ptr is at boot_params+0x228 = 0x10228.
+                         * Append mitigations=off notrace to skip:
+                         *   1. alternative_instructions() CPU mitigation patching (~500M insns)
+                         *   2. ftrace init (another potential stall)
+                         * Must patch before the kernel reads it in early_param processing. */
+                        if (pVCpu->cpum.GstCtx.cr2 == UINT64_C(0xC0DEBA5E))
+                        {
+                            uint32_t uCmdLinePtr = 0;
+                            PGMPhysRead(pVM, (RTGCPHYS)0x10228, &uCmdLinePtr, sizeof(uCmdLinePtr), PGMACCESSORIGIN_IEM);
+                            RTPrintf("[DBOOT] cmd_line_ptr=0x%08x\n", uCmdLinePtr);
+                            if (uCmdLinePtr != 0)
+                            {
+                                char szCmdLine[512];
+                                RT_ZERO(szCmdLine);
+                                PGMPhysRead(pVM, (RTGCPHYS)uCmdLinePtr, szCmdLine, 256, PGMACCESSORIGIN_IEM);
+                                szCmdLine[255] = '\0';
+                                size_t cchExisting = strlen(szCmdLine);
+                                RTPrintf("[DBOOT] existing cmdline: '%s'\n", szCmdLine);
+                                static const char szExtra[] = " mitigations=off notrace";
+                                if (cchExisting + sizeof(szExtra) < sizeof(szCmdLine))
+                                    memcpy(szCmdLine + cchExisting, szExtra, sizeof(szExtra));
+                                RTPrintf("[DBOOT] new cmdline: '%s'\n", szCmdLine);
+                                PGMPhysWrite(pVM, (RTGCPHYS)0x8000, szCmdLine,
+                                             strlen(szCmdLine) + 1, PGMACCESSORIGIN_IEM);
+                                uint32_t uNewPtr = 0x8000;
+                                PGMPhysWrite(pVM, (RTGCPHYS)0x10228, &uNewPtr, sizeof(uNewPtr), PGMACCESSORIGIN_IEM);
+                            }
+                        }
                         RTStrmFlush(g_pStdOut);
                     }
                     if (s_fBootActive)

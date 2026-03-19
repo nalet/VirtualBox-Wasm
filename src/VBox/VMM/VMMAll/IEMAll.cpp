@@ -1467,6 +1467,62 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                                  fFFs,
                                  (unsigned long long)pVCpu->cpum.GstCtx.rip);
 
+                        /* Monitor jiffies_64 at physical 0x02406980 (jiffies virtual 0xffffffff82406980).
+                         * The Linux 5.4 FossaPup64 kernel stores jiffies_64 here.
+                         * If jiffies doesn't advance, timer-wait loops spin forever.
+                         * Use PGMPhysRead (physical) to bypass page-table translation issues. */
+                        if ((pVCpu->cpum.GstCtx.msrEFER & MSR_K6_EFER_LMA)
+                            && pVCpu->cpum.GstCtx.rip > UINT64_C(0xFFFF800000000000))
+                        {
+                            static uint64_t s_uPrevJiffies = 0;
+                            static unsigned s_cJiffiesStuck = 0;
+                            static unsigned s_cJiffiesChecks = 0;
+                            uint64_t uJiffies = 0;
+                            PVMCC pVMJ = pVCpu->CTX_SUFF(pVM);
+                            VBOXSTRICTRC rcJ = PGMPhysRead(pVMJ, UINT64_C(0x02406980),
+                                &uJiffies, sizeof(uJiffies), PGMACCESSORIGIN_DEBUGGER);
+                            s_cJiffiesChecks++;
+                            if (RT_SUCCESS(rcJ))
+                            {
+                                if (uJiffies != s_uPrevJiffies)
+                                {
+                                    RTPrintf("[JIFFIES] #%u jiffies_64=0x%llx (was 0x%llx, delta=%lld)\n",
+                                        s_cJiffiesChecks,
+                                        (unsigned long long)uJiffies,
+                                        (unsigned long long)s_uPrevJiffies,
+                                        (long long)(uJiffies - s_uPrevJiffies));
+                                    s_uPrevJiffies = uJiffies;
+                                    s_cJiffiesStuck = 0;
+                                }
+                                else
+                                {
+                                    s_cJiffiesStuck++;
+                                    /* If jiffies hasn't changed for 5 consecutive 100M-insn intervals
+                                     * (500M insns), force-advance it to unblock spin-wait loops. */
+                                    if (s_cJiffiesStuck >= 5)
+                                    {
+                                        uint64_t uNewJiffies = uJiffies + 1;
+                                        VBOXSTRICTRC rcW = PGMPhysWrite(pVMJ, UINT64_C(0x02406980),
+                                            &uNewJiffies, sizeof(uNewJiffies), PGMACCESSORIGIN_DEBUGGER);
+                                        RTPrintf("[JIFFIES-FIX] #%u stuck %u intervals, forcing 0x%llx->0x%llx rc=%d\n",
+                                            s_cJiffiesChecks, s_cJiffiesStuck,
+                                            (unsigned long long)uJiffies,
+                                            (unsigned long long)uNewJiffies,
+                                            (int)VBOXSTRICTRC_VAL(rcW));
+                                        s_uPrevJiffies = uNewJiffies;
+                                        s_cJiffiesStuck = 0;
+                                    }
+                                    else
+                                        RTPrintf("[JIFFIES] #%u stuck at 0x%llx (%u intervals)\n",
+                                            s_cJiffiesChecks,
+                                            (unsigned long long)uJiffies, s_cJiffiesStuck);
+                                }
+                            }
+                            else
+                                RTPrintf("[JIFFIES] #%u PGMPhysRead failed rc=%d\n",
+                                    s_cJiffiesChecks, (int)VBOXSTRICTRC_VAL(rcJ));
+                        }
+
                         /* ── One-shot E820 / BIOS memory diagnostic ──
                          * Fires once at 5M instructions — by this point the BIOS has
                          * finished POST, programmed CMOS, and set up the IVT (including
@@ -2907,12 +2963,14 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                         {
                             s_cLastReport = s_cBootInsns;
                             uint64_t cr3 = pVCpu->cpum.GstCtx.cr3;
-                            RTPrintf("[DBOOT] Progress: %lluK insns CS=%04x EIP=%08llx CR0=%08llx CR3=%08llx FL=%08x\n",
+                            uint64_t rsp = pVCpu->cpum.GstCtx.rsp;
+                            RTPrintf("[DBOOT] Progress: %lluK insns CS=%04x EIP=%08llx CR0=%08llx CR3=%08llx FL=%08x RSP=%016llx\n",
                                      (unsigned long long)(s_cBootInsns / 1000), uCS,
                                      (unsigned long long)pVCpu->cpum.GstCtx.rip,
                                      (unsigned long long)pVCpu->cpum.GstCtx.cr0,
                                      (unsigned long long)cr3,
-                                     pVCpu->cpum.GstCtx.eflags.u);
+                                     pVCpu->cpum.GstCtx.eflags.u,
+                                     (unsigned long long)rsp);
                             RTStrmFlush(g_pStdOut);
                         }
                     }

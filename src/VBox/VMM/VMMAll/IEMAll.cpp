@@ -1331,6 +1331,23 @@ VBOXSTRICTRC iemExecInjectPendingTrap(PVMCPUCC pVCpu)
             int rc2 = TRPMQueryTrapAll(pVCpu, &u8TrapNo, &enmType, &uErrCode, &uCr2, NULL /*pu8InstLen*/, NULL /*fIcebp*/);
             AssertRC(rc2);
             Assert(enmType == TRPM_HARDWARE_INT);
+#ifdef __EMSCRIPTEN__
+            /* IRQ delivery counter: log every 10K deliveries to track interrupt rate */
+            {
+                static uint64_t s_cIrqsDelivered = 0;
+                static uint64_t s_cIrqsLast = 0;
+                extern volatile uint64_t g_cWasmVirtualInstructions;
+                s_cIrqsDelivered++;
+                if (s_cIrqsDelivered - s_cIrqsLast >= 10000)
+                {
+                    RTPrintf("[IRQ-COUNT] #%llu deliveries at insns=%llu IRQ=%u\n",
+                             (unsigned long long)s_cIrqsDelivered,
+                             (unsigned long long)g_cWasmVirtualInstructions,
+                             (unsigned)u8TrapNo);
+                    s_cIrqsLast = s_cIrqsDelivered;
+                }
+            }
+#endif
             VBOXSTRICTRC rcStrict = IEMInjectTrap(pVCpu, u8TrapNo, enmType, (uint16_t)uErrCode, uCr2, 0 /*cbInstr*/);
 
             TRPMResetTrap(pVCpu);
@@ -1579,6 +1596,82 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                             else
                                 RTPrintf("[JIFFIES] #%u PGMPhysRead failed rc=%d\n",
                                     s_cJiffiesChecks, (int)VBOXSTRICTRC_VAL(rcJ));
+                        }
+
+                        /* ── One-shot printk ring buffer scan ──
+                         * Fires once at 3000M insns while kernel is in 64-bit mode.
+                         * Scans BSS area (phys 0x2600000-0x2826000) for printable strings
+                         * to reveal if kernel_init has logged anything not yet flushed
+                         * to the UART serial console. */
+                        {
+                            static bool s_fDmesgDumped = false;
+                            if (!s_fDmesgDumped
+                                && g_cWasmVirtualInstructions >= UINT64_C(3000000000)
+                                && (pVCpu->cpum.GstCtx.msrEFER & MSR_K6_EFER_LMA))
+                            {
+                                s_fDmesgDumped = true;
+                                RTPrintf("[DMESG-SCAN] === Scanning BSS for printk messages ===\n");
+                                PVMCC pVMd = pVCpu->CTX_SUFF(pVM);
+                                int cLines = 0;
+                                /* BSS starts at phys 0x2600000 based on kernel segment layout */
+                                for (uint64_t phys = 0x02600000ULL; phys < 0x02826000ULL && cLines < 300; phys += 0x1000)
+                                {
+                                    char szBuf[0x1000];
+                                    RT_ZERO(szBuf);
+                                    int rc2 = PGMPhysSimpleReadGCPhys(pVMd, szBuf, (RTGCPHYS)phys, sizeof(szBuf));
+                                    if (RT_SUCCESS(rc2))
+                                    {
+                                        int runStart = -1;
+                                        for (int off = 0; off <= (int)sizeof(szBuf); off++)
+                                        {
+                                            bool printable = (off < (int)sizeof(szBuf))
+                                                          && ((uint8_t)szBuf[off] >= 0x20
+                                                          && (uint8_t)szBuf[off] <= 0x7e);
+                                            if (printable && runStart < 0)
+                                                runStart = off;
+                                            else if (!printable && runStart >= 0)
+                                            {
+                                                int runLen = off - runStart;
+                                                if (runLen >= 10 && cLines < 300)
+                                                {
+                                                    char szLine[256];
+                                                    int copyLen = runLen < (int)sizeof(szLine) - 1 ? runLen : (int)sizeof(szLine) - 1;
+                                                    memcpy(szLine, &szBuf[runStart], copyLen);
+                                                    szLine[copyLen] = '\0';
+                                                    /* Filter: only print if it looks like a kernel message */
+                                                    bool fLooksKernelish = false;
+                                                    for (int j = 0; j < copyLen - 2; j++)
+                                                        if (szLine[j] == ':' || szLine[j] == '/' || szLine[j] == '.')
+                                                        { fLooksKernelish = true; break; }
+                                                    if (fLooksKernelish)
+                                                    {
+                                                        RTPrintf("[DMESG-SCAN] phys=%#llx: %s\n",
+                                                            (unsigned long long)(phys + runStart), szLine);
+                                                        cLines++;
+                                                    }
+                                                }
+                                                runStart = -1;
+                                            }
+                                        }
+                                    }
+                                }
+                                RTPrintf("[DMESG-SCAN] === Done (%d lines found) ===\n", cLines);
+                                /* Also sample the stack at current RSP to get partial call trace */
+                                if (pVCpu->cpum.GstCtx.rsp > UINT64_C(0xffff888000000000))
+                                {
+                                    uint64_t aStk[16];
+                                    RT_ZERO(aStk);
+                                    PGMPhysSimpleReadGCPtr(pVCpu, aStk, pVCpu->cpum.GstCtx.rsp, sizeof(aStk));
+                                    RTPrintf("[DMESG-STK] RSP=%#llx: %#llx %#llx %#llx %#llx\n",
+                                        (unsigned long long)pVCpu->cpum.GstCtx.rsp,
+                                        (unsigned long long)aStk[0], (unsigned long long)aStk[1],
+                                        (unsigned long long)aStk[2], (unsigned long long)aStk[3]);
+                                    RTPrintf("[DMESG-STK]           %#llx %#llx %#llx %#llx\n",
+                                        (unsigned long long)aStk[4], (unsigned long long)aStk[5],
+                                        (unsigned long long)aStk[6], (unsigned long long)aStk[7]);
+                                }
+                                RTStrmFlush(g_pStdOut);
+                            }
                         }
 
                         /* ── One-shot E820 / BIOS memory diagnostic ──
@@ -2656,6 +2749,13 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                                 /* Notify PGM about the mode change + new CR3 */
                                 VMCPU_FF_SET(pVCpu, VMCPU_FF_PGM_SYNC_CR3);
 
+                                /* Reset TM virtual sync catch-up (same fix as FAST-BOOT-CPP path) */
+                                {
+                                    extern void TMVirtualSyncResetCatchUpWasm(PVMCC);
+                                    TMVirtualSyncResetCatchUpWasm(pVM);
+                                    RTPrintf("[FAST-BOOT-64] TM sync reset: offVirtualSync=0 catchUp=false\n");
+                                }
+
                                 RTPrintf("[FAST-BOOT-64] Entering 64-bit kernel: RIP=%#018llx RSI=%#010x CR0=%#010x CR3=%#010x EFER=%#06x\n",
                                          (unsigned long long)pCtx->rip, (unsigned)pCtx->rsi,
                                          (unsigned)pCtx->cr0, (unsigned)pCtx->cr3,
@@ -2963,6 +3063,14 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                                         pCtx->r12 = 0; pCtx->r13 = 0; pCtx->r14 = 0; pCtx->r15 = 0;
 
                                         VMCPU_FF_SET(pVCpu, VMCPU_FF_PGM_SYNC_CR3);
+
+                                        /* ── Reset TM virtual sync catch-up ──
+                                         * See TMVirtualSyncResetCatchUpWasm() in TMAllVirtual.cpp. */
+                                        {
+                                            extern void TMVirtualSyncResetCatchUpWasm(PVMCC);
+                                            TMVirtualSyncResetCatchUpWasm(pVM);
+                                            RTStrmPrintf(g_pStdErr, "[FAST-BOOT-CPP] TM sync reset: offVirtualSync=0 catchUp=false\n");
+                                        }
 
                                         s_cBootInsns = 0; /* reset trace counter */
                                         s_fFB64Active = true;

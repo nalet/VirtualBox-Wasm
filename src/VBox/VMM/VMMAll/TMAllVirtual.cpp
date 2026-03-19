@@ -55,6 +55,29 @@
  * Used to drive the virtual clock under Emscripten where RTTimeSystemNanoTS()
  * doesn't advance during synchronous Wasm execution in worker threads. */
 volatile uint64_t g_cWasmVirtualInstructions = 0;
+
+/**
+ * Reset the TM virtual sync catch-up state at the point the Linux kernel
+ * enters 64-bit mode after fast-boot decompression.
+ *
+ * The JS decompression phase (860ms wall clock) holds IEM idle, so
+ * g_cWasmVirtualInstructions stagnates while real time advances.  The TM
+ * virtual sync offset grows large and u32VirtualSyncCatchUpPercentage ramps
+ * up (measured: ~3900%), causing the PIT timer to fire 40× per expected
+ * tick.  This interrupt storm monopolises the CPU and starves kernel_init.
+ *
+ * Fix: zero offVirtualSync and disable catch-up so virtual sync == virtual
+ * wall time from the kernel's first instruction onward.
+ */
+VMM_INT_DECL(void) TMVirtualSyncResetCatchUpWasm(PVMCC pVM)
+{
+    ASMAtomicWriteU64(&pVM->tm.s.offVirtualSync, 0);
+    ASMAtomicWriteU64(&pVM->tm.s.offVirtualSyncGivenUp, 0);
+    ASMAtomicWriteBool(&pVM->tm.s.fVirtualSyncCatchUp, false);
+    ASMAtomicWriteU32(&pVM->tm.s.u32VirtualSyncCatchUpPercentage, 0);
+    ASMAtomicWriteU64(&pVM->tm.s.u64VirtualSyncCatchUpPrev,
+                      g_cWasmVirtualInstructions * UINT64_C(100));
+}
 #endif
 
 

@@ -1405,7 +1405,14 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                  */
 #ifdef __EMSCRIPTEN__
                 /* Update global instruction counter for TM virtual clock.
-                 * TMAllVirtual.cpp reads this to drive timer expiration under Wasm. */
+                 * TMAllVirtual.cpp reads this to drive timer expiration under Wasm.
+                 *
+                 * IMPORTANT: Use only the actual instruction count (no boost) so the
+                 * timer fires every ~25,000 actual instructions.  The old approach of
+                 * adding a "virtual time boost" from skipped delay loops caused the
+                 * timer to fire thousands of extra times per delay skip, creating a
+                 * permanent interrupt storm that prevented kernel_init from running.
+                 * Delay loops now advance jiffies_64 directly via PGMPhysWrite instead. */
                 {
                     extern volatile uint64_t g_cWasmVirtualInstructions;
 
@@ -1413,17 +1420,16 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                      * before DELAY-ACCEL fires (e.g., during decompression). */
                     if (RT_UNLIKELY(!s_pVMForRead))
                         s_pVMForRead = pVCpu->CTX_SUFF(pVM);
-                    /* Track virtual time boost separately so we don't corrupt
-                     * IEM's internal instruction counter (pVCpu->iem.s.cInstructions).
-                     * The boost is accumulated from skipped delay loops and added to
-                     * the real counter to form the virtual counter that drives timers. */
-                    static uint64_t s_cVirtualTimeBoost = 0;
-                    g_cWasmVirtualInstructions = pVCpu->iem.s.cInstructions + s_cVirtualTimeBoost;
+
+                    /* Use actual instruction count for the timer clock (no boost).
+                     * This gives a stable 100 ns/insn virtual clock rate. */
+                    g_cWasmVirtualInstructions = pVCpu->iem.s.cInstructions;
 
                     /* High-frequency __delay() fast path: once we've identified the
                      * delay loop address, check every 1000 instructions and skip it
                      * immediately by setting the counter register to 1.  This is much
-                     * faster than waiting for the 1M-instruction diagnostic interval. */
+                     * faster than waiting for the 1M-instruction diagnostic interval.
+                     * Advance jiffies_64 directly in guest memory (no timer ISR storm). */
                     static uint64_t s_uDelayRip = 0;  /* learned from slow-path */
                     {
                         static uint64_t s_cNextFastCheck = 0;
@@ -1435,14 +1441,28 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                             int64_t d = (int64_t)(rip - s_uDelayRip);
                             if (d >= -4 && d <= 4)
                             {
-                                /* Advance virtual time by the number of instructions we're skipping.
-                                 * Each loop iteration is 2 instructions (dec + jnz).  This ensures
-                                 * the timer system sees time passing, so timeout loops in hardware
-                                 * init code eventually exit instead of spinning forever. */
+                                /* Directly advance jiffies_64 in guest memory by the number of
+                                 * jiffies the skipped iterations would have consumed.
+                                 * Formula: jiffies = insns_skipped * 100ns / 1,000,000ns_per_jiffie
+                                 *        = remaining * 2 * 100 / 1000000 = remaining / 5000.
+                                 * Skip loops < 5000 iterations → advance 0 jiffies (fine).
+                                 * Cap at 100 jiffies per skip to avoid overshooting. */
                                 uint64_t remaining = pVCpu->cpum.GstCtx.rax;
                                 if (remaining > 1)
-                                    s_cVirtualTimeBoost += remaining * 2;
-                                g_cWasmVirtualInstructions = pVCpu->iem.s.cInstructions + s_cVirtualTimeBoost;
+                                {
+                                    uint64_t jiffies_advance = remaining * 2 * 100 / 1000000;
+                                    if (jiffies_advance > 100) jiffies_advance = 100; /* cap */
+                                    if (jiffies_advance > 0)
+                                    {
+                                        PVMCC pVMJ = pVCpu->CTX_SUFF(pVM);
+                                        uint64_t uJiffies = 0;
+                                        PGMPhysRead(pVMJ, UINT64_C(0x02406980), &uJiffies,
+                                                    sizeof(uJiffies), PGMACCESSORIGIN_DEBUGGER);
+                                        uJiffies += jiffies_advance;
+                                        PGMPhysWrite(pVMJ, UINT64_C(0x02406980), &uJiffies,
+                                                     sizeof(uJiffies), PGMACCESSORIGIN_DEBUGGER);
+                                    }
+                                }
                                 pVCpu->cpum.GstCtx.rax = 1;
                             }
                         }
@@ -2179,11 +2199,10 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
 
                             /* General-purpose kernel-spin accelerator:
                              * When the kernel is stuck in a non-delay, non-CRC loop in kernel
-                             * text range (ffffffff81xxxxxx) with IF=1, boost virtual time to
-                             * trigger timer interrupt delivery and advance jiffies.
-                             * Handles RCU/scheduler/workqueue spin-wait loops not covered by
-                             * the __delay() or CRC32 pattern accelerators.
-                             * Boost: 100M insns ≈ 10s virtual ≈ 181 PIT ticks per boost. */
+                             * text range (ffffffff81xxxxxx) with IF=1, advance jiffies_64
+                             * directly in guest memory.  The timer (now firing every ~25k
+                             * actual insns) will deliver IRQs; this just speeds up jiffies
+                             * advancement for loops that wait for jiffies to change. */
                             if (   s_cSameRip >= 3
                                 && curRip >= UINT64_C(0xffffffff81000000)
                                 && curRip <  UINT64_C(0xffffffff82000000)
@@ -2193,20 +2212,23 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                             {
                                 static uint64_t s_uLastKernSpinRip = 0;
                                 static uint32_t s_cKernSpinBoosts  = 0;
-                                /* Boost on first detection and every 10 intervals thereafter */
+                                /* Advance jiffies on first detection and every 10 intervals */
                                 if (curRip != s_uLastKernSpinRip || (s_cSameRip % 10) == 3)
                                 {
                                     s_uLastKernSpinRip = curRip;
                                     s_cKernSpinBoosts++;
-                                    uint64_t boostAmt = UINT64_C(100000000); /* 100M insns = ~10s virtual */
-                                    s_cVirtualTimeBoost += boostAmt;
-                                    g_cWasmVirtualInstructions = pVCpu->iem.s.cInstructions + s_cVirtualTimeBoost;
-                                    RTPrintf("[KERN-SPIN] boost #%u: RIP=%#llx IF=1 insns=%llu boost+=%llu vtotal=%llu\n",
+                                    /* Advance jiffies by 10 (≈10ms) to unblock spin-wait loops */
+                                    PVMCC pVMJ2 = pVCpu->CTX_SUFF(pVM);
+                                    uint64_t uJ2 = 0;
+                                    PGMPhysRead(pVMJ2, UINT64_C(0x02406980), &uJ2,
+                                                sizeof(uJ2), PGMACCESSORIGIN_DEBUGGER);
+                                    uJ2 += 10;
+                                    PGMPhysWrite(pVMJ2, UINT64_C(0x02406980), &uJ2,
+                                                 sizeof(uJ2), PGMACCESSORIGIN_DEBUGGER);
+                                    RTPrintf("[KERN-SPIN] #%u: RIP=%#llx IF=1 insns=%llu jiffies+=10\n",
                                         s_cKernSpinBoosts,
                                         (unsigned long long)curRip,
-                                        (unsigned long long)pVCpu->iem.s.cInstructions,
-                                        (unsigned long long)boostAmt,
-                                        (unsigned long long)g_cWasmVirtualInstructions);
+                                        (unsigned long long)pVCpu->iem.s.cInstructions);
                                     RTStrmFlush(g_pStdOut);
                                 }
                             }

@@ -1467,41 +1467,6 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                                  fFFs,
                                  (unsigned long long)pVCpu->cpum.GstCtx.rip);
 
-                        /* ── Persistent-IF0 force-enable ──
-                         * Track consecutive diagnostic intervals where IF=0 in kernel VA.
-                         * Normal spinlocks/critical sections hold IF=0 for <<1M insns;
-                         * 5 consecutive 100M-insn intervals (500M insns, ~500ms real time)
-                         * is unambiguously a pathological wait — the kernel is spinning in
-                         * an irq_work / RCU barrier loop that requires IF=1 to make
-                         * progress. Fire at most once per 5 additional intervals after the
-                         * threshold. Not guarded by SAME-RIP so it handles multi-RIP loops.
-                         * Safety: 500M insns is orders of magnitude beyond any legitimate
-                         * critical section, making accidental irq_work reentrancy unlikely. */
-                        {
-                            static int s_cIF0Intervals = 0;
-                            bool fKernelMode = (pVCpu->cpum.GstCtx.msrEFER & MSR_K6_EFER_LMA)
-                                            && pVCpu->cpum.GstCtx.rip > UINT64_C(0xFFFF800000000000);
-                            if (fKernelMode)
-                            {
-                                if (!(pVCpu->cpum.GstCtx.eflags.u & X86_EFL_IF))
-                                    s_cIF0Intervals++;
-                                else
-                                    s_cIF0Intervals = 0;
-
-                                if (s_cIF0Intervals >= 5 && (s_cIF0Intervals % 5) == 0)
-                                {
-                                    static uint32_t s_cPIF0 = 0;
-                                    s_cPIF0++;
-                                    pVCpu->cpum.GstCtx.eflags.u |= X86_EFL_IF;
-                                    RTPrintf("[PERSIST-IF0] #%u: IF=0 for %d intervals (%lluM insns), forcing IF=1 at RIP=%#llx\n",
-                                        s_cPIF0, s_cIF0Intervals,
-                                        (unsigned long long)(g_cWasmVirtualInstructions / 1000000),
-                                        (unsigned long long)pVCpu->cpum.GstCtx.rip);
-                                    RTStrmFlush(g_pStdOut);
-                                }
-                            }
-                        }
-
                         /* ── One-shot E820 / BIOS memory diagnostic ──
                          * Fires once at 5M instructions — by this point the BIOS has
                          * finished POST, programmed CMOS, and set up the IVT (including
@@ -2521,6 +2486,45 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                                 pCtx->rip = uEntry;
                                 /* RSI = boot_params physical address */
                                 pCtx->rsi = uBootParams;
+
+                                /* ── Patch kernel cmdline in boot_params ──
+                                 * Append "mitigations=off notrace" to skip CPU vulnerability
+                                 * mitigation patching (check_bugs → alternative_instructions)
+                                 * and ftrace initialization, both of which stall for 2B+ IEM
+                                 * instructions at ~1M insns/sec (30+ min wall time).
+                                 * boot_params.hdr.cmd_line_ptr is at offset 0x228. */
+                                {
+                                    uint32_t uCmdLinePtr = 0;
+                                    PGMPhysRead(pVM, (RTGCPHYS)(uBootParams + 0x228), &uCmdLinePtr,
+                                                sizeof(uCmdLinePtr), PGMACCESSORIGIN_IEM);
+                                    RTPrintf("[FAST-BOOT-64] cmd_line_ptr=0x%08x\n", uCmdLinePtr);
+                                    if (uCmdLinePtr != 0)
+                                    {
+                                        /* Read existing cmdline (up to 256 bytes) */
+                                        char szCmdLine[512];
+                                        RT_ZERO(szCmdLine);
+                                        PGMPhysRead(pVM, (RTGCPHYS)uCmdLinePtr, szCmdLine, 256,
+                                                    PGMACCESSORIGIN_IEM);
+                                        szCmdLine[255] = '\0';
+                                        size_t cchExisting = strlen(szCmdLine);
+                                        RTPrintf("[FAST-BOOT-64] existing cmdline: '%s'\n", szCmdLine);
+                                        /* Append mitigation disablers */
+                                        static const char szExtra[] = " mitigations=off notrace";
+                                        if (cchExisting + sizeof(szExtra) < sizeof(szCmdLine))
+                                            memcpy(szCmdLine + cchExisting, szExtra, sizeof(szExtra));
+                                        RTPrintf("[FAST-BOOT-64] new cmdline: '%s'\n", szCmdLine);
+                                        RTStrmFlush(g_pStdOut);
+                                        /* Write new cmdline to safe physical address 0x8000 */
+                                        PGMPhysWrite(pVM, (RTGCPHYS)0x8000, szCmdLine,
+                                                     strlen(szCmdLine) + 1, PGMACCESSORIGIN_IEM);
+                                        /* Update cmd_line_ptr in boot_params */
+                                        uint32_t uNewCmdLinePtr = 0x8000;
+                                        PGMPhysWrite(pVM, (RTGCPHYS)(uBootParams + 0x228),
+                                                     &uNewCmdLinePtr, sizeof(uNewCmdLinePtr),
+                                                     PGMACCESSORIGIN_IEM);
+                                    }
+                                }
+
                                 /* Zero other GP regs */
                                 pCtx->rax = 0; pCtx->rbx = 0; pCtx->rcx = 0; pCtx->rdx = 0;
                                 pCtx->rdi = 0; pCtx->rbp = 0;

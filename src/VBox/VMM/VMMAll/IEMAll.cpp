@@ -1548,6 +1548,8 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                                  (unsigned)pVCpu->cpum.GstCtx.idtr.cbIdt,
                                  (unsigned long long)pVCpu->cpum.GstCtx.gdtr.pGdt);
 
+                        RTPrintf("[IEM-DIAG-A] post-IDTR insns=%llu\n",
+                            (unsigned long long)g_cWasmVirtualInstructions);
                         /* Monitor jiffies_64 at physical 0x02406980 (jiffies virtual 0xffffffff82406980).
                          * The Linux 5.4 FossaPup64 kernel stores jiffies_64 here.
                          * If jiffies doesn't advance, timer-wait loops spin forever.

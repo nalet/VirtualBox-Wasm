@@ -7606,21 +7606,41 @@ IEM_CIMPL_DEF_3(iemCImpl_out, uint16_t, u16Port, uint8_t, cbReg, uint8_t, bImmAn
     rcStrict = IOMIOPortWrite(pVM, pVCpu, u16Port, u32Value, cbReg);
 #ifdef __EMSCRIPTEN__
     /* Capture serial port output (COM1 data register at 0x3F8) for kernel console */
-    if (u16Port == 0x3F8 && cbReg == 1)
+    if (u16Port >= 0x3F8 && u16Port <= 0x3FF && cbReg == 1)
     {
         static char s_szSerialBuf[256];
         static unsigned s_iSerialBuf = 0;
-        char ch = (char)(u32Value & 0xFF);
-        if (ch == '\n' || s_iSerialBuf >= sizeof(s_szSerialBuf) - 1)
+        /* Track last-write insn count to detect when UART goes silent */
+        static uint64_t s_cLastUartWrite = 0;
+        static uint64_t s_cUartWrites = 0;
+        static uint8_t  s_bDLAB = 0; /* Divisor Latch Access Bit from LCR */
+        uint8_t bVal = (uint8_t)(u32Value & 0xFF);
+        s_cUartWrites++;
+        /* Track LCR (0x3FB) for DLAB state */
+        if (u16Port == 0x3FB)
+            s_bDLAB = (bVal >> 7) & 1;
+        /* Report UART activity every 100K writes or on long silence */
+        extern uint64_t g_cWasmVirtualInstructions;
+        if (s_cUartWrites % 100000 == 0)
+            RTPrintf("[UART] write #%llu port=0x%03x val=0x%02x DLAB=%d insns=%llu\n",
+                (unsigned long long)s_cUartWrites, u16Port, bVal, s_bDLAB,
+                (unsigned long long)g_cWasmVirtualInstructions);
+        s_cLastUartWrite = g_cWasmVirtualInstructions;
+        /* Data register write at 0x3F8 (only when DLAB=0) */
+        if (u16Port == 0x3F8 && !s_bDLAB)
         {
-            s_szSerialBuf[s_iSerialBuf] = '\0';
-            RTPrintf("[SERIAL] %s\n", s_szSerialBuf);
-            RTStrmFlush(g_pStdOut);
-            s_iSerialBuf = 0;
-        }
-        else if (ch != '\r')
-        {
-            s_szSerialBuf[s_iSerialBuf++] = ch;
+            char ch = (char)bVal;
+            if (ch == '\n' || s_iSerialBuf >= sizeof(s_szSerialBuf) - 1)
+            {
+                s_szSerialBuf[s_iSerialBuf] = '\0';
+                RTPrintf("[SERIAL] %s\n", s_szSerialBuf);
+                RTStrmFlush(g_pStdOut);
+                s_iSerialBuf = 0;
+            }
+            else if (ch != '\r')
+            {
+                s_szSerialBuf[s_iSerialBuf++] = ch;
+            }
         }
     }
 #endif

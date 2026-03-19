@@ -1452,11 +1452,11 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                      * Interval: 1M when exploring, 1B when delay accelerator is active
                      * (to prevent IEM-DIAG from flooding the console and hiding
                      * DELAY-ACCEL stack dumps). */
-                    static uint64_t s_cNextDiag = UINT64_C(100000000); /* 100M insns: diagnose kernel stalls */
+                    static uint64_t s_cNextDiag = UINT64_C(100000000); /* 100M insns: first fire */
                     if (g_cWasmVirtualInstructions >= s_cNextDiag)
                     {
                         s_cNextDiag = g_cWasmVirtualInstructions
-                                    + (s_uDelayRip ? UINT64_C(1000000000) : UINT64_C(100000000));
+                                    + (s_uDelayRip ? UINT64_C(1000000000) : UINT64_C(500000000));
                         uint64_t fFFs = pVCpu->fLocalForcedActions;
                         RTPrintf("[IEM-DIAG] insns=%llu CR2=%#llx CR0=%#llx EFER=%#llx IF=%d FFs=%#RX64 EIP=%#llx\n",
                                  (unsigned long long)g_cWasmVirtualInstructions,

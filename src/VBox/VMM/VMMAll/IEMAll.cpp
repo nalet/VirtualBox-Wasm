@@ -2625,6 +2625,32 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                                     apDataSegs[i]->Attr.u   = 0xC093; /* G=1 D=1 P=1 DPL=0 S=1 data/w/a */
                                 }
 
+                                /* ── Patch kernel cmdline: append mitigations=off notrace ──
+                                 * boot_params is at 0x10000; cmd_line_ptr at +0x228. */
+                                {
+                                    uint32_t uCmdLinePtr32 = 0;
+                                    PGMPhysRead(pVM, (RTGCPHYS)0x10228, &uCmdLinePtr32, sizeof(uCmdLinePtr32), PGMACCESSORIGIN_IEM);
+                                    RTPrintf("[DIRECT-BOOT-CPP] cmd_line_ptr=0x%08x\n", uCmdLinePtr32);
+                                    if (uCmdLinePtr32 != 0)
+                                    {
+                                        char szCmdLine[512];
+                                        RT_ZERO(szCmdLine);
+                                        PGMPhysRead(pVM, (RTGCPHYS)uCmdLinePtr32, szCmdLine, 256, PGMACCESSORIGIN_IEM);
+                                        szCmdLine[255] = '\0';
+                                        size_t cchExisting = strlen(szCmdLine);
+                                        RTPrintf("[DIRECT-BOOT-CPP] existing cmdline: '%s'\n", szCmdLine);
+                                        static const char szExtra[] = " mitigations=off notrace";
+                                        if (cchExisting + sizeof(szExtra) < sizeof(szCmdLine))
+                                            memcpy(szCmdLine + cchExisting, szExtra, sizeof(szExtra));
+                                        RTPrintf("[DIRECT-BOOT-CPP] new cmdline: '%s'\n", szCmdLine);
+                                        RTStrmFlush(g_pStdOut);
+                                        PGMPhysWrite(pVM, (RTGCPHYS)0x8000, szCmdLine,
+                                                     strlen(szCmdLine) + 1, PGMACCESSORIGIN_IEM);
+                                        uint32_t uNewPtr = 0x8000;
+                                        PGMPhysWrite(pVM, (RTGCPHYS)0x10228, &uNewPtr, sizeof(uNewPtr), PGMACCESSORIGIN_IEM);
+                                    }
+                                }
+
                                 /* EIP = code32_start (PM kernel entry point) */
                                 pCtx->rip = uCode32Start;
 

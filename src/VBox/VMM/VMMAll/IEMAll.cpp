@@ -1546,25 +1546,46 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                             uint16_t idtSize = pVCpu->cpum.GstCtx.idtr.cbIdt;
                             if (idtBase != 0 && idtSize > 0x100)
                             {
-                                s_fIfForced = true;
-                                /* Only force IF=1 if it's currently 0 */
-                                if (!(pVCpu->cpum.GstCtx.rflags.u & X86_EFL_IF))
+                                /* IDT structure is valid, but we need to verify that the
+                                 * timer IRQ gate (vector 48 = PIC IRQ0 remapped to 0x30) is
+                                 * also populated (P bit set). Otherwise, forcing IF=1 will
+                                 * cause a #GP when the timer fires before init_8259A installs
+                                 * the handler (which triggers "Attempted to kill idle task" panic).
+                                 * Read 16 bytes of IDT[48] via guest virtual address. */
+                                PVMCC pVMi = pVCpu->CTX_SUFF(pVM);
+                                /* idtBase is a virtual address; translate to physical via PGM */
+                                uint64_t uIdtEntry48[2] = {0, 0};
+                                RTGCPHYS GCPhysIdt48 = 0;
+                                int rcIdtPhys = PGMPhysGCPtr2GCPhys(pVCpu, idtBase + 48*16, &GCPhysIdt48);
+                                bool fGate48Present = false;
+                                if (rcIdtPhys == VINF_SUCCESS)
                                 {
-                                    pVCpu->cpum.GstCtx.rflags.u |= X86_EFL_IF;
-                                    RTPrintf("[IRQ-ENABLE] IDT valid (base=%#llx size=%u) at insns=%llu EIP=%#llx — forcing IF=1\n",
-                                        (unsigned long long)idtBase,
-                                        (unsigned)idtSize,
-                                        (unsigned long long)g_cWasmVirtualInstructions,
-                                        (unsigned long long)pVCpu->cpum.GstCtx.rip);
+                                    PGMPhysSimpleReadGCPhys(pVMi, uIdtEntry48, GCPhysIdt48, sizeof(uIdtEntry48));
+                                    /* P bit = bit 47 of the 128-bit gate = byte 5, bit 7 */
+                                    uint8_t byte5 = (uint8_t)(uIdtEntry48[0] >> 40);
+                                    fGate48Present = !!(byte5 & 0x80);
                                 }
-                                else
+                                if (fGate48Present)
                                 {
-                                    RTPrintf("[IRQ-ENABLE] IDT valid (base=%#llx size=%u) at insns=%llu — IF already=1, no change\n",
-                                        (unsigned long long)idtBase,
-                                        (unsigned)idtSize,
-                                        (unsigned long long)g_cWasmVirtualInstructions);
+                                    s_fIfForced = true;
+                                    /* Only force IF=1 if it's currently 0 */
+                                    if (!(pVCpu->cpum.GstCtx.rflags.u & X86_EFL_IF))
+                                    {
+                                        pVCpu->cpum.GstCtx.rflags.u |= X86_EFL_IF;
+                                        RTPrintf("[IRQ-ENABLE] IDT[48] present, gate=%#llx:%#llx at insns=%llu EIP=%#llx — forcing IF=1\n",
+                                            (unsigned long long)uIdtEntry48[0],
+                                            (unsigned long long)uIdtEntry48[1],
+                                            (unsigned long long)g_cWasmVirtualInstructions,
+                                            (unsigned long long)pVCpu->cpum.GstCtx.rip);
+                                    }
+                                    else
+                                    {
+                                        RTPrintf("[IRQ-ENABLE] IDT[48] present at insns=%llu — IF already=1, no change\n",
+                                            (unsigned long long)g_cWasmVirtualInstructions);
+                                    }
+                                    RTStrmFlush(g_pStdOut);
                                 }
-                                RTStrmFlush(g_pStdOut);
+                                /* else: gate not present yet — keep checking every 2M insns */
                             }
                         }
                     }

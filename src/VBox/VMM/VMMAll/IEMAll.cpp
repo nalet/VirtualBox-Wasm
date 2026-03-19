@@ -1452,6 +1452,30 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                      * Interval: 1M when exploring, 1B when delay accelerator is active
                      * (to prevent IEM-DIAG from flooding the console and hiding
                      * DELAY-ACCEL stack dumps). */
+                    /* One-shot: detect when EIP first enters .init.text (0xffffffff82511000-0x82826000).
+                     * kernel_init_freeable() and do_initcalls() live here. This fires every 1M insns
+                     * in 64-bit kernel mode to catch the transition quickly. */
+                    if ((pVCpu->cpum.GstCtx.msrEFER & MSR_K6_EFER_LMA)
+                        && pVCpu->cpum.GstCtx.cs.Sel == 0x10)
+                    {
+                        static bool    s_fInitTextSeen   = false;
+                        static uint64_t s_cNextInitCheck = UINT64_C(500000000);
+                        if (!s_fInitTextSeen && g_cWasmVirtualInstructions >= s_cNextInitCheck)
+                        {
+                            s_cNextInitCheck = g_cWasmVirtualInstructions + UINT64_C(5000000); /* 5M */
+                            uint64_t rip2 = pVCpu->cpum.GstCtx.rip;
+                            if (rip2 >= UINT64_C(0xffffffff82511000) && rip2 < UINT64_C(0xffffffff82826000))
+                            {
+                                s_fInitTextSeen = true;
+                                RTPrintf("[INIT-TEXT] First .init.text EIP detected at insns=%llu EIP=%#llx RSP=%#llx\n",
+                                    (unsigned long long)g_cWasmVirtualInstructions,
+                                    (unsigned long long)rip2,
+                                    (unsigned long long)pVCpu->cpum.GstCtx.rsp);
+                                RTStrmFlush(g_pStdOut);
+                            }
+                        }
+                    }
+
                     static uint64_t s_cNextDiag = UINT64_C(100000000); /* 100M insns: first fire */
                     if (g_cWasmVirtualInstructions >= s_cNextDiag)
                     {

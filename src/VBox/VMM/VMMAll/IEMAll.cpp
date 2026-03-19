@@ -1452,11 +1452,11 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                      * Interval: 1M when exploring, 1B when delay accelerator is active
                      * (to prevent IEM-DIAG from flooding the console and hiding
                      * DELAY-ACCEL stack dumps). */
-                    static uint64_t s_cNextDiag = UINT64_C(999999999999); /* suppressed — was 1M/10M */
+                    static uint64_t s_cNextDiag = UINT64_C(100000000); /* 100M insns: diagnose kernel stalls */
                     if (g_cWasmVirtualInstructions >= s_cNextDiag)
                     {
                         s_cNextDiag = g_cWasmVirtualInstructions
-                                    + (s_uDelayRip ? UINT64_C(1000000000) : UINT64_C(10000000));
+                                    + (s_uDelayRip ? UINT64_C(1000000000) : UINT64_C(100000000));
                         uint64_t fFFs = pVCpu->fLocalForcedActions;
                         RTPrintf("[IEM-DIAG] insns=%llu CR2=%#llx CR0=%#llx EFER=%#llx IF=%d FFs=%#RX64 EIP=%#llx\n",
                                  (unsigned long long)g_cWasmVirtualInstructions,
@@ -1862,7 +1862,7 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                             }
 
                             /* Log when first detected as stuck */
-                            if (s_cSameRip == 10)
+                            if (s_cSameRip == 3)
                             {
                                 uint8_t abCode[32];
                                 RT_ZERO(abCode);
@@ -1891,7 +1891,7 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                              * code, then sets registers and advances RIP past the loop.
                              * This avoids mid-instruction state issues since the from-scratch
                              * CRC always matches the loop's final result. */
-                            if (s_cSameRip >= 20 && curRip != s_uLastAccelRip)
+                            if (s_cSameRip >= 5 && curRip != s_uLastAccelRip)
                             {
                                 /* Read 32 bytes at the stuck RIP to search for the CRC pattern */
                                 uint8_t abCode[32];
@@ -2108,6 +2108,40 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                                         }
                                         RTStrmFlush(g_pStdOut);
                                     }
+                                }
+                            }
+
+                            /* General-purpose kernel-spin accelerator:
+                             * When the kernel is stuck in a non-delay, non-CRC loop in kernel
+                             * text range (ffffffff81xxxxxx) with IF=1, boost virtual time to
+                             * trigger timer interrupt delivery and advance jiffies.
+                             * Handles RCU/scheduler/workqueue spin-wait loops not covered by
+                             * the __delay() or CRC32 pattern accelerators.
+                             * Boost: 100M insns ≈ 10s virtual ≈ 181 PIT ticks per boost. */
+                            if (   s_cSameRip >= 3
+                                && curRip >= UINT64_C(0xffffffff81000000)
+                                && curRip <  UINT64_C(0xffffffff82000000)
+                                && (pVCpu->cpum.GstCtx.eflags.u & X86_EFL_IF)
+                                && s_uDelayRip == 0   /* delay accel not yet active */
+                                && curRip != s_uLastAccelRip)
+                            {
+                                static uint64_t s_uLastKernSpinRip = 0;
+                                static uint32_t s_cKernSpinBoosts  = 0;
+                                /* Boost on first detection and every 10 intervals thereafter */
+                                if (curRip != s_uLastKernSpinRip || (s_cSameRip % 10) == 3)
+                                {
+                                    s_uLastKernSpinRip = curRip;
+                                    s_cKernSpinBoosts++;
+                                    uint64_t boostAmt = UINT64_C(100000000); /* 100M insns = ~10s virtual */
+                                    s_cVirtualTimeBoost += boostAmt;
+                                    g_cWasmVirtualInstructions = pVCpu->iem.s.cInstructions + s_cVirtualTimeBoost;
+                                    RTPrintf("[KERN-SPIN] boost #%u: RIP=%#llx IF=1 insns=%llu boost+=%llu vtotal=%llu\n",
+                                        s_cKernSpinBoosts,
+                                        (unsigned long long)curRip,
+                                        (unsigned long long)pVCpu->iem.s.cInstructions,
+                                        (unsigned long long)boostAmt,
+                                        (unsigned long long)g_cWasmVirtualInstructions);
+                                    RTStrmFlush(g_pStdOut);
                                 }
                             }
                         }

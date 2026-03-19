@@ -1680,6 +1680,56 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                             }
                         }
 
+                        /* ── Periodic STUCK-2B diagnostic ──
+                         * Fires every 500M insns starting at 2B, while in 64-bit mode.
+                         * Dumps RSP, 32 stack words, and RBP frame chain to identify
+                         * what function the kernel is stuck in after SSB message. */
+                        {
+                            static uint64_t s_cStuck2BNext = UINT64_C(2000000000);
+                            if (g_cWasmVirtualInstructions >= s_cStuck2BNext
+                                && (pVCpu->cpum.GstCtx.msrEFER & MSR_K6_EFER_LMA))
+                            {
+                                s_cStuck2BNext += UINT64_C(500000000);
+                                uint64_t rsp = pVCpu->cpum.GstCtx.rsp;
+                                uint64_t rbp = pVCpu->cpum.GstCtx.rbp;
+                                uint64_t rip = pVCpu->cpum.GstCtx.rip;
+                                int      fIF = !!(pVCpu->cpum.GstCtx.rflags.u & X86_EFL_IF);
+                                RTPrintf("[STUCK-2B] insns=%llu RIP=%#llx RSP=%#llx RBP=%#llx IF=%d\n",
+                                    (unsigned long long)g_cWasmVirtualInstructions,
+                                    (unsigned long long)rip,
+                                    (unsigned long long)rsp,
+                                    (unsigned long long)rbp,
+                                    fIF);
+                                /* Dump 32 words from stack */
+                                if (rsp > UINT64_C(0xffff888000000000))
+                                {
+                                    uint64_t aStk[32];
+                                    RT_ZERO(aStk);
+                                    PVMCC pVMs = pVCpu->CTX_SUFF(pVM);
+                                    PGMPhysSimpleReadGCPtr(pVCpu, aStk, rsp, sizeof(aStk));
+                                    for (int si = 0; si < 32; si += 4)
+                                        RTPrintf("[STUCK-2B]  stk+%03u: %#llx %#llx %#llx %#llx\n",
+                                            (unsigned)(si * 8),
+                                            (unsigned long long)aStk[si],   (unsigned long long)aStk[si+1],
+                                            (unsigned long long)aStk[si+2], (unsigned long long)aStk[si+3]);
+                                    /* Walk RBP frame chain — up to 12 frames */
+                                    RTPrintf("[STUCK-2B]  RBP chain:");
+                                    uint64_t fp = rbp;
+                                    for (int fi = 0; fi < 12 && fp > UINT64_C(0xffff888000000000); fi++)
+                                    {
+                                        uint64_t frame[2] = {0, 0}; /* [saved_rbp, ret_addr] */
+                                        int rcF = PGMPhysSimpleReadGCPtr(pVCpu, frame, fp, sizeof(frame));
+                                        if (RT_FAILURE(rcF)) break;
+                                        RTPrintf(" %#llx", (unsigned long long)frame[1]);
+                                        fp = frame[0];
+                                    }
+                                    RTPrintf("\n");
+                                    (void)pVMs;
+                                }
+                                RTStrmFlush(g_pStdOut);
+                            }
+                        }
+
                         /* ── One-shot E820 / BIOS memory diagnostic ──
                          * Fires once at 5M instructions — by this point the BIOS has
                          * finished POST, programmed CMOS, and set up the IVT (including

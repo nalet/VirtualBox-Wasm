@@ -2726,36 +2726,6 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                                  s_uLastCS, (unsigned long long)pVCpu->cpum.GstCtx.rip,
                                  (unsigned long long)pVCpu->cpum.GstCtx.cr0);
 
-                        /* ── Patch kernel cmdline at boot-detect time ──
-                         * boot_params is at 0x10000 (set by ISOLINUX/bootloader).
-                         * cmd_line_ptr is at boot_params+0x228 = 0x10228.
-                         * Append mitigations=off notrace to skip:
-                         *   1. alternative_instructions() CPU mitigation patching (~500M insns)
-                         *   2. ftrace init (another potential stall)
-                         * Must patch before the kernel reads it in early_param processing. */
-                        if (pVCpu->cpum.GstCtx.cr2 == UINT64_C(0xC0DEBA5E))
-                        {
-                            uint32_t uCmdLinePtr = 0;
-                            PGMPhysRead(pVM, (RTGCPHYS)0x10228, &uCmdLinePtr, sizeof(uCmdLinePtr), PGMACCESSORIGIN_IEM);
-                            RTPrintf("[DBOOT] cmd_line_ptr=0x%08x\n", uCmdLinePtr);
-                            if (uCmdLinePtr != 0)
-                            {
-                                char szCmdLine[512];
-                                RT_ZERO(szCmdLine);
-                                PGMPhysRead(pVM, (RTGCPHYS)uCmdLinePtr, szCmdLine, 256, PGMACCESSORIGIN_IEM);
-                                szCmdLine[255] = '\0';
-                                size_t cchExisting = strlen(szCmdLine);
-                                RTPrintf("[DBOOT] existing cmdline: '%s'\n", szCmdLine);
-                                static const char szExtra[] = " mitigations=off notrace";
-                                if (cchExisting + sizeof(szExtra) < sizeof(szCmdLine))
-                                    memcpy(szCmdLine + cchExisting, szExtra, sizeof(szExtra));
-                                RTPrintf("[DBOOT] new cmdline: '%s'\n", szCmdLine);
-                                PGMPhysWrite(pVM, (RTGCPHYS)0x8000, szCmdLine,
-                                             strlen(szCmdLine) + 1, PGMACCESSORIGIN_IEM);
-                                uint32_t uNewPtr = 0x8000;
-                                PGMPhysWrite(pVM, (RTGCPHYS)0x10228, &uNewPtr, sizeof(uNewPtr), PGMACCESSORIGIN_IEM);
-                            }
-                        }
                         RTStrmFlush(g_pStdOut);
                     }
                     if (s_fBootActive)

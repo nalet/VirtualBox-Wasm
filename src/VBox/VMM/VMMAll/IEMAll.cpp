@@ -1684,6 +1684,8 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                          * Fires every 500M insns starting at 2B, while in 64-bit mode.
                          * Dumps RSP, 32 stack words, and RBP frame chain to identify
                          * what function the kernel is stuck in after SSB message. */
+                        RTPrintf("[STUCK-2B-REACH] code reached insns=%llu\n",
+                            (unsigned long long)g_cWasmVirtualInstructions);
                         {
                             static uint64_t s_cStuck2BNext = UINT64_C(2000000000);
                             if (g_cWasmVirtualInstructions >= s_cStuck2BNext

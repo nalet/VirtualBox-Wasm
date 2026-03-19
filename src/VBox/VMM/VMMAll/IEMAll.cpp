@@ -1527,68 +1527,6 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                         }
                     }
 
-                    /* ── IDT-based IF=1 enforcer ──
-                     * The kernel enters with IF=0 (FAST-BOOT-CPP sets rflags = X86_EFL_1).
-                     * The calibrate_delay() busy-wait loop at 0x810836d0 spins on jiffies_64,
-                     * which only advances via timer IRQs, which require IF=1.
-                     * Root fix: once the kernel loads its own IDT (via lidt in trap_init),
-                     * we know exception handlers are in place, so forcing IF=1 is safe.
-                     * Check every 2M instructions from 500M onwards to catch it quickly. */
-                    if ((pVCpu->cpum.GstCtx.msrEFER & MSR_K6_EFER_LMA)
-                        && pVCpu->cpum.GstCtx.cs.Sel == 0x10)
-                    {
-                        static bool     s_fIfForced       = false;
-                        static uint64_t s_cNextIdtCheck   = UINT64_C(10000000); /* 10M: catch IDT setup early */
-                        if (!s_fIfForced && g_cWasmVirtualInstructions >= s_cNextIdtCheck)
-                        {
-                            s_cNextIdtCheck = g_cWasmVirtualInstructions + UINT64_C(2000000); /* 2M */
-                            uint64_t idtBase = pVCpu->cpum.GstCtx.idtr.pIdt;
-                            uint16_t idtSize = pVCpu->cpum.GstCtx.idtr.cbIdt;
-                            if (idtBase != 0 && idtSize > 0x100)
-                            {
-                                /* IDT structure is valid, but we need to verify that the
-                                 * timer IRQ gate (vector 48 = PIC IRQ0 remapped to 0x30) is
-                                 * also populated (P bit set). Otherwise, forcing IF=1 will
-                                 * cause a #GP when the timer fires before init_8259A installs
-                                 * the handler (which triggers "Attempted to kill idle task" panic).
-                                 * Read 16 bytes of IDT[48] via guest virtual address. */
-                                PVMCC pVMi = pVCpu->CTX_SUFF(pVM);
-                                /* idtBase is a virtual address; translate to physical via PGM */
-                                uint64_t uIdtEntry48[2] = {0, 0};
-                                RTGCPHYS GCPhysIdt48 = 0;
-                                int rcIdtPhys = PGMPhysGCPtr2GCPhys(pVCpu, idtBase + 48*16, &GCPhysIdt48);
-                                bool fGate48Present = false;
-                                if (rcIdtPhys == VINF_SUCCESS)
-                                {
-                                    PGMPhysSimpleReadGCPhys(pVMi, uIdtEntry48, GCPhysIdt48, sizeof(uIdtEntry48));
-                                    /* P bit = bit 47 of the 128-bit gate = byte 5, bit 7 */
-                                    uint8_t byte5 = (uint8_t)(uIdtEntry48[0] >> 40);
-                                    fGate48Present = !!(byte5 & 0x80);
-                                }
-                                if (fGate48Present)
-                                {
-                                    s_fIfForced = true;
-                                    /* Only force IF=1 if it's currently 0 */
-                                    if (!(pVCpu->cpum.GstCtx.rflags.u & X86_EFL_IF))
-                                    {
-                                        pVCpu->cpum.GstCtx.rflags.u |= X86_EFL_IF;
-                                        RTPrintf("[IRQ-ENABLE] IDT[48] present, gate=%#llx:%#llx at insns=%llu EIP=%#llx — forcing IF=1\n",
-                                            (unsigned long long)uIdtEntry48[0],
-                                            (unsigned long long)uIdtEntry48[1],
-                                            (unsigned long long)g_cWasmVirtualInstructions,
-                                            (unsigned long long)pVCpu->cpum.GstCtx.rip);
-                                    }
-                                    else
-                                    {
-                                        RTPrintf("[IRQ-ENABLE] IDT[48] present at insns=%llu — IF already=1, no change\n",
-                                            (unsigned long long)g_cWasmVirtualInstructions);
-                                    }
-                                    RTStrmFlush(g_pStdOut);
-                                }
-                                /* else: gate not present yet — keep checking every 2M insns */
-                            }
-                        }
-                    }
 
                     static uint64_t s_cNextDiag = UINT64_C(100000000); /* 100M insns: first fire */
                     if (g_cWasmVirtualInstructions >= s_cNextDiag)

@@ -145,6 +145,54 @@ function setHighRAM(ptr, size) {
   highRamEnd = 0x100000 + size;
   console.log('[JIT] High RAM set: ptr=0x' + ptr.toString(16) +
     ' size=' + (size >> 20) + 'MB range=0x100000-0x' + highRamEnd.toString(16));
+  startJiffiesWatchdog();
+}
+
+// ── Jiffies watchdog ──
+// The Linux 5.4 kernel stores jiffies_64 at GPA 0x02406980 (high RAM offset 0x02306980).
+// Several .init.text calibration loops spin-wait for jiffies to advance.
+// The deployed WASM uses PGMPhysSimpleReadGCPtr for the C++ monitor which silently
+// fails when page-table walks are unavailable, so this JS watchdog writes directly
+// to the Wasm linear memory backing guest RAM.
+let _jiffiesWatchdog = null;
+function startJiffiesWatchdog() {
+  if (_jiffiesWatchdog) return;
+  const JIFFIES_OFFSET = 0x02306980; // GPA 0x02406980 - 0x100000
+  let lastJiffiesLo = -1, lastJiffiesHi = -1;
+  let stuckIntervals = 0;
+  _jiffiesWatchdog = setInterval(function() {
+    if (!highRamPtr || !mem8) return;
+    refreshViews();
+    const base = highRamPtr + JIFFIES_OFFSET;
+    const lo = (mem8[base] | (mem8[base+1]<<8) | (mem8[base+2]<<16) | (mem8[base+3]<<24)) >>> 0;
+    const hi = (mem8[base+4] | (mem8[base+5]<<8) | (mem8[base+6]<<16) | (mem8[base+7]<<24)) >>> 0;
+    if (lo === lastJiffiesLo && hi === lastJiffiesHi) {
+      stuckIntervals++;
+      if (stuckIntervals >= 3) {
+        // Force jiffies_64 += 1
+        let newLo = (lo + 1) >>> 0;
+        let newHi = (newLo === 0) ? ((hi + 1) >>> 0) : hi;
+        mem8[base]   =  newLo        & 0xFF;
+        mem8[base+1] = (newLo >>  8) & 0xFF;
+        mem8[base+2] = (newLo >> 16) & 0xFF;
+        mem8[base+3] = (newLo >> 24) & 0xFF;
+        mem8[base+4] =  newHi        & 0xFF;
+        mem8[base+5] = (newHi >>  8) & 0xFF;
+        mem8[base+6] = (newHi >> 16) & 0xFF;
+        mem8[base+7] = (newHi >> 24) & 0xFF;
+        console.log('[JS-JIFFIES] stuck ' + stuckIntervals + ' intervals, forced 0x' +
+          hi.toString(16) + ('00000000' + lo.toString(16)).slice(-8) + ' -> 0x' +
+          newHi.toString(16) + ('00000000' + newLo.toString(16)).slice(-8));
+        lastJiffiesLo = newLo;
+        lastJiffiesHi = newHi;
+        stuckIntervals = 0;
+      }
+    } else {
+      lastJiffiesLo = lo;
+      lastJiffiesHi = hi;
+      stuckIntervals = 0;
+    }
+  }, 200); // check every 200ms
 }
 
 // ── Gzip/DEFLATE decompressor for fast kernel boot ──

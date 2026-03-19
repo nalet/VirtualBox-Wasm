@@ -245,13 +245,17 @@ DECLINLINE(uint64_t) tmVirtualGetRawNanoTS(PVMCC pVM)
 #ifdef __EMSCRIPTEN__
     /* Under Emscripten, RTTimeSystemNanoTS() doesn't advance during synchronous
      * Wasm execution in worker threads.  Drive virtual time from the IEM
-     * instruction counter instead: 1000 ns per instruction ≈ 1 MHz effective
-     * instruction throughput from the timer's perspective.  This makes virtual
-     * time advance ~10x faster than before, so the PIT (IRQ0) fires ~10x more
-     * frequently in wall-clock terms and the kernel's jiffies counter advances
-     * quickly enough to avoid boot stalls. */
+     * instruction counter instead.
+     *
+     * Scale factor 100 ns/insn (was 1000 ns/insn): at HZ=1000 the PIT fires
+     * every 1 ms = 10,000 virtual instructions ≈ 25,000 actual IEM insns.
+     * The previous 1000 ns/insn caused the timer ISR (~4000 insns) to fire
+     * every ~2558 insns, monopolising the CPU and preventing kernel_init from
+     * ever being scheduled (permanent interrupt storm).  Reducing to 100 ns/insn
+     * gives ~84% CPU time to kernel threads while still advancing jiffies fast
+     * enough to avoid calibration-loop stalls. */
     extern volatile uint64_t g_cWasmVirtualInstructions;
-    uint64_t u64 = g_cWasmVirtualInstructions * 1000; /* 1000 ns per instruction */
+    uint64_t u64 = g_cWasmVirtualInstructions * 100; /* 100 ns per instruction */
     RT_NOREF(pVM);
 #elif defined(IN_RING3)
     uint64_t u64 = pVM->tm.s.pfnVirtualGetRaw(&pVM->tm.s.VirtualGetRawData, NULL /*pExtra*/);
@@ -275,9 +279,9 @@ DECLINLINE(uint64_t) tmVirtualGetRawNanoTSEx(PVMCC pVM, uint64_t *puTscNow)
 {
 #ifdef __EMSCRIPTEN__
     extern volatile uint64_t g_cWasmVirtualInstructions;
-    uint64_t u64 = g_cWasmVirtualInstructions * 1000;
+    uint64_t u64 = g_cWasmVirtualInstructions * 100;
     if (puTscNow)
-        *puTscNow = g_cWasmVirtualInstructions * 1000; /* match RDTSC */
+        *puTscNow = g_cWasmVirtualInstructions * 100; /* match RDTSC */
     RT_NOREF(pVM);
 #else
     RTITMENANOTSEXTRA Extra;

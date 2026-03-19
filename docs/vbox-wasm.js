@@ -212,7 +212,8 @@ globalThis.VBoxJIT = (function() {
   let _jiffiesWatchdog = null;
   function startJiffiesWatchdog() {
     if (_jiffiesWatchdog) return;
-    const JIFFIES_OFFSET = 0x02306980; // GPA 0x02406980 - 0x100000
+    const JIFFIES_OFFSET = 36727168;
+    // GPA 0x02406980 - 0x100000
     let lastJiffiesLo = -1, lastJiffiesHi = -1;
     let stuckIntervals = 0;
     _jiffiesWatchdog = setInterval(function() {
@@ -222,26 +223,26 @@ globalThis.VBoxJIT = (function() {
       // Read it from the shared location written by execBlockWrapped (ramBase+28688 = GPA 0x7010).
       let hrp = highRamPtr;
       if (!hrp && ramBase) {
-        hrp = (mem8[ramBase+28688] | (mem8[ramBase+28689]<<8) | (mem8[ramBase+28690]<<16) | (mem8[ramBase+28691]<<24)) >>> 0;
+        hrp = (mem8[ramBase + 28688] | (mem8[ramBase + 28689] << 8) | (mem8[ramBase + 28690] << 16) | (mem8[ramBase + 28691] << 24)) >>> 0;
       }
       if (!hrp) return;
       const base = hrp + JIFFIES_OFFSET;
-      const lo = (mem8[base] | (mem8[base+1]<<8) | (mem8[base+2]<<16) | (mem8[base+3]<<24)) >>> 0;
-      const hi = (mem8[base+4] | (mem8[base+5]<<8) | (mem8[base+6]<<16) | (mem8[base+7]<<24)) >>> 0;
+      const lo = (mem8[base] | (mem8[base + 1] << 8) | (mem8[base + 2] << 16) | (mem8[base + 3] << 24)) >>> 0;
+      const hi = (mem8[base + 4] | (mem8[base + 5] << 8) | (mem8[base + 6] << 16) | (mem8[base + 7] << 24)) >>> 0;
       if (lo === lastJiffiesLo && hi === lastJiffiesHi) {
         stuckIntervals++;
         if (stuckIntervals >= 3) {
           // Force jiffies_64 += 1
           let newLo = (lo + 1) >>> 0;
           let newHi = (newLo === 0) ? ((hi + 1) >>> 0) : hi;
-          mem8[base]   =  newLo        & 0xFF;
-          mem8[base+1] = (newLo >>  8) & 0xFF;
-          mem8[base+2] = (newLo >> 16) & 0xFF;
-          mem8[base+3] = (newLo >> 24) & 0xFF;
-          mem8[base+4] =  newHi        & 0xFF;
-          mem8[base+5] = (newHi >>  8) & 0xFF;
-          mem8[base+6] = (newHi >> 16) & 0xFF;
-          mem8[base+7] = (newHi >> 24) & 0xFF;
+          mem8[base] = newLo & 255;
+          mem8[base + 1] = (newLo >> 8) & 255;
+          mem8[base + 2] = (newLo >> 16) & 255;
+          mem8[base + 3] = (newLo >> 24) & 255;
+          mem8[base + 4] = newHi & 255;
+          mem8[base + 5] = (newHi >> 8) & 255;
+          mem8[base + 6] = (newHi >> 16) & 255;
+          mem8[base + 7] = (newHi >> 24) & 255;
           console.log("[JS-JIFFIES] stuck " + stuckIntervals + " intervals, forced 0x" + hi.toString(16) + ("00000000" + lo.toString(16)).slice(-8) + " -> 0x" + newHi.toString(16) + ("00000000" + newLo.toString(16)).slice(-8));
           lastJiffiesLo = newLo;
           lastJiffiesHi = newHi;
@@ -252,7 +253,7 @@ globalThis.VBoxJIT = (function() {
         lastJiffiesHi = hi;
         stuckIntervals = 0;
       }
-    }, 200); // check every 200ms
+    }, 200);
   }
   // ── Gzip/DEFLATE decompressor for fast kernel boot ──
   // Decompresses bzImage kernel payload in JavaScript, skipping the 20-minute
@@ -1475,7 +1476,7 @@ globalThis.VBoxJIT = (function() {
           // code32_start
           writeDword(setupBase + 532, 1048576);
           // Command line
-          const cmdline = "pmedia=cd BOOT_IMAGE=/vmlinuz console=ttyS0,115200 earlyprintk=serial,ttyS0,115200 loglevel=7 idle=halt notsc clocksource=jiffies acpi=off nopti nospectre_v1 nospectre_v2 pci=lastbus=0 raid=noautodetect mitigations=off notrace";
+          const cmdline = "pmedia=cd BOOT_IMAGE=/vmlinuz console=ttyS0,115200 earlyprintk=serial,ttyS0,115200 loglevel=8 idle=halt notsc clocksource=jiffies acpi=off nopti nospectre_v1 nospectre_v2 pci=lastbus=0 raid=noautodetect mitigations=off notrace";
           for (let i = 0; i < cmdline.length; i++) mem8[ramBase + 626688 + i] = cmdline.charCodeAt(i);
           mem8[ramBase + 626688 + cmdline.length] = 0;
           writeDword(setupBase + 552, 626688);
@@ -5481,7 +5482,7 @@ globalThis.VBoxJIT = (function() {
                 // Copy initrd to end of RAM
                 mem8.set(mem8.subarray(stageBase + vmlinuzLen, stageBase + vmlinuzLen + initrdLen), highRamPtr + (INITRD_GPA - 1048576));
                 // Write kernel command line at guest 0x20000
-                const cmdline = "console=ttyS0,115200 earlyprintk=serial,ttyS0,115200 loglevel=7 lpj=5000 auto idle=halt notsc clocksource=jiffies acpi=off\0";
+                const cmdline = "console=ttyS0,115200 earlyprintk=serial,ttyS0,115200 loglevel=8 lpj=5000 auto idle=halt notsc clocksource=jiffies acpi=off\0";
                 for (let ci = 0; ci < cmdline.length; ci++) mem8[ramBase + CMDLINE_GPA + ci] = cmdline.charCodeAt(ci);
                 // Set boot params in setup header
                 const bp = ramBase + SETUP_GPA;
@@ -6044,7 +6045,7 @@ globalThis.VBoxJIT = (function() {
             // Check if initrd was loaded (typically at ~0x1000000 for 32MB systems)
             // For now, we rely on the kernel finding it via initrd= cmdline or embedded
             // Command line
-            const cmdline = "pmedia=cd BOOT_IMAGE=/vmlinuz console=ttyS0,115200 earlyprintk=serial,ttyS0,115200 loglevel=7 idle=halt notsc clocksource=jiffies acpi=off nopti nospectre_v1 nospectre_v2 pci=lastbus=0 raid=noautodetect mitigations=off notrace";
+            const cmdline = "pmedia=cd BOOT_IMAGE=/vmlinuz console=ttyS0,115200 earlyprintk=serial,ttyS0,115200 loglevel=8 idle=halt notsc clocksource=jiffies acpi=off nopti nospectre_v1 nospectre_v2 pci=lastbus=0 raid=noautodetect mitigations=off notrace";
             for (let ci = 0; ci < cmdline.length; ci++) mem8[rb + 626688 + ci] = cmdline.charCodeAt(ci);
             mem8[rb + 626688 + cmdline.length] = 0;
             writeDword(setupBase + 552, 626688);

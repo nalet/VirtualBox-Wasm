@@ -1467,6 +1467,41 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                                  fFFs,
                                  (unsigned long long)pVCpu->cpum.GstCtx.rip);
 
+                        /* ── Persistent-IF0 force-enable ──
+                         * Track consecutive diagnostic intervals where IF=0 in kernel VA.
+                         * Normal spinlocks/critical sections hold IF=0 for <<1M insns;
+                         * 5 consecutive 100M-insn intervals (500M insns, ~500ms real time)
+                         * is unambiguously a pathological wait — the kernel is spinning in
+                         * an irq_work / RCU barrier loop that requires IF=1 to make
+                         * progress. Fire at most once per 5 additional intervals after the
+                         * threshold. Not guarded by SAME-RIP so it handles multi-RIP loops.
+                         * Safety: 500M insns is orders of magnitude beyond any legitimate
+                         * critical section, making accidental irq_work reentrancy unlikely. */
+                        {
+                            static int s_cIF0Intervals = 0;
+                            bool fKernelMode = (pVCpu->cpum.GstCtx.msrEFER & MSR_K6_EFER_LMA)
+                                            && pVCpu->cpum.GstCtx.rip > UINT64_C(0xFFFF800000000000);
+                            if (fKernelMode)
+                            {
+                                if (!(pVCpu->cpum.GstCtx.eflags.u & X86_EFL_IF))
+                                    s_cIF0Intervals++;
+                                else
+                                    s_cIF0Intervals = 0;
+
+                                if (s_cIF0Intervals >= 5 && (s_cIF0Intervals % 5) == 0)
+                                {
+                                    static uint32_t s_cPIF0 = 0;
+                                    s_cPIF0++;
+                                    pVCpu->cpum.GstCtx.eflags.u |= X86_EFL_IF;
+                                    RTPrintf("[PERSIST-IF0] #%u: IF=0 for %d intervals (%lluM insns), forcing IF=1 at RIP=%#llx\n",
+                                        s_cPIF0, s_cIF0Intervals,
+                                        (unsigned long long)(g_cWasmVirtualInstructions / 1000000),
+                                        (unsigned long long)pVCpu->cpum.GstCtx.rip);
+                                    RTStrmFlush(g_pStdOut);
+                                }
+                            }
+                        }
+
                         /* ── One-shot E820 / BIOS memory diagnostic ──
                          * Fires once at 5M instructions — by this point the BIOS has
                          * finished POST, programmed CMOS, and set up the IVT (including

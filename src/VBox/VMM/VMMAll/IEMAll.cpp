@@ -1603,54 +1603,233 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                         }
                     }
 
-                    /* ── FORCE-COMPLETE: at 2B insns, if still singleton, scan registers
-                     * for completion pointer and force done=1 to break deadlock.
-                     * A completion struct has done (u32) at offset 0. We look for a
-                     * register pointing to the stack that has done=0. */
+                    /* ── FORCE-COMPLETE v2: at 2B insns, if still singleton, scan
+                     * the kernel stack for a wait_queue_entry whose .private field
+                     * == init_task (0xffffffff824114c0).  From that entry's list_head
+                     * we derive the completion address and write done=1.
+                     *
+                     * Linux 5.4 wait_queue_entry layout (x86-64):
+                     *   +0  flags    (u32)
+                     *   +4  pad
+                     *   +8  private  (ptr) = current task_struct
+                     *  +16  func     (ptr) = wake function
+                     *  +24  entry.next (ptr) → completion.wait.head
+                     *  +32  entry.prev (ptr) → completion.wait.head
+                     *
+                     * completion = entry.next - 16   (wait.head is at +16 in completion)
+                     * completion.done is u32 at offset 0.
+                     */
                     {
                         static bool s_fForced = false;
                         if (!s_fForced
                             && (pVCpu->cpum.GstCtx.msrEFER & MSR_K6_EFER_LMA)
                             && g_cWasmVirtualInstructions >= UINT64_C(2000000000))
                         {
-                            /* Check if tasks still singleton */
                             PVMCC pVMfc = pVCpu->CTX_SUFF(pVM);
                             uint64_t uTNfc = 0;
                             PGMPhysSimpleReadGCPhys(pVMfc, &uTNfc,
                                 (RTGCPHYS)UINT64_C(0x24117d0), 8);
                             if (uTNfc == UINT64_C(0xffffffff824117d0))
                             {
-                                s_fForced = true;
-                                /* Try each callee-saved register as a possible completion ptr */
-                                uint64_t regs[] = {
-                                    pVCpu->cpum.GstCtx.rbx,
-                                    pVCpu->cpum.GstCtx.r12,
-                                    pVCpu->cpum.GstCtx.r13,
-                                    pVCpu->cpum.GstCtx.r14,
-                                    pVCpu->cpum.GstCtx.r15,
-                                };
-                                const char *rnames[] = {"RBX","R12","R13","R14","R15"};
-                                for (unsigned _r = 0; _r < 5; _r++)
+                                uint64_t uRsp = pVCpu->cpum.GstCtx.rsp;
+                                uint64_t uRbp = pVCpu->cpum.GstCtx.rbp;
+                                RTPrintf("[FC2] 2B singleton RIP=%#llx RSP=%#llx RBP=%#llx\n",
+                                    (unsigned long long)pVCpu->cpum.GstCtx.rip,
+                                    (unsigned long long)uRsp,
+                                    (unsigned long long)uRbp);
+                                RTPrintf("[FC2] RAX=%#llx RBX=%#llx RCX=%#llx RDX=%#llx\n",
+                                    (unsigned long long)pVCpu->cpum.GstCtx.rax,
+                                    (unsigned long long)pVCpu->cpum.GstCtx.rbx,
+                                    (unsigned long long)pVCpu->cpum.GstCtx.rcx,
+                                    (unsigned long long)pVCpu->cpum.GstCtx.rdx);
+                                RTPrintf("[FC2] RSI=%#llx RDI=%#llx R8=%#llx R9=%#llx\n",
+                                    (unsigned long long)pVCpu->cpum.GstCtx.rsi,
+                                    (unsigned long long)pVCpu->cpum.GstCtx.rdi,
+                                    (unsigned long long)pVCpu->cpum.GstCtx.r8,
+                                    (unsigned long long)pVCpu->cpum.GstCtx.r9);
+                                RTPrintf("[FC2] R10=%#llx R11=%#llx R12=%#llx R13=%#llx R14=%#llx R15=%#llx\n",
+                                    (unsigned long long)pVCpu->cpum.GstCtx.r10,
+                                    (unsigned long long)pVCpu->cpum.GstCtx.r11,
+                                    (unsigned long long)pVCpu->cpum.GstCtx.r12,
+                                    (unsigned long long)pVCpu->cpum.GstCtx.r13,
+                                    (unsigned long long)pVCpu->cpum.GstCtx.r14,
+                                    (unsigned long long)pVCpu->cpum.GstCtx.r15);
+
+                                /* Walk RBP chain to show full call trace */
+                                uint64_t rbpW = uRbp;
+                                for (int d = 0; d < 20 && rbpW >= UINT64_C(0xffff800000000000); d++)
                                 {
-                                    uint64_t rval = regs[_r];
-                                    /* Check if it points to kernel stack or init data */
-                                    if ((rval >= UINT64_C(0xffff888000000000) && rval < UINT64_C(0xffff889000000000))
-                                        || (rval >= UINT64_C(0xffffffff82000000) && rval < UINT64_C(0xffffffff83000000)))
+                                    uint64_t fr[2] = {0, 0};
+                                    int rcR = PGMPhysSimpleReadGCPtr(pVCpu, fr, (RTGCPTR)rbpW, 16);
+                                    if (RT_FAILURE(rcR))
                                     {
-                                        /* Read first 4 bytes (done field) */
+                                        RTPrintf("[FC2] RBP walk failed at %#llx rc=%d\n",
+                                            (unsigned long long)rbpW, rcR);
+                                        break;
+                                    }
+                                    RTPrintf("[FC2] FRAME#%d rbp=%#llx saved=%#llx ret=%#llx\n",
+                                        d, (unsigned long long)rbpW,
+                                        (unsigned long long)fr[0], (unsigned long long)fr[1]);
+                                    if (fr[0] == 0 || fr[0] <= rbpW)
+                                        break;
+                                    rbpW = fr[0];
+                                }
+
+                                /* ── Scan 4KB from RSP for init_task address ── */
+                                uint8_t stkBuf[4096];
+                                __builtin_memset(stkBuf, 0, sizeof(stkBuf));
+                                int rcStk = PGMPhysSimpleReadGCPtr(pVCpu, stkBuf,
+                                    (RTGCPTR)uRsp, 4096);
+                                if (RT_FAILURE(rcStk))
+                                    rcStk = PGMPhysSimpleReadGCPtr(pVCpu, stkBuf,
+                                        (RTGCPTR)uRsp, 2048);
+                                RTPrintf("[FC2] stack read rc=%d\n", rcStk);
+
+                                const uint64_t kInitTask = UINT64_C(0xffffffff824114c0);
+                                bool fFound = false;
+
+                                /* Method 1: find wait_queue_entry.private == init_task */
+                                for (unsigned soff = 0; soff + 40 <= 4096; soff += 8)
+                                {
+                                    uint64_t v;
+                                    __builtin_memcpy(&v, &stkBuf[soff], 8);
+                                    if (v != kInitTask)
+                                        continue;
+
+                                    /* Found init_task at RSP+soff.
+                                     * If this is wait_queue_entry.private (+8),
+                                     * then: func at soff+8, entry.next at soff+16,
+                                     *        entry.prev at soff+24. */
+                                    uint64_t func = 0, eNext = 0, ePrev = 0;
+                                    __builtin_memcpy(&func,  &stkBuf[soff + 8],  8);
+                                    __builtin_memcpy(&eNext, &stkBuf[soff + 16], 8);
+                                    __builtin_memcpy(&ePrev, &stkBuf[soff + 24], 8);
+
+                                    RTPrintf("[FC2] init_task@RSP+%u func=%#llx "
+                                             "next=%#llx prev=%#llx\n",
+                                        soff, (unsigned long long)func,
+                                        (unsigned long long)eNext,
+                                        (unsigned long long)ePrev);
+
+                                    /* Validate: func is kernel .text, eNext is kernel addr */
+                                    if (func >= UINT64_C(0xffffffff81000000)
+                                        && func <  UINT64_C(0xffffffff83000000)
+                                        && eNext >= UINT64_C(0xffff800000000000))
+                                    {
+                                        /* completion = entry.next - 16
+                                         * (list_head is at offset 16 in struct completion) */
+                                        uint64_t compAddr = eNext - 16;
                                         uint32_t uDone = 0xDEAD;
-                                        PGMPhysSimpleReadGCPtr(pVCpu, &uDone, (RTGCPTR)rval, 4);
-                                        RTPrintf("[FORCE-COMPLETE] %s=%#llx → done=%u\n",
-                                            rnames[_r], (unsigned long long)rval, (unsigned)uDone);
+                                        PGMPhysSimpleReadGCPtr(pVCpu, &uDone,
+                                            (RTGCPTR)compAddr, 4);
+                                        RTPrintf("[FC2] completion@%#llx done=%u\n",
+                                            (unsigned long long)compAddr, (unsigned)uDone);
                                         if (uDone == 0)
                                         {
-                                            /* Force done = 1 */
                                             uint32_t uOne = 1;
-                                            PGMPhysSimpleWriteGCPtr(pVCpu, (RTGCPTR)rval, &uOne, 4);
-                                            RTPrintf("[FORCE-COMPLETE] *** Wrote done=1 at %s=%#llx ***\n",
-                                                rnames[_r], (unsigned long long)rval);
+                                            PGMPhysSimpleWriteGCPtr(pVCpu,
+                                                (RTGCPTR)compAddr, &uOne, 4);
+                                            RTPrintf("[FC2] *** WROTE done=1 at %#llx ***\n",
+                                                (unsigned long long)compAddr);
+                                            fFound = true;
+                                            s_fForced = true;
+                                            break;
                                         }
                                     }
+                                }
+
+                                /* Method 2: scan stack for completion struct pattern directly:
+                                 * done(u32)=0, pad=0, lock~0, pad, next==prev (single waiter) */
+                                if (!fFound)
+                                {
+                                    RTPrintf("[FC2] method1 failed, trying direct pattern scan\n");
+                                    for (unsigned soff = 0; soff + 32 <= 4096; soff += 8)
+                                    {
+                                        uint64_t first8;
+                                        __builtin_memcpy(&first8, &stkBuf[soff], 8);
+                                        if (first8 != 0) continue; /* done=0, pad=0 */
+
+                                        uint64_t lnext = 0, lprev = 0;
+                                        __builtin_memcpy(&lnext, &stkBuf[soff + 16], 8);
+                                        __builtin_memcpy(&lprev, &stkBuf[soff + 24], 8);
+                                        /* Single waiter: next == prev, both are kernel addrs,
+                                         * and NOT self-referencing (empty list) */
+                                        uint64_t selfHead = uRsp + soff + 16;
+                                        if (lnext >= UINT64_C(0xffff800000000000)
+                                            && lprev >= UINT64_C(0xffff800000000000)
+                                            && lnext == lprev
+                                            && lnext != selfHead)
+                                        {
+                                            uint64_t compAddr = uRsp + soff;
+                                            RTPrintf("[FC2] pattern@RSP+%u comp=%#llx "
+                                                     "next=prev=%#llx\n",
+                                                soff, (unsigned long long)compAddr,
+                                                (unsigned long long)lnext);
+                                            uint32_t uOne = 1;
+                                            PGMPhysSimpleWriteGCPtr(pVCpu,
+                                                (RTGCPTR)compAddr, &uOne, 4);
+                                            RTPrintf("[FC2] *** WROTE done=1 at %#llx ***\n",
+                                                (unsigned long long)compAddr);
+                                            fFound = true;
+                                            s_fForced = true;
+                                            break;
+                                        }
+                                    }
+                                }
+
+                                /* Method 3: brute-force — try every register as completion ptr */
+                                if (!fFound)
+                                {
+                                    RTPrintf("[FC2] method2 failed, trying all registers\n");
+                                    uint64_t allRegs[] = {
+                                        pVCpu->cpum.GstCtx.rax, pVCpu->cpum.GstCtx.rbx,
+                                        pVCpu->cpum.GstCtx.rcx, pVCpu->cpum.GstCtx.rdx,
+                                        pVCpu->cpum.GstCtx.rsi, pVCpu->cpum.GstCtx.rdi,
+                                        pVCpu->cpum.GstCtx.r8,  pVCpu->cpum.GstCtx.r9,
+                                        pVCpu->cpum.GstCtx.r10, pVCpu->cpum.GstCtx.r11,
+                                        pVCpu->cpum.GstCtx.r12, pVCpu->cpum.GstCtx.r13,
+                                        pVCpu->cpum.GstCtx.r14, pVCpu->cpum.GstCtx.r15,
+                                    };
+                                    for (unsigned _r = 0; _r < 14; _r++)
+                                    {
+                                        uint64_t rv = allRegs[_r];
+                                        if (rv < UINT64_C(0xffff800000000000)) continue;
+                                        uint64_t probe[4] = {0xDEAD,0xDEAD,0xDEAD,0xDEAD};
+                                        int rcP = PGMPhysSimpleReadGCPtr(pVCpu, probe,
+                                            (RTGCPTR)rv, 32);
+                                        if (RT_FAILURE(rcP)) continue;
+                                        uint32_t uD;
+                                        __builtin_memcpy(&uD, &probe[0], 4);
+                                        if (uD == 0
+                                            && probe[2] >= UINT64_C(0xffff800000000000)
+                                            && probe[3] >= UINT64_C(0xffff800000000000))
+                                        {
+                                            RTPrintf("[FC2] reg#%u=%#llx done=0 "
+                                                     "wq.next=%#llx → WRITE done=1\n",
+                                                _r, (unsigned long long)rv,
+                                                (unsigned long long)probe[2]);
+                                            uint32_t uOne = 1;
+                                            PGMPhysSimpleWriteGCPtr(pVCpu,
+                                                (RTGCPTR)rv, &uOne, 4);
+                                            fFound = true;
+                                            s_fForced = true;
+                                            break;
+                                        }
+                                    }
+                                }
+
+                                if (!fFound)
+                                {
+                                    /* Dump first 32 stack qwords for post-mortem */
+                                    RTPrintf("[FC2] FAILED. Stack dump:\n");
+                                    for (unsigned q = 0; q < 32 && q * 8 + 8 <= 4096; q++)
+                                    {
+                                        uint64_t sv;
+                                        __builtin_memcpy(&sv, &stkBuf[q * 8], 8);
+                                        RTPrintf("[FC2] RSP+%03u: %#018llx\n",
+                                            q * 8, (unsigned long long)sv);
+                                    }
+                                    s_fForced = true;
                                 }
                                 RTStrmFlush(g_pStdOut);
                             }

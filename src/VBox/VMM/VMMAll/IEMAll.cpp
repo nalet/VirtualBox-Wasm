@@ -1829,6 +1829,81 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                                                     _k, (unsigned long long)sv);
                                                 FC4_TRY_COMPLETE(sv);
                                             }
+                                            /* KEY INSIGHT: wait_for_completion saves
+                                             * completion ptr to RBX at 0x810ce644.
+                                             * RBX is callee-saved, so it holds the
+                                             * completion ptr throughout the wait loop.
+                                             * Force-complete whatever RBX points to. */
+                                            {
+                                                uint64_t rbxVal = pVCpu->cpum.GstCtx.rbx;
+                                                RTPrintf("[FC4z] RBX=%#llx (completion?)\n",
+                                                    (unsigned long long)rbxVal);
+                                                /* Try RBX as completion, but also
+                                                 * force-complete if done==0 even without
+                                                 * self-referencing list_head */
+                                                if (rbxVal >= UINT64_C(0xffff888000000000)
+                                                    && rbxVal < UINT64_C(0xffff889000000000))
+                                                {
+                                                    RTGCPHYS rbxPA = (RTGCPHYS)(rbxVal
+                                                        - UINT64_C(0xffff888000000000));
+                                                    uint8_t cb[32];
+                                                    __builtin_memset(cb, 0xcc, sizeof(cb));
+                                                    int rcb = PGMPhysSimpleReadGCPhys(pVMfc,
+                                                        cb, rbxPA, 32);
+                                                    if (RT_SUCCESS(rcb))
+                                                    {
+                                                        uint32_t dn;
+                                                        __builtin_memcpy(&dn, &cb[0], 4);
+                                                        uint64_t wn, wp;
+                                                        __builtin_memcpy(&wn, &cb[16], 8);
+                                                        __builtin_memcpy(&wp, &cb[24], 8);
+                                                        RTPrintf("[FC4z] RBX comp: done=%u"
+                                                                 " wq16=%#llx/%#llx\n",
+                                                            dn,
+                                                            (unsigned long long)wn,
+                                                            (unsigned long long)wp);
+                                                        if (dn == 0)
+                                                        {
+                                                            uint32_t one = 1;
+                                                            PGMPhysSimpleWriteGCPhys(pVMfc,
+                                                                rbxPA, &one, 4);
+                                                            s_cFC4fixes++;
+                                                            RTPrintf("[FC4z] #%u FORCE-FIXED"
+                                                                " comp@RBX=%#llx\n",
+                                                                s_cFC4fixes,
+                                                                (unsigned long long)rbxVal);
+                                                        }
+                                                    }
+                                                }
+                                                else if (rbxVal >= UINT64_C(0xffffffff80000000)
+                                                         && rbxVal < UINT64_C(0xffffffff83000000))
+                                                {
+                                                    RTGCPHYS rbxPA = (RTGCPHYS)(rbxVal
+                                                        - UINT64_C(0xffffffff80000000));
+                                                    uint8_t cb[32];
+                                                    __builtin_memset(cb, 0xcc, sizeof(cb));
+                                                    int rcb = PGMPhysSimpleReadGCPhys(pVMfc,
+                                                        cb, rbxPA, 32);
+                                                    if (RT_SUCCESS(rcb))
+                                                    {
+                                                        uint32_t dn;
+                                                        __builtin_memcpy(&dn, &cb[0], 4);
+                                                        RTPrintf("[FC4z] RBX comp(kdata):"
+                                                                 " done=%u\n", dn);
+                                                        if (dn == 0)
+                                                        {
+                                                            uint32_t one = 1;
+                                                            PGMPhysSimpleWriteGCPhys(pVMfc,
+                                                                rbxPA, &one, 4);
+                                                            s_cFC4fixes++;
+                                                            RTPrintf("[FC4z] #%u FORCE-FIXED"
+                                                                " comp@RBX=%#llx\n",
+                                                                s_cFC4fixes,
+                                                                (unsigned long long)rbxVal);
+                                                        }
+                                                    }
+                                                }
+                                            }
                                             RTStrmFlush(g_pStdOut);
                                             break;
                                         }

@@ -1603,188 +1603,210 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                         }
                     }
 
-                    /* ── FORCE-COMPLETE v3: at 2B insns, if still singleton:
-                     * 1. Verify init_task.comm to confirm struct offsets
-                     * 2. Scan init_task body for the actual tasks list_head offset
-                     * 3. Dump 64 stack qwords for analysis
-                     * 4. Scan stack for wait_queue_entry with init_task private
-                     * 5. If not found, scan .data/.bss for completion with done=0
-                     */
+                    /* ── TASK-BORN: detect first task creation by monitoring tasks.next
+                     * Check every 10K instructions after 200M. Log transitions. */
                     {
-                        static bool s_fForced = false;
-                        if (!s_fForced
+                        static bool s_fTaskBornSeen = false;
+                        static bool s_fTaskGone = false;
+                        static uint64_t s_uLastTasksNext = 0;
+                        if (!s_fTaskGone
+                            && (pVCpu->cpum.GstCtx.msrEFER & MSR_K6_EFER_LMA)
+                            && g_cWasmVirtualInstructions >= UINT64_C(200000000)
+                            && (g_cWasmVirtualInstructions % UINT64_C(10000)) == 0)
+                        {
+                            const uint64_t kInitTaskPhys = UINT64_C(0x24114c0);
+                            const uint64_t kInitTaskVA = UINT64_C(0xffffffff824114c0);
+                            const uint64_t kTasksSelf = kInitTaskVA + UINT64_C(0x310);
+                            uint64_t uTN = 0;
+                            PGMPhysSimpleReadGCPhys(pVCpu->CTX_SUFF(pVM), &uTN,
+                                (RTGCPHYS)(kInitTaskPhys + UINT64_C(0x310)), 8);
+
+                            if (!s_fTaskBornSeen && uTN != kTasksSelf)
+                            {
+                                s_fTaskBornSeen = true;
+                                s_uLastTasksNext = uTN;
+                                /* Read new task's comm and pid */
+                                uint64_t uNewTaskPhys = (uTN - UINT64_C(0x310))
+                                    - UINT64_C(0xffffffff80000000);
+                                char comm[17];
+                                __builtin_memset(comm, 0, 17);
+                                uint32_t uPid = 0;
+                                PGMPhysSimpleReadGCPhys(pVCpu->CTX_SUFF(pVM), comm,
+                                    (RTGCPHYS)(uNewTaskPhys + UINT64_C(0x5c8)), 16);
+                                PGMPhysSimpleReadGCPhys(pVCpu->CTX_SUFF(pVM), &uPid,
+                                    (RTGCPHYS)(uNewTaskPhys + UINT64_C(0x488)), 4);
+                                RTPrintf("[TASK-BORN] insns=%llu tasks.next=%#llx "
+                                         "pid=%u comm='%.16s' RIP=%#llx\n",
+                                    (unsigned long long)g_cWasmVirtualInstructions,
+                                    (unsigned long long)uTN,
+                                    (unsigned)uPid, comm,
+                                    (unsigned long long)pVCpu->cpum.GstCtx.rip);
+                                RTStrmFlush(g_pStdOut);
+                            }
+                            else if (s_fTaskBornSeen && uTN == kTasksSelf)
+                            {
+                                s_fTaskGone = true;
+                                RTPrintf("[TASK-GONE] insns=%llu tasks back to singleton "
+                                         "RIP=%#llx\n",
+                                    (unsigned long long)g_cWasmVirtualInstructions,
+                                    (unsigned long long)pVCpu->cpum.GstCtx.rip);
+                                RTStrmFlush(g_pStdOut);
+                            }
+                        }
+                    }
+
+                    /* ── FC4: at 2B insns, dump all regs + read key heap/stack objects
+                     * to identify the completion struct */
+                    {
+                        static bool s_fFC4 = false;
+                        if (!s_fFC4
                             && (pVCpu->cpum.GstCtx.msrEFER & MSR_K6_EFER_LMA)
                             && g_cWasmVirtualInstructions >= UINT64_C(2000000000))
                         {
                             PVMCC pVMfc = pVCpu->CTX_SUFF(pVM);
-
-                            /* Step 0: Verify init_task.comm at assumed offset 0x5c8 */
                             const uint64_t kInitTaskPhys = UINT64_C(0x24114c0);
-                            char comm[16];
-                            __builtin_memset(comm, 0, 16);
-                            PGMPhysSimpleReadGCPhys(pVMfc, comm,
-                                (RTGCPHYS)(kInitTaskPhys + UINT64_C(0x5c8)), 16);
-                            RTPrintf("[FC3] init_task.comm='%.16s'\n", comm);
-
-                            /* Step 1: Find actual tasks offset by scanning init_task
-                             * for self-referencing list_head (next==prev==&self.field) */
                             const uint64_t kInitTaskVA = UINT64_C(0xffffffff824114c0);
-                            int foundTasksOff = -1;
-                            {
-                                uint8_t tskBuf[1024];
-                                __builtin_memset(tskBuf, 0, sizeof(tskBuf));
-                                PGMPhysSimpleReadGCPhys(pVMfc, tskBuf,
-                                    (RTGCPHYS)kInitTaskPhys, 1024);
-                                for (int off = 0; off + 16 <= 1024; off += 8)
-                                {
-                                    uint64_t v1, v2;
-                                    __builtin_memcpy(&v1, &tskBuf[off], 8);
-                                    __builtin_memcpy(&v2, &tskBuf[off + 8], 8);
-                                    uint64_t expected = kInitTaskVA + (uint64_t)off;
-                                    if (v1 == expected && v2 == expected)
-                                    {
-                                        RTPrintf("[FC3] self-ref list_head at tasks+%#x "
-                                                 "→ %#llx\n", off,
-                                            (unsigned long long)expected);
-                                        if (foundTasksOff < 0)
-                                            foundTasksOff = off;
-                                    }
-                                }
-                            }
+                            const uint64_t kTasksSelf = kInitTaskVA + UINT64_C(0x310);
 
-                            /* Step 2: Check tasks at found offset (or 0x310 default) */
-                            int tasksOff = (foundTasksOff >= 0) ? foundTasksOff : 0x310;
-                            uint64_t uTNfc = 0;
-                            PGMPhysSimpleReadGCPhys(pVMfc, &uTNfc,
-                                (RTGCPHYS)(kInitTaskPhys + (uint64_t)tasksOff), 8);
-                            bool fSingleton = (uTNfc == kInitTaskVA + (uint64_t)tasksOff);
-                            RTPrintf("[FC3] tasks@+%#x next=%#llx singleton=%d\n",
-                                tasksOff, (unsigned long long)uTNfc, (int)fSingleton);
+                            uint64_t uTN = 0;
+                            PGMPhysSimpleReadGCPhys(pVMfc, &uTN,
+                                (RTGCPHYS)(kInitTaskPhys + UINT64_C(0x310)), 8);
 
-                            if (fSingleton)
+                            if (uTN == kTasksSelf)
                             {
-                                s_fForced = true;
+                                s_fFC4 = true;
                                 uint64_t uRsp = pVCpu->cpum.GstCtx.rsp;
-                                RTPrintf("[FC3] RIP=%#llx RSP=%#llx RBP=%#llx\n",
+                                RTPrintf("[FC4] ALL REGS:\n");
+                                RTPrintf("[FC4] RIP=%#llx RSP=%#llx RBP=%#llx\n",
                                     (unsigned long long)pVCpu->cpum.GstCtx.rip,
                                     (unsigned long long)uRsp,
                                     (unsigned long long)pVCpu->cpum.GstCtx.rbp);
-                                RTPrintf("[FC3] RBX=%#llx R13=%#llx R15=%#llx\n",
+                                RTPrintf("[FC4] RAX=%#llx RCX=%#llx RDX=%#llx\n",
+                                    (unsigned long long)pVCpu->cpum.GstCtx.rax,
+                                    (unsigned long long)pVCpu->cpum.GstCtx.rcx,
+                                    (unsigned long long)pVCpu->cpum.GstCtx.rdx);
+                                RTPrintf("[FC4] RBX=%#llx RSI=%#llx RDI=%#llx\n",
                                     (unsigned long long)pVCpu->cpum.GstCtx.rbx,
-                                    (unsigned long long)pVCpu->cpum.GstCtx.r13,
+                                    (unsigned long long)pVCpu->cpum.GstCtx.rsi,
+                                    (unsigned long long)pVCpu->cpum.GstCtx.rdi);
+                                RTPrintf("[FC4] R8=%#llx R9=%#llx R10=%#llx\n",
+                                    (unsigned long long)pVCpu->cpum.GstCtx.r8,
+                                    (unsigned long long)pVCpu->cpum.GstCtx.r9,
+                                    (unsigned long long)pVCpu->cpum.GstCtx.r10);
+                                RTPrintf("[FC4] R11=%#llx R12=%#llx R13=%#llx\n",
+                                    (unsigned long long)pVCpu->cpum.GstCtx.r11,
+                                    (unsigned long long)pVCpu->cpum.GstCtx.r12,
+                                    (unsigned long long)pVCpu->cpum.GstCtx.r13);
+                                RTPrintf("[FC4] R14=%#llx R15=%#llx\n",
+                                    (unsigned long long)pVCpu->cpum.GstCtx.r14,
                                     (unsigned long long)pVCpu->cpum.GstCtx.r15);
 
-                                /* Step 3: Dump 64 stack qwords for analysis */
-                                uint8_t stkBuf[4096];
+                                /* Read 64 bytes at R15, RBX, R12, R14 (potential
+                                 * kthread_create_info or completion structs) */
+                                uint64_t regAddrs[4] = {
+                                    pVCpu->cpum.GstCtx.r15,
+                                    pVCpu->cpum.GstCtx.rbx,
+                                    pVCpu->cpum.GstCtx.r12,
+                                    pVCpu->cpum.GstCtx.r14
+                                };
+                                const char *regNames[4] = {"R15","RBX","R12","R14"};
+                                for (int ri = 0; ri < 4; ri++)
+                                {
+                                    uint64_t addr = regAddrs[ri];
+                                    if (addr < UINT64_C(0xffff800000000000))
+                                        continue;
+                                    uint8_t buf[64];
+                                    __builtin_memset(buf, 0, 64);
+                                    int rc = PGMPhysSimpleReadGCPtr(pVCpu, buf,
+                                        (RTGCPTR)addr, 64);
+                                    if (RT_FAILURE(rc)) {
+                                        RTPrintf("[FC4] %s=%#llx: read failed rc=%d\n",
+                                            regNames[ri], (unsigned long long)addr, rc);
+                                        continue;
+                                    }
+                                    RTPrintf("[FC4] %s=%#llx dump:\n",
+                                        regNames[ri], (unsigned long long)addr);
+                                    for (int q = 0; q < 8; q++) {
+                                        uint64_t v;
+                                        __builtin_memcpy(&v, &buf[q*8], 8);
+                                        RTPrintf("[FC4]   +%02x: %#018llx\n",
+                                            q*8, (unsigned long long)v);
+                                    }
+                                }
+
+                                /* Read 64 bytes around R13 (stack addr, could be
+                                 * completion struct or wait_queue_entry location) */
+                                {
+                                    uint64_t r13 = pVCpu->cpum.GstCtx.r13;
+                                    uint64_t r13start = (r13 >= 32) ? (r13 - 32) : r13;
+                                    uint8_t buf[96];
+                                    __builtin_memset(buf, 0, 96);
+                                    PGMPhysSimpleReadGCPtr(pVCpu, buf,
+                                        (RTGCPTR)r13start, 96);
+                                    RTPrintf("[FC4] R13 area (%#llx to +96):\n",
+                                        (unsigned long long)r13start);
+                                    for (int q = 0; q < 12; q++) {
+                                        uint64_t v;
+                                        __builtin_memcpy(&v, &buf[q*8], 8);
+                                        RTPrintf("[FC4]   +%02x: %#018llx\n",
+                                            q*8, (unsigned long long)v);
+                                    }
+                                }
+
+                                /* Scan stack for completion pattern:
+                                 * Two adjacent identical qwords (entry.next==entry.prev)
+                                 * that point to a valid kernel addr X. Then X-16 should
+                                 * be the completion with done=0 */
+                                uint8_t stkBuf[2048];
                                 __builtin_memset(stkBuf, 0, sizeof(stkBuf));
                                 PGMPhysSimpleReadGCPtr(pVCpu, stkBuf,
-                                    (RTGCPTR)uRsp, 4096);
-                                RTPrintf("[FC3] Stack dump (64 qwords from RSP):\n");
-                                for (unsigned q = 0; q < 64; q++)
-                                {
-                                    uint64_t sv;
-                                    __builtin_memcpy(&sv, &stkBuf[q * 8], 8);
-                                    if (sv != 0)
-                                        RTPrintf("[FC3] RSP+%03x: %#018llx\n",
-                                            q * 8, (unsigned long long)sv);
-                                }
+                                    (RTGCPTR)uRsp, 2048);
 
-                                /* Step 4: Scan stack for init_task (wait_queue_entry.private)
-                                 * with STRICTER validation: func must be kernel .text,
-                                 * entry.next/prev must be real kernel addresses (not -1) */
+                                RTPrintf("[FC4] Scanning stack for entry.next==entry.prev...\n");
                                 bool fFound = false;
-                                for (unsigned soff = 0; soff + 40 <= 4096; soff += 8)
+                                for (unsigned soff = 0; soff + 16 <= 2048; soff += 8)
                                 {
-                                    uint64_t v;
-                                    __builtin_memcpy(&v, &stkBuf[soff], 8);
-                                    if (v != kInitTaskVA) continue;
-
-                                    uint64_t func = 0, eNext = 0, ePrev = 0;
-                                    __builtin_memcpy(&func,  &stkBuf[soff + 8],  8);
-                                    __builtin_memcpy(&eNext, &stkBuf[soff + 16], 8);
-                                    __builtin_memcpy(&ePrev, &stkBuf[soff + 24], 8);
-
-                                    RTPrintf("[FC3] init_task@RSP+%u func=%#llx "
-                                             "next=%#llx prev=%#llx\n",
-                                        soff, (unsigned long long)func,
-                                        (unsigned long long)eNext,
-                                        (unsigned long long)ePrev);
-
-                                    /* Strict: func in kernel .text, eNext and ePrev are
-                                     * real kernel addresses (not -1 or other sentinels) */
-                                    if (func >= UINT64_C(0xffffffff81000000)
-                                        && func <  UINT64_C(0xffffffff82000000)
-                                        && eNext >= UINT64_C(0xffff800000000000)
-                                        && eNext <  UINT64_C(0xffffffffffffffff)
-                                        && ePrev >= UINT64_C(0xffff800000000000)
-                                        && ePrev <  UINT64_C(0xffffffffffffffff))
-                                    {
-                                        uint64_t compAddr = eNext - 16;
-                                        uint32_t uDone = 0xDEAD;
-                                        PGMPhysSimpleReadGCPtr(pVCpu, &uDone,
-                                            (RTGCPTR)compAddr, 4);
-                                        RTPrintf("[FC3] completion@%#llx done=%u\n",
-                                            (unsigned long long)compAddr, (unsigned)uDone);
-                                        if (uDone == 0)
-                                        {
-                                            uint32_t uOne = 1;
-                                            PGMPhysSimpleWriteGCPtr(pVCpu,
-                                                (RTGCPTR)compAddr, &uOne, 4);
-                                            RTPrintf("[FC3] *** WROTE done=1 ***\n");
-                                            fFound = true;
-                                            break;
-                                        }
-                                    }
-                                }
-
-                                /* Step 5: If no wait_queue_entry found, scan known
-                                 * .data/.bss addresses from stack for completion pattern.
-                                 * Completion: done(u32)=0 at addr, followed by
-                                 * wait_queue_head where head.next points to stack area */
-                                if (!fFound)
-                                {
-                                    RTPrintf("[FC3] No wq_entry found. Scanning data ptrs.\n");
-                                    for (unsigned soff = 0; soff + 8 <= 512; soff += 8)
-                                    {
-                                        uint64_t ptr;
-                                        __builtin_memcpy(&ptr, &stkBuf[soff], 8);
-                                        /* .data/.bss range */
-                                        if (ptr < UINT64_C(0xffffffff82400000)
-                                            || ptr >= UINT64_C(0xffffffff82800000))
-                                            continue;
-                                        /* Read 32 bytes at this address */
-                                        uint8_t dat[32];
-                                        __builtin_memset(dat, 0xFF, 32);
-                                        int rcD = PGMPhysSimpleReadGCPtr(pVCpu, dat,
-                                            (RTGCPTR)ptr, 32);
-                                        if (RT_FAILURE(rcD)) continue;
-                                        uint32_t d32;
-                                        __builtin_memcpy(&d32, dat, 4);
-                                        uint64_t wqn;
-                                        __builtin_memcpy(&wqn, &dat[16], 8);
-                                        RTPrintf("[FC3] data@%#llx: done=%u "
-                                                 "wq.next=%#llx\n",
-                                            (unsigned long long)ptr, (unsigned)d32,
-                                            (unsigned long long)wqn);
-                                        /* Check if it looks like a completion with done=0
-                                         * and wq.next pointing to stack (has a waiter) */
-                                        if (d32 == 0
-                                            && wqn >= UINT64_C(0xffff888000000000)
-                                            && wqn <  UINT64_C(0xffff889000000000))
-                                        {
-                                            uint32_t uOne = 1;
-                                            PGMPhysSimpleWriteGCPtr(pVCpu,
-                                                (RTGCPTR)ptr, &uOne, 4);
-                                            RTPrintf("[FC3] *** WROTE done=1 at %#llx ***\n",
-                                                (unsigned long long)ptr);
-                                            fFound = true;
-                                            break;
-                                        }
+                                    uint64_t v1, v2;
+                                    __builtin_memcpy(&v1, &stkBuf[soff], 8);
+                                    __builtin_memcpy(&v2, &stkBuf[soff + 8], 8);
+                                    if (v1 == 0 || v1 != v2) continue;
+                                    /* Both are same nonzero value */
+                                    if (v1 < UINT64_C(0xffff800000000000)) continue;
+                                    if (v1 == UINT64_C(0xffffffffffffffff)) continue;
+                                    /* v1 should be &completion.wait.head = completion+16 */
+                                    uint64_t compAddr = v1 - 16;
+                                    uint32_t uDone = 0xDEAD;
+                                    int rc = PGMPhysSimpleReadGCPtr(pVCpu, &uDone,
+                                        (RTGCPTR)compAddr, 4);
+                                    if (RT_FAILURE(rc)) continue;
+                                    RTPrintf("[FC4] RSP+%03x: pair=%#llx comp@%#llx done=%u\n",
+                                        soff, (unsigned long long)v1,
+                                        (unsigned long long)compAddr, (unsigned)uDone);
+                                    if (uDone == 0) {
+                                        /* Read the full completion to verify */
+                                        uint8_t compBuf[32];
+                                        PGMPhysSimpleReadGCPtr(pVCpu, compBuf,
+                                            (RTGCPTR)compAddr, 32);
+                                        uint64_t wqn, wqp;
+                                        __builtin_memcpy(&wqn, &compBuf[16], 8);
+                                        __builtin_memcpy(&wqp, &compBuf[24], 8);
+                                        RTPrintf("[FC4] comp: done=0 wq.next=%#llx "
+                                                 "wq.prev=%#llx\n",
+                                            (unsigned long long)wqn,
+                                            (unsigned long long)wqp);
+                                        /* Write done=1 to unblock */
+                                        uint32_t uOne = 1;
+                                        PGMPhysSimpleWriteGCPtr(pVCpu,
+                                            (RTGCPTR)compAddr, &uOne, 4);
+                                        RTPrintf("[FC4] *** WROTE done=1 at %#llx ***\n",
+                                            (unsigned long long)compAddr);
+                                        fFound = true;
+                                        break;
                                     }
                                 }
 
                                 if (!fFound)
-                                    RTPrintf("[FC3] FAILED — no completion found\n");
+                                    RTPrintf("[FC4] No completion found via pair scan\n");
                                 RTStrmFlush(g_pStdOut);
                             }
                         }

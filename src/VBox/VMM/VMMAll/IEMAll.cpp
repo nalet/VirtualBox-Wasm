@@ -1818,6 +1818,45 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                                 /* 5) Re-check known completion at heap_obj+0xd8 */
                                 FC4_TRY_COMPLETE(UINT64_C(0xffff8880074122d8));
 
+                                /* 5b) Directly probe completion at 0xffffffff82427280
+                                 * (found on stack above MAX_SCHEDULE_TIMEOUT).
+                                 * Dump its bytes and force-complete if done==0. */
+                                {
+                                    const RTGCPHYS compPA2 = (RTGCPHYS)UINT64_C(0x2427280);
+                                    uint8_t comp2[32];
+                                    __builtin_memset(comp2, 0xcc, sizeof(comp2));
+                                    int rc2 = PGMPhysSimpleReadGCPhys(pVMfc, comp2,
+                                        compPA2, 32);
+                                    if (RT_SUCCESS(rc2))
+                                    {
+                                        uint32_t d2;
+                                        __builtin_memcpy(&d2, &comp2[0], 4);
+                                        uint64_t n2, p2;
+                                        __builtin_memcpy(&n2, &comp2[16], 8);
+                                        __builtin_memcpy(&p2, &comp2[24], 8);
+                                        uint64_t n2_8, p2_8;
+                                        __builtin_memcpy(&n2_8, &comp2[8], 8);
+                                        __builtin_memcpy(&p2_8, &comp2[16], 8);
+                                        RTPrintf("[FC4z] PROBE@82427280: done=%u"
+                                                 " [8]=%#llx [16]=%#llx [24]=%#llx\n",
+                                            d2,
+                                            (unsigned long long)n2_8,
+                                            (unsigned long long)n2,
+                                            (unsigned long long)p2);
+                                        if (d2 == 0)
+                                        {
+                                            /* Force complete regardless of wq state */
+                                            uint32_t one = 1;
+                                            PGMPhysSimpleWriteGCPhys(pVMfc,
+                                                compPA2, &one, 4);
+                                            s_cFC4fixes++;
+                                            RTPrintf("[FC4z] #%u FORCE-FIXED comp@82427280\n",
+                                                s_cFC4fixes);
+                                        }
+                                        RTStrmFlush(g_pStdOut);
+                                    }
+                                }
+
                                 /* 6) When MAX_SCHEDULE_TIMEOUT found, dump 16 slots
                                  * above it so we can identify the completion addr */
                                 if (uRsp >= UINT64_C(0xffff888000000000))
@@ -1834,14 +1873,14 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                                         if (stkBuf2[_i] == kMaxTO2)
                                         {
                                             /* Dump 16 slots above MAX_SCHEDULE_TIMEOUT */
-                                            RTPrintf("[FC4x] MAX_TO@stk[%d] RSP=%#llx "
+                                            RTPrintf("[FC4z] MAX_TO@stk[%d] RSP=%#llx "
                                                      "insns=%llu\n", _i,
                                                 (unsigned long long)uRsp,
                                                 (unsigned long long)g_cWasmVirtualInstructions);
                                             for (int _k = 1; _k <= 16 && _i+_k < 256; _k++)
                                             {
                                                 uint64_t sv = stkBuf2[_i + _k];
-                                                RTPrintf("[FC4x]   +%d: %#018llx\n",
+                                                RTPrintf("[FC4z]   +%d: %#018llx\n",
                                                     _k, (unsigned long long)sv);
                                                 FC4_TRY_COMPLETE(sv);
                                             }

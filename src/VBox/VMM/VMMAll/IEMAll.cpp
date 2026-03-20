@@ -1709,30 +1709,47 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
         __builtin_memcpy(&_wqP, &_cb[24], 8); \
         uint64_t _expSelf = _cva + 16; \
         bool _selfRef = (_wqN == _expSelf && _wqP == _expSelf); \
-        /* _zeroWq unused: bool _zeroWq = (_wqN == 0 && _wqP == 0); */ \
-        /* Also check offset+8 for list_head (if lock is smaller) */ \
-        uint64_t _wqN8, _wqP8; \
-        __builtin_memcpy(&_wqN8, &_cb[8], 8); \
-        __builtin_memcpy(&_wqP8, &_cb[16], 8); \
-        uint64_t _expSelf8 = _cva + 8; \
-        bool _selfRef8 = (_wqN8 == _expSelf8 && _wqP8 == _expSelf8); \
-        if (_done == 0 && (_selfRef || _selfRef8)) \
+        /* Only check self-ref at offset+16. The offset+8 check caused \
+         * false positives: it matched the spinlock field INSIDE a real \
+         * completion and corrupted it by writing done=1 to the lock. */ \
+        if (_done == 0 && _selfRef) \
         { \
             uint32_t _one = 1; \
             PGMPhysSimpleWriteGCPhys(pVMfc, _pa, &_one, 4); \
             s_cFC4fixes++; \
             uint32_t _vfy = 0xDEAD; \
             PGMPhysSimpleReadGCPhys(pVMfc, &_vfy, _pa, 4); \
-            RTPrintf("[FC4x] #%u insns=%llu FIXED comp@%#llx" \
-                     " (verify=%u) wq16=%d wq8=%d RIP=%#llx\n", \
+            RTPrintf("[FC4z] #%u insns=%llu FIXED comp@%#llx" \
+                     " (verify=%u) RIP=%#llx\n", \
                 s_cFC4fixes, \
                 (unsigned long long)g_cWasmVirtualInstructions, \
                 (unsigned long long)_cva, _vfy, \
-                (int)_selfRef, (int)_selfRef8, \
                 (unsigned long long)pVCpu->cpum.GstCtx.rip); \
             RTStrmFlush(g_pStdOut); \
         } \
     } while (0)
+
+                                /* 0) One-shot: repair spinlock at heap+0xe0
+                                 * that was corrupted by FC4x selfRef8 bug.
+                                 * The spinlock should be 0 (unlocked). */
+                                {
+                                    static bool s_fLockRepaired = false;
+                                    if (!s_fLockRepaired)
+                                    {
+                                        s_fLockRepaired = true;
+                                        const RTGCPHYS lockPA = (RTGCPHYS)UINT64_C(0x74122e0);
+                                        uint32_t lockVal = 0xDEAD;
+                                        PGMPhysSimpleReadGCPhys(pVMfc, &lockVal, lockPA, 4);
+                                        if (lockVal != 0)
+                                        {
+                                            uint32_t zero = 0;
+                                            PGMPhysSimpleWriteGCPhys(pVMfc, lockPA, &zero, 4);
+                                            RTPrintf("[FC4z] REPAIRED spinlock@0x74122e0"
+                                                     " was=%u now=0\n", lockVal);
+                                            RTStrmFlush(g_pStdOut);
+                                        }
+                                    }
+                                }
 
                                 uint64_t uRsp = pVCpu->cpum.GstCtx.rsp;
                                 if (uRsp >= UINT64_C(0xffff888000000000))

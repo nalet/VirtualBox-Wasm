@@ -1669,7 +1669,7 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                         if ((pVCpu->cpum.GstCtx.msrEFER & MSR_K6_EFER_LMA)
                             && g_cWasmVirtualInstructions >= s_cNextFC4)
                         {
-                            s_cNextFC4 = g_cWasmVirtualInstructions + UINT64_C(25000000);
+                            s_cNextFC4 = g_cWasmVirtualInstructions + UINT64_C(1000000);
 
                             PVMCC pVMfc = pVCpu->CTX_SUFF(pVM);
                             const uint64_t kInitTaskPhys = UINT64_C(0x24114c0);

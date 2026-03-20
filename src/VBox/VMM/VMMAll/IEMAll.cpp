@@ -1629,6 +1629,27 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                             RTPrintf("[EARLY-RIP]   stk: %llx %llx %llx %llx\n",
                                 (unsigned long long)stk[4], (unsigned long long)stk[5],
                                 (unsigned long long)stk[6], (unsigned long long)stk[7]);
+                            /* Dump 16 bytes at EIP to identify the function */
+                            uint64_t uEip = pVCpu->cpum.GstCtx.rip;
+                            uint64_t uPhysEip = (uEip > UINT64_C(0xffffffff80000000))
+                                              ? (uEip - UINT64_C(0xffffffff80000000))
+                                              : (uEip - UINT64_C(0xffff888000000000));
+                            uint8_t ibytes[16] = {0};
+                            PGMPhysSimpleReadGCPhys(pVMer, ibytes, (RTGCPHYS)uPhysEip, 16);
+                            RTPrintf("[EARLY-RIP]   code@EIP: %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x\n",
+                                ibytes[0], ibytes[1], ibytes[2], ibytes[3],
+                                ibytes[4], ibytes[5], ibytes[6], ibytes[7],
+                                ibytes[8], ibytes[9], ibytes[10], ibytes[11],
+                                ibytes[12], ibytes[13], ibytes[14], ibytes[15]);
+                            /* Read init_task.tasks.prev (phys 0x2411780) to check both pointers */
+                            uint64_t uTasksPrev = 0;
+                            PGMPhysSimpleReadGCPhys(pVMer, &uTasksPrev, (RTGCPHYS)UINT64_C(0x2411780), 8);
+                            /* GS base = per-CPU area base for CPU0 */
+                            uint64_t uGsBase = pVCpu->cpum.GstCtx.gs.u64Base;
+                            RTPrintf("[EARLY-RIP]   tasks.prev=%llx current_task=%llx gsbase=%llx\n",
+                                (unsigned long long)uTasksPrev,
+                                (unsigned long long)uCT,
+                                (unsigned long long)uGsBase);
                             RTStrmFlush(g_pStdOut);
                         }
                     }

@@ -1650,22 +1650,33 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                                 (unsigned long long)uTasksPrev,
                                 (unsigned long long)uCT,
                                 (unsigned long long)uGsBase);
-                            /* Read kthreadd_done.done via stk[0] if it's a kernel VA,
-                             * using page-table walk (PGMPhysSimpleReadGCPtr) to get correct phys.
-                             * Also try VA 0xffffffff824b8280 directly in case stk differs.
-                             * Print tasks.next actual value. */
+                            /* Scan stk[0..7] + stk2 for a completion ptr in kernel init range,
+                             * dump 32 bytes from it to see done+lock+wait.head.next+prev. */
+                            RTPrintf("[EARLY-RIP]   tasks.next=%llx\n", (unsigned long long)uTN);
+                            /* Always dump 32 bytes from VA 0xffffffff824b8280 (suspected completion) */
                             {
-                                uint32_t uKtDone1 = 0xDEADBEEF, uKtDone2 = 0xDEADBEEF;
-                                /* Read via stk[0] if it looks like a kernel completion VA */
-                                if (stk[0] >= UINT64_C(0xffffffff80000000)
-                                    && stk[0] <= UINT64_C(0xffffffff83000000))
+                                uint64_t uComp[4] = {0xDEADBEEFDEADBEEFULL, 0xDEADBEEFDEADBEEFULL,
+                                                     0xDEADBEEFDEADBEEFULL, 0xDEADBEEFDEADBEEFULL};
+                                PGMPhysSimpleReadGCPtr(pVCpu, uComp, (RTGCPTR)UINT64_C(0xffffffff824b8280), 32);
+                                RTPrintf("[EARLY-RIP]   comp0: %016llx %016llx\n",
+                                    (unsigned long long)uComp[0], (unsigned long long)uComp[1]);
+                                RTPrintf("[EARLY-RIP]   comp1: %016llx %016llx\n",
+                                    (unsigned long long)uComp[2], (unsigned long long)uComp[3]);
+                            }
+                            /* Also scan stk for any init-range kernel VA and dump 32 bytes from it */
+                            for (int _i = 0; _i < 8; _i++)
+                            {
+                                if (stk[_i] >= UINT64_C(0xffffffff82000000)
+                                    && stk[_i] <= UINT64_C(0xffffffff82c00000))
                                 {
-                                    PGMPhysSimpleReadGCPtr(pVCpu, &uKtDone1, (RTGCPTR)stk[0], 4);
+                                    uint64_t uCs[4] = {0, 0, 0, 0};
+                                    PGMPhysSimpleReadGCPtr(pVCpu, uCs, (RTGCPTR)stk[_i], 32);
+                                    RTPrintf("[EARLY-RIP]   comp@stk[%d]=%llx: %016llx %016llx %016llx %016llx\n",
+                                        _i, (unsigned long long)stk[_i],
+                                        (unsigned long long)uCs[0], (unsigned long long)uCs[1],
+                                        (unsigned long long)uCs[2], (unsigned long long)uCs[3]);
+                                    break;
                                 }
-                                /* Always read VA 0xffffffff824b8280 (suspected kthreadd_done) */
-                                PGMPhysSimpleReadGCPtr(pVCpu, &uKtDone2, (RTGCPTR)UINT64_C(0xffffffff824b8280), 4);
-                                RTPrintf("[EARLY-RIP]   done_stk0=%u done_kt=%u tasks.next=%llx\n",
-                                    uKtDone1, uKtDone2, (unsigned long long)uTN);
                             }
                             /* Dump 8 MORE stack QWORDs (higher frames = callers of wait) */
                             uint64_t stk2[8] = {0};

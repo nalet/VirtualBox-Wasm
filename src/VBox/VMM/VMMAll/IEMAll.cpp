@@ -1655,18 +1655,17 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                         }
                     }
 
-                    /* ── FC4 (version w): periodic auto-completer for wait_for_completion.
+                    /* ── FC4 (version x): periodic auto-completer for wait_for_completion.
                      * Every 25M instructions after 350M, while tasks==singleton:
-                     * 1. Scan kernel stack for wait_for_completion return addr (0x810ce65a)
-                     * 2. Extract completion pointer from adjacent stack slot
-                     * 3. Validate completion struct (done==0, self-referencing list_head)
+                     * 1. Scan stack for MAX_SCHEDULE_TIMEOUT (0x7fffffffffffffff)
+                     * 2. When found, search nearby for completion pointer
+                     * 3. Accept completion with done==0 AND either self-referencing
+                     *    OR zero'd wait queue head (not all completions are init'd)
                      * 4. Write done=1 to unblock
-                     * Also checks registers and known completion addresses. */
+                     * 5. Also probe register values and known addresses. */
                     {
                         static uint64_t s_cNextFC4 = UINT64_C(350000000);
                         static unsigned s_cFC4fixes = 0;
-                        static uint64_t s_aFixedAddrs[32];
-                        static unsigned s_cFixedCount = 0;
                         if ((pVCpu->cpum.GstCtx.msrEFER & MSR_K6_EFER_LMA)
                             && g_cWasmVirtualInstructions >= s_cNextFC4)
                         {
@@ -1683,22 +1682,22 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
 
                             if (uTN == kTasksSelf) /* only while no other tasks */
                             {
-                                /* Helper lambda-like: try to complete a candidate VA */
+                                /* Helper: try to complete a candidate VA.
+                                 * Accepts done==0 with EITHER self-referencing OR zero wq. */
 #define FC4_TRY_COMPLETE(candVA) \
     do { \
         uint64_t _cva = (candVA); \
-        /* Skip if already fixed */ \
-        bool _dup = false; \
-        for (unsigned _d = 0; _d < s_cFixedCount; _d++) \
-            if (s_aFixedAddrs[_d] == _cva) { _dup = true; break; } \
-        if (_dup) break; \
+        if (_cva == 0) break; \
         /* Translate VA to PA */ \
         RTGCPHYS _pa; \
-        if (_cva >= UINT64_C(0xffff888000000000)) \
+        if (_cva >= UINT64_C(0xffff888000000000) \
+            && _cva < UINT64_C(0xffff889000000000)) \
             _pa = (RTGCPHYS)(_cva - UINT64_C(0xffff888000000000)); \
-        else if (_cva >= UINT64_C(0xffffffff80000000)) \
+        else if (_cva >= UINT64_C(0xffffffff80000000) \
+                 && _cva < UINT64_C(0xffffffff83000000)) \
             _pa = (RTGCPHYS)(_cva - UINT64_C(0xffffffff80000000)); \
         else break; \
+        if (_pa > UINT64_C(0x8000000)) break; /* 128MB RAM limit */ \
         uint8_t _cb[32]; \
         __builtin_memset(_cb, 0xcc, sizeof(_cb)); \
         int _rc = PGMPhysSimpleReadGCPhys(pVMfc, _cb, _pa, 32); \
@@ -1709,37 +1708,32 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
         __builtin_memcpy(&_wqN, &_cb[16], 8); \
         __builtin_memcpy(&_wqP, &_cb[24], 8); \
         uint64_t _expSelf = _cva + 16; \
-        if (_done == 0 && _wqN == _expSelf && _wqP == _expSelf) \
+        bool _selfRef = (_wqN == _expSelf && _wqP == _expSelf); \
+        /* _zeroWq unused: bool _zeroWq = (_wqN == 0 && _wqP == 0); */ \
+        /* Also check offset+8 for list_head (if lock is smaller) */ \
+        uint64_t _wqN8, _wqP8; \
+        __builtin_memcpy(&_wqN8, &_cb[8], 8); \
+        __builtin_memcpy(&_wqP8, &_cb[16], 8); \
+        uint64_t _expSelf8 = _cva + 8; \
+        bool _selfRef8 = (_wqN8 == _expSelf8 && _wqP8 == _expSelf8); \
+        if (_done == 0 && (_selfRef || _selfRef8)) \
         { \
             uint32_t _one = 1; \
             PGMPhysSimpleWriteGCPhys(pVMfc, _pa, &_one, 4); \
             s_cFC4fixes++; \
-            if (s_cFixedCount < 32) \
-                s_aFixedAddrs[s_cFixedCount++] = _cva; \
             uint32_t _vfy = 0xDEAD; \
             PGMPhysSimpleReadGCPhys(pVMfc, &_vfy, _pa, 4); \
-            RTPrintf("[FC4w] #%u insns=%llu FIXED comp@%#llx" \
-                     " (verify=%u) RIP=%#llx\n", \
+            RTPrintf("[FC4x] #%u insns=%llu FIXED comp@%#llx" \
+                     " (verify=%u) wq16=%d wq8=%d RIP=%#llx\n", \
                 s_cFC4fixes, \
                 (unsigned long long)g_cWasmVirtualInstructions, \
                 (unsigned long long)_cva, _vfy, \
+                (int)_selfRef, (int)_selfRef8, \
                 (unsigned long long)pVCpu->cpum.GstCtx.rip); \
-            RTStrmFlush(g_pStdOut); \
-        } \
-        else if (_done == 0) \
-        { \
-            RTPrintf("[FC4w] insns=%llu CAND@%#llx done=%u" \
-                     " wq.n=%#llx wq.p=%#llx exp=%#llx\n", \
-                (unsigned long long)g_cWasmVirtualInstructions, \
-                (unsigned long long)_cva, _done, \
-                (unsigned long long)_wqN, (unsigned long long)_wqP, \
-                (unsigned long long)_expSelf); \
             RTStrmFlush(g_pStdOut); \
         } \
     } while (0)
 
-                                /* 1) Scan kernel stack for wait_for_completion
-                                 * return address and nearby completion pointers */
                                 uint64_t uRsp = pVCpu->cpum.GstCtx.rsp;
                                 if (uRsp >= UINT64_C(0xffff888000000000))
                                 {
@@ -1749,25 +1743,39 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                                     PGMPhysSimpleReadGCPhys(pVMfc, stkBuf,
                                         (RTGCPHYS)uPhysRsp, sizeof(stkBuf));
 
+                                    /* 1) Scan for MAX_SCHEDULE_TIMEOUT on stack.
+                                     * When found, the completion pointer is typically
+                                     * 2-4 slots above (in the caller's frame). */
+                                    const uint64_t kMaxTO = UINT64_C(0x7fffffffffffffff);
+                                    for (int _i = 0; _i < 126; _i++)
+                                    {
+                                        if (stkBuf[_i] == kMaxTO)
+                                        {
+                                            /* Slots i+1..i+4 may have the
+                                             * wait_for_completion return addr, then
+                                             * the completion pointer in the next slot */
+                                            for (int _j = _i + 1; _j < _i + 6 && _j < 128; _j++)
+                                                FC4_TRY_COMPLETE(stkBuf[_j]);
+                                            break;
+                                        }
+                                    }
+
+                                    /* 2) Also scan for the known return address */
                                     const uint64_t kWfcRet = UINT64_C(0xffffffff810ce65a);
                                     for (int _i = 0; _i < 126; _i++)
                                     {
                                         if (stkBuf[_i] == kWfcRet)
                                         {
-                                            /* Try slots around the return addr:
-                                             * i+1, i+2, i-1 as completion candidates */
                                             if (_i + 1 < 128)
                                                 FC4_TRY_COMPLETE(stkBuf[_i + 1]);
                                             if (_i + 2 < 128)
                                                 FC4_TRY_COMPLETE(stkBuf[_i + 2]);
-                                            if (_i > 0)
-                                                FC4_TRY_COMPLETE(stkBuf[_i - 1]);
                                             break;
                                         }
                                     }
 
-                                    /* Also scan entire stack for any kernel addr
-                                     * that looks like a valid completion with done=0 */
+                                    /* 3) Scan stack for heap/data addrs that look
+                                     * like valid completions */
                                     for (int _i = 0; _i < 128; _i++)
                                     {
                                         uint64_t v = stkBuf[_i];
@@ -1781,16 +1789,21 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                                     }
                                 }
 
-                                /* 2) Check callee-saved registers for completion ptrs */
+                                /* 4) Check callee-saved registers for completion ptrs */
                                 FC4_TRY_COMPLETE(pVCpu->cpum.GstCtx.rbx);
+                                FC4_TRY_COMPLETE(pVCpu->cpum.GstCtx.rbp);
                                 FC4_TRY_COMPLETE(pVCpu->cpum.GstCtx.r12);
                                 FC4_TRY_COMPLETE(pVCpu->cpum.GstCtx.r13);
                                 FC4_TRY_COMPLETE(pVCpu->cpum.GstCtx.r14);
                                 FC4_TRY_COMPLETE(pVCpu->cpum.GstCtx.r15);
                                 FC4_TRY_COMPLETE(pVCpu->cpum.GstCtx.rdi);
 
-                                /* 3) Re-check known completion at heap_obj+0xd8 */
+                                /* 5) Re-check known completion at heap_obj+0xd8
+                                 * and also probe heap_obj at various offsets */
                                 FC4_TRY_COMPLETE(UINT64_C(0xffff8880074122d8));
+                                /* Probe the heap object at multiple completion-sized offsets */
+                                for (uint64_t _off = 0; _off <= 0x100; _off += 0x20)
+                                    FC4_TRY_COMPLETE(UINT64_C(0xffff888007412200) + _off);
 
 #undef FC4_TRY_COMPLETE
                             }

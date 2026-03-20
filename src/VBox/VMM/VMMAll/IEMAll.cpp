@@ -1941,43 +1941,54 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
 #undef FC4_TRY_COMPLETE
                             }
 
-                            /* 7) When tasks exist, dump first task's state.
-                             * This is OUTSIDE the singleton check so it fires
-                             * when tasks have been created. */
+                            /* 7) Walk task list and dump ALL tasks' state.
+                             * Also scan pid offsets to find the correct one. */
                             {
-                                uint64_t uTNext = 0;
-                                PGMPhysSimpleReadGCPhys(pVMfc, &uTNext,
+                                uint64_t uTCur = 0;
+                                PGMPhysSimpleReadGCPhys(pVMfc, &uTCur,
                                     (RTGCPHYS)UINT64_C(0x24117d0), 8);
                                 const uint64_t kSelfTasks = UINT64_C(0xffffffff824117d0);
-                                if (uTNext != kSelfTasks && uTNext != 0)
+                                int taskCount = 0;
+                                while (uTCur != kSelfTasks && uTCur != 0 && taskCount < 10)
                                 {
-                                    uint64_t task1VA = uTNext - UINT64_C(0x310);
-                                    RTGCPHYS task1PA;
-                                    if (task1VA >= UINT64_C(0xffff888000000000))
-                                        task1PA = (RTGCPHYS)(task1VA - UINT64_C(0xffff888000000000));
+                                    taskCount++;
+                                    uint64_t taskVA = uTCur - UINT64_C(0x310);
+                                    RTGCPHYS taskPA;
+                                    if (taskVA >= UINT64_C(0xffff888000000000))
+                                        taskPA = (RTGCPHYS)(taskVA - UINT64_C(0xffff888000000000));
                                     else
-                                        task1PA = (RTGCPHYS)(task1VA - UINT64_C(0xffffffff80000000));
-                                    uint64_t state1 = 0xDEAD;
-                                    PGMPhysSimpleReadGCPhys(pVMfc, &state1,
-                                        (RTGCPHYS)(task1PA + 8), 8);
-                                    uint32_t pid1 = 0xDEAD;
-                                    PGMPhysSimpleReadGCPhys(pVMfc, &pid1,
-                                        (RTGCPHYS)(task1PA + UINT64_C(0x488)), 4);
-                                    char comm1[17] = {0};
-                                    PGMPhysSimpleReadGCPhys(pVMfc, comm1,
-                                        (RTGCPHYS)(task1PA + UINT64_C(0x5c8)), 16);
-                                    comm1[16] = '\0';
-                                    uint64_t stackBase = 0;
-                                    PGMPhysSimpleReadGCPhys(pVMfc, &stackBase,
-                                        (RTGCPHYS)(task1PA + UINT64_C(0x18)), 8);
-                                    RTPrintf("[FC4z-TASK] task1@%#llx state=%lld"
-                                             " pid=%d comm='%.16s' stack=%#llx\n",
-                                        (unsigned long long)task1VA,
-                                        (long long)state1, (int)pid1,
-                                        comm1,
-                                        (unsigned long long)stackBase);
-                                    RTStrmFlush(g_pStdOut);
+                                        taskPA = (RTGCPHYS)(taskVA - UINT64_C(0xffffffff80000000));
+                                    uint64_t state = 0xDEAD;
+                                    PGMPhysSimpleReadGCPhys(pVMfc, &state,
+                                        (RTGCPHYS)(taskPA + 8), 8);
+                                    char comm[17] = {0};
+                                    PGMPhysSimpleReadGCPhys(pVMfc, comm,
+                                        (RTGCPHYS)(taskPA + UINT64_C(0x5c8)), 16);
+                                    comm[16] = '\0';
+                                    /* Scan for pid: try offsets 0x470-0x4a0 */
+                                    uint32_t pidCands[4] = {0};
+                                    PGMPhysSimpleReadGCPhys(pVMfc, &pidCands[0],
+                                        (RTGCPHYS)(taskPA + UINT64_C(0x470)), 4);
+                                    PGMPhysSimpleReadGCPhys(pVMfc, &pidCands[1],
+                                        (RTGCPHYS)(taskPA + UINT64_C(0x480)), 4);
+                                    PGMPhysSimpleReadGCPhys(pVMfc, &pidCands[2],
+                                        (RTGCPHYS)(taskPA + UINT64_C(0x490)), 4);
+                                    PGMPhysSimpleReadGCPhys(pVMfc, &pidCands[3],
+                                        (RTGCPHYS)(taskPA + UINT64_C(0x4a0)), 4);
+                                    RTPrintf("[FC4z-TASK] #%d @%#llx state=%lld"
+                                             " comm='%.16s'"
+                                             " pid@470=%d @480=%d @490=%d @4a0=%d\n",
+                                        taskCount,
+                                        (unsigned long long)taskVA,
+                                        (long long)state, comm,
+                                        pidCands[0], pidCands[1],
+                                        pidCands[2], pidCands[3]);
+                                    /* Follow tasks.next */
+                                    PGMPhysSimpleReadGCPhys(pVMfc, &uTCur,
+                                        (RTGCPHYS)(taskPA + UINT64_C(0x310)), 8);
                                 }
+                                if (taskCount > 0)
+                                    RTStrmFlush(g_pStdOut);
                             }
                         }
                     }

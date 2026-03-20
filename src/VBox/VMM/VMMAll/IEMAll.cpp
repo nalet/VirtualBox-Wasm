@@ -1938,6 +1938,54 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                                     }
                                 }
 
+                                /* 7) When tasks exist, dump first task's state.
+                                 * tasks.next is at init_task PA 0x24117d0.
+                                 * Next task's task_struct = tasks.next - 0x310 */
+                                {
+                                    uint64_t uTNext = 0;
+                                    PGMPhysSimpleReadGCPhys(pVMfc, &uTNext,
+                                        (RTGCPHYS)UINT64_C(0x24117d0), 8);
+                                    const uint64_t kSelfTasks = UINT64_C(0xffffffff824117d0);
+                                    if (uTNext != kSelfTasks && uTNext != 0)
+                                    {
+                                        /* We have tasks! Read PID 1's state */
+                                        uint64_t task1VA = uTNext - UINT64_C(0x310);
+                                        RTGCPHYS task1PA;
+                                        if (task1VA >= UINT64_C(0xffff888000000000))
+                                            task1PA = (RTGCPHYS)(task1VA - UINT64_C(0xffff888000000000));
+                                        else
+                                            task1PA = (RTGCPHYS)(task1VA - UINT64_C(0xffffffff80000000));
+                                        /* state at +8, pid at +0x488, comm at +0x5c8 */
+                                        uint64_t state1 = 0xDEAD;
+                                        PGMPhysSimpleReadGCPhys(pVMfc, &state1,
+                                            (RTGCPHYS)(task1PA + 8), 8);
+                                        uint32_t pid1 = 0xDEAD;
+                                        PGMPhysSimpleReadGCPhys(pVMfc, &pid1,
+                                            (RTGCPHYS)(task1PA + UINT64_C(0x488)), 4);
+                                        char comm1[17] = {0};
+                                        PGMPhysSimpleReadGCPhys(pVMfc, comm1,
+                                            (RTGCPHYS)(task1PA + UINT64_C(0x5c8)), 16);
+                                        comm1[16] = '\0';
+                                        /* Read task's kernel stack pointer
+                                         * thread.sp at offset ~0x18 in thread_struct
+                                         * which is at offset ~0x4c0 in task_struct.
+                                         * Actually thread_struct is huge, sp is at
+                                         * task+0x20 or task+0x28 for some configs.
+                                         * Let's try reading the saved RSP from the
+                                         * task's stack field. stack at offset +0x18. */
+                                        uint64_t stackBase = 0;
+                                        PGMPhysSimpleReadGCPhys(pVMfc, &stackBase,
+                                            (RTGCPHYS)(task1PA + UINT64_C(0x18)), 8);
+                                        RTPrintf("[FC4z-TASK] task1@%#llx state=%lld"
+                                                 " pid=%d comm='%.16s' stack=%#llx\n",
+                                            (unsigned long long)task1VA,
+                                            (long long)state1, (int)pid1,
+                                            comm1,
+                                            (unsigned long long)stackBase);
+                                        RTStrmFlush(g_pStdOut);
+                                    }
+                                }
+
 #undef FC4_TRY_COMPLETE
                             }
                         }

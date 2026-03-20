@@ -673,10 +673,18 @@ static DECLCALLBACK(int) vmR3HaltMethod1Halt(PUVMCPU pUVCpu, const uint64_t fMas
                nanosecond timeouts (futex emulation via SharedArrayBuffer).
                Use RTThreadSleep(1ms) as a reliable alternative.  This ensures
                the halt loop retries frequently so TMR3TimerQueuesDo can fire
-               expired PIT/PIC timers and wake the CPU from HLT. */
+               expired PIT/PIC timers and wake the CPU from HLT.
+               CRITICAL: advance g_cWasmVirtualInstructions during HLT so
+               virtual time (insn_count * 100 ns) progresses and PIT/timer
+               deadlines are eventually reached.  Without this, virtual time
+               freezes during HLT and no timer interrupt ever fires. */
             {
+                extern volatile uint64_t g_cWasmVirtualInstructions;
                 uint64_t const u64StartSchedHalt   = RTTimeNanoTS();
                 RTThreadSleep(1);  /* 1ms sleep — reliable in Emscripten */
+                /* Advance virtual instruction counter: 1 ms = 1,000,000 ns
+                   at 100 ns/insn = 10,000 instructions per ms of halt. */
+                g_cWasmVirtualInstructions += UINT64_C(10000);
                 uint64_t const cNsElapsedSchedHalt = RTTimeNanoTS() - u64StartSchedHalt;
                 STAM_REL_PROFILE_ADD_PERIOD(&pUVCpu->vm.s.StatHaltBlock, cNsElapsedSchedHalt);
                 rc = VINF_SUCCESS;

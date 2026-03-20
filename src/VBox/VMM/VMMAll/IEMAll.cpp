@@ -1527,67 +1527,74 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                         }
                     }
 
-                    /* ── TASKS-WATCH: monitor init_task.tasks.next for new task creation ──
-                     * Fires every 10K instructions in 1.1B-1.5B window (rest_init period after
-                     * check_bugs), every 100K otherwise, from 50M to 20B.
-                     * Reads init_task.tasks.next (phys 0x2411778, VA 0xffffffff82411778).
-                     * When changed from self-referential, a new task was added — dump its details.
-                     * This catches kernel_thread() → copy_process() → list_add_tail_rcu(). */
+                    /* ── TASK-WALK: walk the task list via init_task.tasks (offset 0x310) ──
+                     * init_task is at VA 0xffffffff824114c0 (phys 0x24114c0).
+                     * tasks list_head is at offset 0x310 → VA 0xffffffff824117d0 (phys 0x24117d0).
+                     * task_struct field offsets: state=0x10, pid=0x488, comm=0x5c8.
+                     * Fires at 300M, then every 500M instructions. */
                     if ((pVCpu->cpum.GstCtx.msrEFER & MSR_K6_EFER_LMA)
-                        && g_cWasmVirtualInstructions >= UINT64_C(50000000)
-                        && g_cWasmVirtualInstructions <= UINT64_C(20000000000))
+                        && g_cWasmVirtualInstructions >= UINT64_C(300000000))
                     {
-                        static uint64_t s_cNextTasksCheck = UINT64_C(50000000);
-                        static uint64_t s_uLastTasksNext  = UINT64_C(0xffffffff82411778); /* init value = self */
-                        if (g_cWasmVirtualInstructions >= s_cNextTasksCheck)
+                        static uint64_t s_cNextTaskWalk = UINT64_C(300000000);
+                        if (g_cWasmVirtualInstructions >= s_cNextTaskWalk)
                         {
-                            /* Use 10K interval in the critical rest_init window (after check_bugs
-                             * at ~1.1B, rest_init should run by ~1.3B), 100K otherwise */
-                            bool fFineGrained = (g_cWasmVirtualInstructions >= UINT64_C(1100000000)
-                                             && g_cWasmVirtualInstructions <= UINT64_C(1500000000));
-                            s_cNextTasksCheck = g_cWasmVirtualInstructions + (fFineGrained ? UINT64_C(10000) : UINT64_C(100000));
+                            s_cNextTaskWalk = g_cWasmVirtualInstructions + UINT64_C(500000000);
                             PVMCC pVMtw = pVCpu->CTX_SUFF(pVM);
-                            uint64_t uTasksNext = 0;
-                            int rctw = PGMPhysSimpleReadGCPhys(pVMtw, &uTasksNext, (RTGCPHYS)UINT64_C(0x2411778), 8);
-                            if (RT_SUCCESS(rctw) && uTasksNext != s_uLastTasksNext)
+                            /* Read init_task.tasks.next (phys 0x24117d0) */
+                            uint64_t uNextTasksVA = 0;
+                            PGMPhysSimpleReadGCPhys(pVMtw, &uNextTasksVA,
+                                (RTGCPHYS)UINT64_C(0x24117d0), 8);
+                            RTPrintf("[TASK-WALK] insns=%llu init_task.tasks.next=%#llx\n",
+                                (unsigned long long)g_cWasmVirtualInstructions,
+                                (unsigned long long)uNextTasksVA);
+                            /* Walk up to 20 tasks */
+                            int nTasks = 0;
+                            uint64_t uCurTasksVA = uNextTasksVA;
+                            while (uCurTasksVA != UINT64_C(0xffffffff824117d0) /* init_task.tasks VA */
+                                   && uCurTasksVA != 0
+                                   && nTasks < 20)
                             {
-                                bool fSelf = (uTasksNext == UINT64_C(0xffffffff82411778));
-                                RTPrintf("[TASKS-WATCH] insns=%llu tasks.next changed: %#llx%s\n",
-                                    (unsigned long long)g_cWasmVirtualInstructions,
-                                    (unsigned long long)uTasksNext,
-                                    fSelf ? " (back to self/singleton)" : " <<< NEW TASK ADDED!");
-                                if (!fSelf)
-                                {
-                                    /* new task tasks offset = uTasksNext - sizeof(list_head) * N, but
-                                     * tasks is at offset 0x2b8, so task_struct base = uTasksNext - 0x2b8 */
-                                    uint64_t newTaskBase = uTasksNext - UINT64_C(0x2b8);
-                                    uint64_t newTaskBasePhys = newTaskBase - UINT64_C(0xffffffff80000000);
-                                    /* Read comm (+0x5c8) and pid (+??) from the new task_struct */
-                                    char szComm[17];
-                                    RT_ZERO(szComm);
-                                    PGMPhysSimpleReadGCPhys(pVMtw, szComm, (RTGCPHYS)(newTaskBasePhys + 0x5c8), 16);
-                                    /* pid is at some offset; state at +0x10; stack at +0x18 */
-                                    uint64_t uState = 0;
-                                    uint64_t uStack = 0;
-                                    PGMPhysSimpleReadGCPhys(pVMtw, &uState, (RTGCPHYS)(newTaskBasePhys + 0x10), 8);
-                                    PGMPhysSimpleReadGCPhys(pVMtw, &uStack, (RTGCPHYS)(newTaskBasePhys + 0x18), 8);
-                                    szComm[16] = '\0';
-                                    RTPrintf("[TASKS-WATCH]   new task base VA=%#llx phys=%#llx\n",
-                                        (unsigned long long)newTaskBase,
-                                        (unsigned long long)newTaskBasePhys);
-                                    RTPrintf("[TASKS-WATCH]   comm='%s' state=%#llx stack=%#llx\n",
-                                        szComm, (unsigned long long)uState, (unsigned long long)uStack);
-                                    /* Also dump RIP/RSP/RDI at this moment */
-                                    RTPrintf("[TASKS-WATCH]   caller: RIP=%#llx RSP=%#llx RDI=%#llx RSI=%#llx RDX=%#llx\n",
-                                        (unsigned long long)pVCpu->cpum.GstCtx.rip,
-                                        (unsigned long long)pVCpu->cpum.GstCtx.rsp,
-                                        (unsigned long long)pVCpu->cpum.GstCtx.rdi,
-                                        (unsigned long long)pVCpu->cpum.GstCtx.rsi,
-                                        (unsigned long long)pVCpu->cpum.GstCtx.rdx);
-                                }
-                                s_uLastTasksNext = uTasksNext;
-                                RTStrmFlush(g_pStdOut);
+                                nTasks++;
+                                /* task_struct base = tasks VA - 0x310 */
+                                uint64_t uTaskBaseVA = uCurTasksVA - UINT64_C(0x310);
+                                /* VA → phys translation */
+                                uint64_t uTaskBasePhys;
+                                if (uTaskBaseVA >= UINT64_C(0xffffffff80000000))
+                                    uTaskBasePhys = uTaskBaseVA - UINT64_C(0xffffffff80000000);
+                                else
+                                    uTaskBasePhys = uTaskBaseVA - UINT64_C(0xffff888000000000);
+                                /* Read state (offset 0x10), on_cpu (offset 0x24 on 5.4),
+                                 * pid (offset 0x488), comm (offset 0x5c8) */
+                                uint64_t uState = 0xDEAD;
+                                uint32_t uPid = 0xDEAD;
+                                char szComm[17];
+                                __builtin_memset(szComm, 0, sizeof(szComm));
+                                PGMPhysSimpleReadGCPhys(pVMtw, &uState,
+                                    (RTGCPHYS)(uTaskBasePhys + 0x10), 8);
+                                PGMPhysSimpleReadGCPhys(pVMtw, &uPid,
+                                    (RTGCPHYS)(uTaskBasePhys + 0x488), 4);
+                                PGMPhysSimpleReadGCPhys(pVMtw, szComm,
+                                    (RTGCPHYS)(uTaskBasePhys + 0x5c8), 16);
+                                szComm[16] = '\0';
+                                /* Read thread_info.flags (offset 0x0) for TIF_NEED_RESCHED (bit 3) */
+                                uint64_t uTIFlags = 0;
+                                PGMPhysSimpleReadGCPhys(pVMtw, &uTIFlags,
+                                    (RTGCPHYS)uTaskBasePhys, 8);
+                                RTPrintf("[TASK-WALK]   #%d VA=%#llx state=%lld pid=%u comm='%s' ti_flags=%#llx%s\n",
+                                    nTasks,
+                                    (unsigned long long)uTaskBaseVA,
+                                    (long long)uState,
+                                    (unsigned)uPid, szComm,
+                                    (unsigned long long)uTIFlags,
+                                    (uTIFlags & 8) ? " NEED_RESCHED" : "");
+                                /* Read next task in list */
+                                uint64_t uNextVA = 0;
+                                PGMPhysSimpleReadGCPhys(pVMtw, &uNextVA,
+                                    (RTGCPHYS)(uTaskBasePhys + 0x310), 8);
+                                uCurTasksVA = uNextVA;
                             }
+                            RTPrintf("[TASK-WALK]   total=%d\n", nTasks);
+                            RTStrmFlush(g_pStdOut);
                         }
                     }
 
@@ -1631,14 +1638,14 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                             s_nEarlyRipShot++;
                             /* Next fire: every 100M instructions */
                             s_cNextEarlyRip = g_cWasmVirtualInstructions + UINT64_C(100000000);
-                            /* Read tasks.next */
+                            /* Read tasks.next (init_task + 0x310 = phys 0x24117d0) */
                             PVMCC pVMer = pVCpu->CTX_SUFF(pVM);
                             uint64_t uTN = 0;
-                            PGMPhysSimpleReadGCPhys(pVMer, &uTN, (RTGCPHYS)UINT64_C(0x2411778), 8);
+                            PGMPhysSimpleReadGCPhys(pVMer, &uTN, (RTGCPHYS)UINT64_C(0x24117d0), 8);
                             /* Read current_task from per-CPU (phys 0x7c15d00) */
                             uint64_t uCT = 0;
                             PGMPhysSimpleReadGCPhys(pVMer, &uCT, (RTGCPHYS)UINT64_C(0x7c15d00), 8);
-                            bool fTasksSelf = (uTN == UINT64_C(0xffffffff82411778));
+                            bool fTasksSelf = (uTN == UINT64_C(0xffffffff824117d0));
                             bool fCTisInit  = (uCT == UINT64_C(0xffffffff824114c0));
                             uint64_t uRsp = pVCpu->cpum.GstCtx.rsp;
                             RTPrintf("[EARLY-RIP] #%d insns=%llu EIP=%#llx RSP=%#llx tasks=%s cur=%s\n",
@@ -1670,9 +1677,9 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                                 ibytes[4], ibytes[5], ibytes[6], ibytes[7],
                                 ibytes[8], ibytes[9], ibytes[10], ibytes[11],
                                 ibytes[12], ibytes[13], ibytes[14], ibytes[15]);
-                            /* Read init_task.tasks.prev (phys 0x2411780) to check both pointers */
+                            /* Read init_task.tasks.prev (phys 0x24117d8) to check both pointers */
                             uint64_t uTasksPrev = 0;
-                            PGMPhysSimpleReadGCPhys(pVMer, &uTasksPrev, (RTGCPHYS)UINT64_C(0x2411780), 8);
+                            PGMPhysSimpleReadGCPhys(pVMer, &uTasksPrev, (RTGCPHYS)UINT64_C(0x24117d8), 8);
                             /* GS base = per-CPU area base for CPU0 */
                             uint64_t uGsBase = pVCpu->cpum.GstCtx.gs.u64Base;
                             RTPrintf("[EARLY-RIP]   tasks.prev=%llx current_task=%llx gsbase=%llx\n",
@@ -1692,30 +1699,67 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                                 RTPrintf("[EARLY-RIP]   comp1: %016llx %016llx\n",
                                     (unsigned long long)uComp[2], (unsigned long long)uComp[3]);
                             }
-                            /* Also scan stk for any init-range kernel VA and dump 32 bytes from it */
+                            /* Scan stk for init-range return address, dump CALL instruction BEFORE it */
                             for (int _i = 0; _i < 8; _i++)
                             {
                                 if (stk[_i] >= UINT64_C(0xffffffff82000000)
                                     && stk[_i] <= UINT64_C(0xffffffff82c00000))
                                 {
-                                    uint64_t uCs[4] = {0, 0, 0, 0};
-                                    PGMPhysSimpleReadGCPtr(pVCpu, uCs, (RTGCPTR)stk[_i], 32);
-                                    RTPrintf("[EARLY-RIP]   comp@stk[%d]=%llx: %016llx %016llx %016llx %016llx\n",
+                                    /* Read 16 bytes BEFORE the return addr to decode the CALL insn */
+                                    uint8_t preBytes[16] = {0};
+                                    PGMPhysSimpleReadGCPtr(pVCpu, preBytes,
+                                        (RTGCPTR)(stk[_i] - 16), 16);
+                                    RTPrintf("[EARLY-RIP]   pre@stk[%d]=%llx: "
+                                        "%02x %02x %02x %02x %02x %02x %02x %02x "
+                                        "%02x %02x %02x %02x %02x %02x %02x %02x\n",
                                         _i, (unsigned long long)stk[_i],
-                                        (unsigned long long)uCs[0], (unsigned long long)uCs[1],
-                                        (unsigned long long)uCs[2], (unsigned long long)uCs[3]);
+                                        preBytes[0], preBytes[1], preBytes[2], preBytes[3],
+                                        preBytes[4], preBytes[5], preBytes[6], preBytes[7],
+                                        preBytes[8], preBytes[9], preBytes[10], preBytes[11],
+                                        preBytes[12], preBytes[13], preBytes[14], preBytes[15]);
+                                    /* Also read 16 bytes FROM the return addr (code after the call) */
+                                    uint8_t postBytes[16] = {0};
+                                    PGMPhysSimpleReadGCPtr(pVCpu, postBytes,
+                                        (RTGCPTR)stk[_i], 16);
+                                    RTPrintf("[EARLY-RIP]   post@stk[%d]=%llx: "
+                                        "%02x %02x %02x %02x %02x %02x %02x %02x "
+                                        "%02x %02x %02x %02x %02x %02x %02x %02x\n",
+                                        _i, (unsigned long long)stk[_i],
+                                        postBytes[0], postBytes[1], postBytes[2], postBytes[3],
+                                        postBytes[4], postBytes[5], postBytes[6], postBytes[7],
+                                        postBytes[8], postBytes[9], postBytes[10], postBytes[11],
+                                        postBytes[12], postBytes[13], postBytes[14], postBytes[15]);
                                     break;
                                 }
                             }
-                            /* Dump 8 MORE stack QWORDs (higher frames = callers of wait) */
-                            uint64_t stk2[8] = {0};
-                            PGMPhysSimpleReadGCPhys(pVMer, stk2, (RTGCPHYS)(uPhysRsp + 64), 64);
-                            RTPrintf("[EARLY-RIP]   hi: %llx %llx %llx %llx\n",
-                                (unsigned long long)stk2[0], (unsigned long long)stk2[1],
-                                (unsigned long long)stk2[2], (unsigned long long)stk2[3]);
-                            RTPrintf("[EARLY-RIP]   hi: %llx %llx %llx %llx\n",
-                                (unsigned long long)stk2[4], (unsigned long long)stk2[5],
-                                (unsigned long long)stk2[6], (unsigned long long)stk2[7]);
+                            /* Read 256 more bytes up the stack to find IRQ interrupt frame */
+                            {
+                                uint64_t stkUp[32];
+                                __builtin_memset(stkUp, 0, sizeof(stkUp));
+                                PGMPhysSimpleReadGCPhys(pVMer, stkUp,
+                                    (RTGCPHYS)(uPhysRsp + 128), 256);
+                                /* Scan for CS=0x10 (kernel code segment) = interrupt frame */
+                                for (int _j = 1; _j < 31; _j++)
+                                {
+                                    if (stkUp[_j] == UINT64_C(0x10)
+                                        && _j > 0
+                                        && stkUp[_j-1] >= UINT64_C(0xffffffff81000000)
+                                        && stkUp[_j-1] <= UINT64_C(0xffffffff83000000))
+                                    {
+                                        /* Found: RIP=stkUp[j-1], CS=stkUp[j],
+                                         * RFLAGS=stkUp[j+1], RSP=stkUp[j+2], SS=stkUp[j+3] */
+                                        RTPrintf("[EARLY-RIP]   IRQ-FRAME@+%d: "
+                                            "RIP=%#llx CS=%#llx RFLAGS=%#llx RSP=%#llx SS=%#llx\n",
+                                            (int)(128 + _j * 8),
+                                            (unsigned long long)stkUp[_j-1],
+                                            (unsigned long long)stkUp[_j],
+                                            _j+1 < 32 ? (unsigned long long)stkUp[_j+1] : 0ULL,
+                                            _j+2 < 32 ? (unsigned long long)stkUp[_j+2] : 0ULL,
+                                            _j+3 < 32 ? (unsigned long long)stkUp[_j+3] : 0ULL);
+                                        break;
+                                    }
+                                }
+                            }
                             RTStrmFlush(g_pStdOut);
                         }
                     }

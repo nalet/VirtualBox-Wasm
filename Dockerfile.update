@@ -4,6 +4,7 @@ FROM virtualbox-wasm:latest
 COPY src/VBox/VMM/VMMAll/IEMAll.cpp /build/vbox/src/VBox/VMM/VMMAll/IEMAll.cpp
 COPY src/VBox/VMM/VMMAll/TMAllVirtual.cpp /build/vbox/src/VBox/VMM/VMMAll/TMAllVirtual.cpp
 COPY src/VBox/VMM/VMMAll/target-x86/IEMAllCImpl-x86.cpp /build/vbox/src/VBox/VMM/VMMAll/target-x86/IEMAllCImpl-x86.cpp
+COPY src/VBox/VMM/VMMR3/VMR3Emt.cpp /build/vbox/src/VBox/VMM/VMMR3/VMR3Emt.cpp
 COPY jit-pre.js /build/vbox/jit-pre.js
 
 WORKDIR /build/vbox
@@ -11,7 +12,8 @@ WORKDIR /build/vbox
 # Touch source files so kmk detects them as newer than cached .o files
 RUN touch src/VBox/VMM/VMMAll/IEMAll.cpp \
          src/VBox/VMM/VMMAll/TMAllVirtual.cpp \
-         src/VBox/VMM/VMMAll/target-x86/IEMAllCImpl-x86.cpp
+         src/VBox/VMM/VMMAll/target-x86/IEMAllCImpl-x86.cpp \
+         src/VBox/VMM/VMMR3/VMR3Emt.cpp
 
 # Rebuild VBoxVMM (IEMAll.cpp + TMAllVirtual.cpp changed — incremental build)
 RUN . /opt/emsdk/emsdk_env.sh 2>/dev/null \

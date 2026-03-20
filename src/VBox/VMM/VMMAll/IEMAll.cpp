@@ -1798,12 +1798,41 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                                 FC4_TRY_COMPLETE(pVCpu->cpum.GstCtx.r15);
                                 FC4_TRY_COMPLETE(pVCpu->cpum.GstCtx.rdi);
 
-                                /* 5) Re-check known completion at heap_obj+0xd8
-                                 * and also probe heap_obj at various offsets */
+                                /* 5) Re-check known completion at heap_obj+0xd8 */
                                 FC4_TRY_COMPLETE(UINT64_C(0xffff8880074122d8));
-                                /* Probe the heap object at multiple completion-sized offsets */
-                                for (uint64_t _off = 0; _off <= 0x100; _off += 0x20)
-                                    FC4_TRY_COMPLETE(UINT64_C(0xffff888007412200) + _off);
+
+                                /* 6) When MAX_SCHEDULE_TIMEOUT found, dump 16 slots
+                                 * above it so we can identify the completion addr */
+                                if (uRsp >= UINT64_C(0xffff888000000000))
+                                {
+                                    uint64_t uPhysRsp2 = uRsp - UINT64_C(0xffff888000000000);
+                                    uint64_t stkBuf2[256];
+                                    __builtin_memset(stkBuf2, 0, sizeof(stkBuf2));
+                                    PGMPhysSimpleReadGCPhys(pVMfc, stkBuf2,
+                                        (RTGCPHYS)uPhysRsp2,
+                                        sizeof(stkBuf2) < 2048 ? sizeof(stkBuf2) : 2048);
+                                    const uint64_t kMaxTO2 = UINT64_C(0x7fffffffffffffff);
+                                    for (int _i = 0; _i < 240; _i++)
+                                    {
+                                        if (stkBuf2[_i] == kMaxTO2)
+                                        {
+                                            /* Dump 16 slots above MAX_SCHEDULE_TIMEOUT */
+                                            RTPrintf("[FC4x] MAX_TO@stk[%d] RSP=%#llx "
+                                                     "insns=%llu\n", _i,
+                                                (unsigned long long)uRsp,
+                                                (unsigned long long)g_cWasmVirtualInstructions);
+                                            for (int _k = 1; _k <= 16 && _i+_k < 256; _k++)
+                                            {
+                                                uint64_t sv = stkBuf2[_i + _k];
+                                                RTPrintf("[FC4x]   +%d: %#018llx\n",
+                                                    _k, (unsigned long long)sv);
+                                                FC4_TRY_COMPLETE(sv);
+                                            }
+                                            RTStrmFlush(g_pStdOut);
+                                            break;
+                                        }
+                                    }
+                                }
 
 #undef FC4_TRY_COMPLETE
                             }

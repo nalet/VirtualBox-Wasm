@@ -1603,6 +1603,60 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                         }
                     }
 
+                    /* ── FORCE-COMPLETE: at 2B insns, if still singleton, scan registers
+                     * for completion pointer and force done=1 to break deadlock.
+                     * A completion struct has done (u32) at offset 0. We look for a
+                     * register pointing to the stack that has done=0. */
+                    {
+                        static bool s_fForced = false;
+                        if (!s_fForced
+                            && (pVCpu->cpum.GstCtx.msrEFER & MSR_K6_EFER_LMA)
+                            && g_cWasmVirtualInstructions >= UINT64_C(2000000000))
+                        {
+                            /* Check if tasks still singleton */
+                            PVMCC pVMfc = pVCpu->CTX_SUFF(pVM);
+                            uint64_t uTNfc = 0;
+                            PGMPhysSimpleReadGCPhys(pVMfc, &uTNfc,
+                                (RTGCPHYS)UINT64_C(0x24117d0), 8);
+                            if (uTNfc == UINT64_C(0xffffffff824117d0))
+                            {
+                                s_fForced = true;
+                                /* Try each callee-saved register as a possible completion ptr */
+                                uint64_t regs[] = {
+                                    pVCpu->cpum.GstCtx.rbx,
+                                    pVCpu->cpum.GstCtx.r12,
+                                    pVCpu->cpum.GstCtx.r13,
+                                    pVCpu->cpum.GstCtx.r14,
+                                    pVCpu->cpum.GstCtx.r15,
+                                };
+                                const char *rnames[] = {"RBX","R12","R13","R14","R15"};
+                                for (unsigned _r = 0; _r < 5; _r++)
+                                {
+                                    uint64_t rval = regs[_r];
+                                    /* Check if it points to kernel stack or init data */
+                                    if ((rval >= UINT64_C(0xffff888000000000) && rval < UINT64_C(0xffff889000000000))
+                                        || (rval >= UINT64_C(0xffffffff82000000) && rval < UINT64_C(0xffffffff83000000)))
+                                    {
+                                        /* Read first 4 bytes (done field) */
+                                        uint32_t uDone = 0xDEAD;
+                                        PGMPhysSimpleReadGCPtr(pVCpu, &uDone, (RTGCPTR)rval, 4);
+                                        RTPrintf("[FORCE-COMPLETE] %s=%#llx → done=%u\n",
+                                            rnames[_r], (unsigned long long)rval, (unsigned)uDone);
+                                        if (uDone == 0)
+                                        {
+                                            /* Force done = 1 */
+                                            uint32_t uOne = 1;
+                                            PGMPhysSimpleWriteGCPtr(pVCpu, (RTGCPTR)rval, &uOne, 4);
+                                            RTPrintf("[FORCE-COMPLETE] *** Wrote done=1 at %s=%#llx ***\n",
+                                                rnames[_r], (unsigned long long)rval);
+                                        }
+                                    }
+                                }
+                                RTStrmFlush(g_pStdOut);
+                            }
+                        }
+                    }
+
                     /* ── INIT-SECTION-ENTRY: fire once when EIP first enters __init text (≥0xffffffff82000000).
                      * This tells us if rest_init / arch_call_rest_init / kernel_init_freeable runs. */
                     if ((pVCpu->cpum.GstCtx.msrEFER & MSR_K6_EFER_LMA))
@@ -1660,6 +1714,34 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                                 (unsigned long long)uRsp,
                                 fTasksSelf ? "singleton" : "HAS-TASKS",
                                 fCTisInit ? "swapper" : "OTHER");
+                            /* Dump key registers to find completion pointer */
+                            RTPrintf("[EARLY-RIP]   RBP=%#llx RDI=%#llx RBX=%#llx\n",
+                                (unsigned long long)pVCpu->cpum.GstCtx.rbp,
+                                (unsigned long long)pVCpu->cpum.GstCtx.rdi,
+                                (unsigned long long)pVCpu->cpum.GstCtx.rbx);
+                            RTPrintf("[EARLY-RIP]   R12=%#llx R13=%#llx R14=%#llx R15=%#llx\n",
+                                (unsigned long long)pVCpu->cpum.GstCtx.r12,
+                                (unsigned long long)pVCpu->cpum.GstCtx.r13,
+                                (unsigned long long)pVCpu->cpum.GstCtx.r14,
+                                (unsigned long long)pVCpu->cpum.GstCtx.r15);
+                            /* Dump 16 bytes of code at the two return addresses */
+                            {
+                                uint8_t codeBuf[16] = {0};
+                                PGMPhysSimpleReadGCPtr(pVCpu, codeBuf,
+                                    (RTGCPTR)UINT64_C(0xffffffff81081270), 16);
+                                RTPrintf("[EARLY-RIP]   code@81081270: %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x\n",
+                                    codeBuf[0], codeBuf[1], codeBuf[2], codeBuf[3],
+                                    codeBuf[4], codeBuf[5], codeBuf[6], codeBuf[7],
+                                    codeBuf[8], codeBuf[9], codeBuf[10], codeBuf[11],
+                                    codeBuf[12], codeBuf[13], codeBuf[14], codeBuf[15]);
+                                PGMPhysSimpleReadGCPtr(pVCpu, codeBuf,
+                                    (RTGCPTR)UINT64_C(0xffffffff810c13a0), 16);
+                                RTPrintf("[EARLY-RIP]   code@810c13a0: %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x\n",
+                                    codeBuf[0], codeBuf[1], codeBuf[2], codeBuf[3],
+                                    codeBuf[4], codeBuf[5], codeBuf[6], codeBuf[7],
+                                    codeBuf[8], codeBuf[9], codeBuf[10], codeBuf[11],
+                                    codeBuf[12], codeBuf[13], codeBuf[14], codeBuf[15]);
+                            }
                             /* Dump 8 stack QWORDs (call chain) */
                             uint64_t uPhysRsp = uRsp - UINT64_C(0xffff888000000000);
                             uint64_t stk[8] = {0};

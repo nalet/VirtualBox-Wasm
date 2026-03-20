@@ -1655,13 +1655,13 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                         }
                     }
 
-                    /* ── FC4: at 2B insns, dump all regs + read key heap/stack objects
-                     * to identify the completion struct */
+                    /* ── FC4: at 400M insns (earlier!), dump full stack + code at
+                     * return addresses to identify WHERE in start_kernel we're stuck */
                     {
                         static bool s_fFC4 = false;
                         if (!s_fFC4
                             && (pVCpu->cpum.GstCtx.msrEFER & MSR_K6_EFER_LMA)
-                            && g_cWasmVirtualInstructions >= UINT64_C(2000000000))
+                            && g_cWasmVirtualInstructions >= UINT64_C(400000000))
                         {
                             PVMCC pVMfc = pVCpu->CTX_SUFF(pVM);
                             const uint64_t kInitTaskPhys = UINT64_C(0x24114c0);
@@ -1676,137 +1676,93 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                             {
                                 s_fFC4 = true;
                                 uint64_t uRsp = pVCpu->cpum.GstCtx.rsp;
-                                RTPrintf("[FC4] ALL REGS:\n");
-                                RTPrintf("[FC4] RIP=%#llx RSP=%#llx RBP=%#llx\n",
+                                RTPrintf("[FC4] insns=%llu RIP=%#llx RSP=%#llx\n",
+                                    (unsigned long long)g_cWasmVirtualInstructions,
                                     (unsigned long long)pVCpu->cpum.GstCtx.rip,
-                                    (unsigned long long)uRsp,
-                                    (unsigned long long)pVCpu->cpum.GstCtx.rbp);
-                                RTPrintf("[FC4] RAX=%#llx RCX=%#llx RDX=%#llx\n",
-                                    (unsigned long long)pVCpu->cpum.GstCtx.rax,
-                                    (unsigned long long)pVCpu->cpum.GstCtx.rcx,
-                                    (unsigned long long)pVCpu->cpum.GstCtx.rdx);
-                                RTPrintf("[FC4] RBX=%#llx RSI=%#llx RDI=%#llx\n",
-                                    (unsigned long long)pVCpu->cpum.GstCtx.rbx,
-                                    (unsigned long long)pVCpu->cpum.GstCtx.rsi,
-                                    (unsigned long long)pVCpu->cpum.GstCtx.rdi);
-                                RTPrintf("[FC4] R8=%#llx R9=%#llx R10=%#llx\n",
-                                    (unsigned long long)pVCpu->cpum.GstCtx.r8,
-                                    (unsigned long long)pVCpu->cpum.GstCtx.r9,
-                                    (unsigned long long)pVCpu->cpum.GstCtx.r10);
-                                RTPrintf("[FC4] R11=%#llx R12=%#llx R13=%#llx\n",
-                                    (unsigned long long)pVCpu->cpum.GstCtx.r11,
-                                    (unsigned long long)pVCpu->cpum.GstCtx.r12,
-                                    (unsigned long long)pVCpu->cpum.GstCtx.r13);
-                                RTPrintf("[FC4] R14=%#llx R15=%#llx\n",
-                                    (unsigned long long)pVCpu->cpum.GstCtx.r14,
-                                    (unsigned long long)pVCpu->cpum.GstCtx.r15);
+                                    (unsigned long long)uRsp);
 
-                                /* Read 64 bytes at R15, RBX, R12, R14 (potential
-                                 * kthread_create_info or completion structs) */
-                                uint64_t regAddrs[4] = {
-                                    pVCpu->cpum.GstCtx.r15,
-                                    pVCpu->cpum.GstCtx.rbx,
-                                    pVCpu->cpum.GstCtx.r12,
-                                    pVCpu->cpum.GstCtx.r14
-                                };
-                                const char *regNames[4] = {"R15","RBX","R12","R14"};
-                                for (int ri = 0; ri < 4; ri++)
+                                /* Dump code at RIP (16 bytes) */
                                 {
-                                    uint64_t addr = regAddrs[ri];
-                                    if (addr < UINT64_C(0xffff800000000000))
+                                    uint8_t code[16];
+                                    __builtin_memset(code, 0, 16);
+                                    PGMPhysSimpleReadGCPtr(pVCpu, code,
+                                        (RTGCPTR)pVCpu->cpum.GstCtx.rip, 16);
+                                    RTPrintf("[FC4] code@RIP:");
+                                    for (int i = 0; i < 16; i++)
+                                        RTPrintf(" %02x", code[i]);
+                                    RTPrintf("\n");
+                                }
+
+                                /* Dump full stack: 96 qwords = 768 bytes */
+                                uint8_t stkBuf[768];
+                                __builtin_memset(stkBuf, 0, sizeof(stkBuf));
+                                PGMPhysSimpleReadGCPtr(pVCpu, stkBuf,
+                                    (RTGCPTR)uRsp, 768);
+                                RTPrintf("[FC4] Stack (96 qwords):\n");
+                                for (unsigned q = 0; q < 96; q++)
+                                {
+                                    uint64_t sv;
+                                    __builtin_memcpy(&sv, &stkBuf[q * 8], 8);
+                                    if (sv != 0)
+                                        RTPrintf("[FC4] RSP+%03x: %#018llx\n",
+                                            q * 8, (unsigned long long)sv);
+                                }
+
+                                /* For each potential return addr on stack (kernel .text),
+                                 * read 5 bytes BEFORE it to check for CALL instruction.
+                                 * E8 xx xx xx xx = near call (5 bytes)
+                                 * FF 15 xx xx xx xx = call [rip+disp32] (6 bytes) */
+                                RTPrintf("[FC4] Call site verification:\n");
+                                for (unsigned q = 0; q < 96; q++)
+                                {
+                                    uint64_t sv;
+                                    __builtin_memcpy(&sv, &stkBuf[q * 8], 8);
+                                    /* Only check kernel .text range */
+                                    if (sv < UINT64_C(0xffffffff81000000)
+                                        || sv >= UINT64_C(0xffffffff82600000))
                                         continue;
+                                    /* Read 8 bytes before the return address */
+                                    uint8_t pre[8];
+                                    __builtin_memset(pre, 0, 8);
+                                    PGMPhysSimpleReadGCPtr(pVCpu, pre,
+                                        (RTGCPTR)(sv - 8), 8);
+                                    /* Check for E8 (call rel32) at -5 */
+                                    bool isCall = (pre[3] == 0xe8);
+                                    /* Check for FF 14/15 at -6 */
+                                    bool isCallInd = (pre[2] == 0xff
+                                        && (pre[3] == 0x14 || pre[3] == 0x15));
+                                    /* Check for call reg: FF Dx at -2 */
+                                    bool isCallReg = (pre[6] == 0xff
+                                        && (pre[7] >= 0xd0 && pre[7] <= 0xd7));
+                                    if (isCall || isCallInd || isCallReg)
+                                    {
+                                        RTPrintf("[FC4] RSP+%03x=%#llx CALL@%#llx:"
+                                                 " %02x %02x %02x %02x %02x %02x %02x %02x\n",
+                                            q * 8, (unsigned long long)sv,
+                                            (unsigned long long)(sv - 8),
+                                            pre[0], pre[1], pre[2], pre[3],
+                                            pre[4], pre[5], pre[6], pre[7]);
+                                    }
+                                }
+
+                                /* Read 64 bytes at 0xffff888007412200 (frequently seen
+                                 * heap object) to identify what it is */
+                                {
                                     uint8_t buf[64];
                                     __builtin_memset(buf, 0, 64);
                                     int rc = PGMPhysSimpleReadGCPtr(pVCpu, buf,
-                                        (RTGCPTR)addr, 64);
-                                    if (RT_FAILURE(rc)) {
-                                        RTPrintf("[FC4] %s=%#llx: read failed rc=%d\n",
-                                            regNames[ri], (unsigned long long)addr, rc);
-                                        continue;
-                                    }
-                                    RTPrintf("[FC4] %s=%#llx dump:\n",
-                                        regNames[ri], (unsigned long long)addr);
-                                    for (int q = 0; q < 8; q++) {
-                                        uint64_t v;
-                                        __builtin_memcpy(&v, &buf[q*8], 8);
-                                        RTPrintf("[FC4]   +%02x: %#018llx\n",
-                                            q*8, (unsigned long long)v);
+                                        (RTGCPTR)UINT64_C(0xffff888007412200), 64);
+                                    if (RT_SUCCESS(rc)) {
+                                        RTPrintf("[FC4] @0xffff888007412200:\n");
+                                        for (int q = 0; q < 8; q++) {
+                                            uint64_t v;
+                                            __builtin_memcpy(&v, &buf[q*8], 8);
+                                            RTPrintf("[FC4]   +%02x: %#018llx\n",
+                                                q*8, (unsigned long long)v);
+                                        }
                                     }
                                 }
 
-                                /* Read 64 bytes around R13 (stack addr, could be
-                                 * completion struct or wait_queue_entry location) */
-                                {
-                                    uint64_t r13 = pVCpu->cpum.GstCtx.r13;
-                                    uint64_t r13start = (r13 >= 32) ? (r13 - 32) : r13;
-                                    uint8_t buf[96];
-                                    __builtin_memset(buf, 0, 96);
-                                    PGMPhysSimpleReadGCPtr(pVCpu, buf,
-                                        (RTGCPTR)r13start, 96);
-                                    RTPrintf("[FC4] R13 area (%#llx to +96):\n",
-                                        (unsigned long long)r13start);
-                                    for (int q = 0; q < 12; q++) {
-                                        uint64_t v;
-                                        __builtin_memcpy(&v, &buf[q*8], 8);
-                                        RTPrintf("[FC4]   +%02x: %#018llx\n",
-                                            q*8, (unsigned long long)v);
-                                    }
-                                }
-
-                                /* Scan stack for completion pattern:
-                                 * Two adjacent identical qwords (entry.next==entry.prev)
-                                 * that point to a valid kernel addr X. Then X-16 should
-                                 * be the completion with done=0 */
-                                uint8_t stkBuf[2048];
-                                __builtin_memset(stkBuf, 0, sizeof(stkBuf));
-                                PGMPhysSimpleReadGCPtr(pVCpu, stkBuf,
-                                    (RTGCPTR)uRsp, 2048);
-
-                                RTPrintf("[FC4] Scanning stack for entry.next==entry.prev...\n");
-                                bool fFound = false;
-                                for (unsigned soff = 0; soff + 16 <= 2048; soff += 8)
-                                {
-                                    uint64_t v1, v2;
-                                    __builtin_memcpy(&v1, &stkBuf[soff], 8);
-                                    __builtin_memcpy(&v2, &stkBuf[soff + 8], 8);
-                                    if (v1 == 0 || v1 != v2) continue;
-                                    /* Both are same nonzero value */
-                                    if (v1 < UINT64_C(0xffff800000000000)) continue;
-                                    if (v1 == UINT64_C(0xffffffffffffffff)) continue;
-                                    /* v1 should be &completion.wait.head = completion+16 */
-                                    uint64_t compAddr = v1 - 16;
-                                    uint32_t uDone = 0xDEAD;
-                                    int rc = PGMPhysSimpleReadGCPtr(pVCpu, &uDone,
-                                        (RTGCPTR)compAddr, 4);
-                                    if (RT_FAILURE(rc)) continue;
-                                    RTPrintf("[FC4] RSP+%03x: pair=%#llx comp@%#llx done=%u\n",
-                                        soff, (unsigned long long)v1,
-                                        (unsigned long long)compAddr, (unsigned)uDone);
-                                    if (uDone == 0) {
-                                        /* Read the full completion to verify */
-                                        uint8_t compBuf[32];
-                                        PGMPhysSimpleReadGCPtr(pVCpu, compBuf,
-                                            (RTGCPTR)compAddr, 32);
-                                        uint64_t wqn, wqp;
-                                        __builtin_memcpy(&wqn, &compBuf[16], 8);
-                                        __builtin_memcpy(&wqp, &compBuf[24], 8);
-                                        RTPrintf("[FC4] comp: done=0 wq.next=%#llx "
-                                                 "wq.prev=%#llx\n",
-                                            (unsigned long long)wqn,
-                                            (unsigned long long)wqp);
-                                        /* Write done=1 to unblock */
-                                        uint32_t uOne = 1;
-                                        PGMPhysSimpleWriteGCPtr(pVCpu,
-                                            (RTGCPTR)compAddr, &uOne, 4);
-                                        RTPrintf("[FC4] *** WROTE done=1 at %#llx ***\n",
-                                            (unsigned long long)compAddr);
-                                        fFound = true;
-                                        break;
-                                    }
-                                }
-
-                                if (!fFound)
-                                    RTPrintf("[FC4] No completion found via pair scan\n");
                                 RTStrmFlush(g_pStdOut);
                             }
                         }

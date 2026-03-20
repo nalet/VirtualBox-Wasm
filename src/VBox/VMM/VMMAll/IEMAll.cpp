@@ -1527,6 +1527,34 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                         }
                     }
 
+                    /* ── RSP-page change detector at 50M granularity (post-2B) ──
+                     * Fires every 50M instructions once in 64-bit kernel mode.
+                     * Logs when RSP moves to a different 4K page, which indicates
+                     * a context switch away from the idle thread stack. */
+                    if ((pVCpu->cpum.GstCtx.msrEFER & MSR_K6_EFER_LMA)
+                        && g_cWasmVirtualInstructions >= UINT64_C(2000000000))
+                    {
+                        static uint64_t s_cNextRspCheck = UINT64_C(2000000000);
+                        static uint64_t s_uLastRspPage = 0;
+                        if (g_cWasmVirtualInstructions >= s_cNextRspCheck)
+                        {
+                            s_cNextRspCheck = g_cWasmVirtualInstructions + UINT64_C(50000000);
+                            uint64_t rspNow = pVCpu->cpum.GstCtx.rsp;
+                            uint64_t rspPage = rspNow & ~UINT64_C(0xFFF);
+                            if (s_uLastRspPage == 0)
+                                s_uLastRspPage = rspPage;
+                            if (rspPage != s_uLastRspPage && rspNow > UINT64_C(0xffff800000000000))
+                            {
+                                RTPrintf("[CTX-SWITCH!] insns=%llu RSP=%#llx RIP=%#llx (was page %#llx)\n",
+                                    (unsigned long long)g_cWasmVirtualInstructions,
+                                    (unsigned long long)rspNow,
+                                    (unsigned long long)pVCpu->cpum.GstCtx.rip,
+                                    (unsigned long long)s_uLastRspPage);
+                                RTStrmFlush(g_pStdOut);
+                                s_uLastRspPage = rspPage;
+                            }
+                        }
+                    }
 
                     static uint64_t s_cNextDiag = UINT64_C(100000000); /* 100M insns: first fire */
                     if (g_cWasmVirtualInstructions >= s_cNextDiag)
@@ -1729,6 +1757,60 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                                     }
                                     RTPrintf("\n");
                                     (void)pVMs;
+                                }
+                                /* ── GS.base per-CPU diagnostic ── */
+                                {
+                                    uint64_t gsBase = pVCpu->cpum.GstCtx.gs.u64Base;
+                                    uint64_t fsBase = pVCpu->cpum.GstCtx.fs.u64Base;
+                                    RTPrintf("[STUCK-GS] GS.base=%#llx FS.base=%#llx\n",
+                                        (unsigned long long)gsBase,
+                                        (unsigned long long)fsBase);
+                                    /* Dump first 32 qwords of per-CPU area to find current_task */
+                                    if (gsBase > UINT64_C(0xffff800000000000) && gsBase < UINT64_C(0xffffffffffffffff))
+                                    {
+                                        uint64_t aCpuData[32];
+                                        RT_ZERO(aCpuData);
+                                        PGMPhysSimpleReadGCPtr(pVCpu, aCpuData, gsBase, sizeof(aCpuData));
+                                        for (int ii = 0; ii < 32; ii += 4)
+                                            RTPrintf("[STUCK-GS-PCPU] +%3u: %#llx %#llx %#llx %#llx\n",
+                                                (unsigned)(ii * 8),
+                                                (unsigned long long)aCpuData[ii],   (unsigned long long)aCpuData[ii+1],
+                                                (unsigned long long)aCpuData[ii+2], (unsigned long long)aCpuData[ii+3]);
+                                    }
+                                }
+                                /* ── One-shot: read instruction bytes at hot idle-loop address ── */
+                                {
+                                    static bool s_fIdleBytesDumped = false;
+                                    if (!s_fIdleBytesDumped && rip > UINT64_C(0xffffffff81000000))
+                                    {
+                                        s_fIdleBytesDumped = true;
+                                        /* Read 128 bytes centred on RIP-64 to capture the loop */
+                                        uint64_t uScanBase = rip > 64 ? rip - 64 : rip;
+                                        uint8_t abScan[192];
+                                        RT_ZERO(abScan);
+                                        PGMPhysSimpleReadGCPtr(pVCpu, abScan, uScanBase, sizeof(abScan));
+                                        RTPrintf("[IDLE-BYTES] RIP=%#llx scan from %#llx:\n",
+                                            (unsigned long long)rip, (unsigned long long)uScanBase);
+                                        for (int bb = 0; bb < (int)sizeof(abScan); bb += 16)
+                                            RTPrintf("[IDLE-BYTES]  +%3u: %02x %02x %02x %02x %02x %02x %02x %02x  %02x %02x %02x %02x %02x %02x %02x %02x\n",
+                                                bb,
+                                                abScan[bb+ 0], abScan[bb+ 1], abScan[bb+ 2], abScan[bb+ 3],
+                                                abScan[bb+ 4], abScan[bb+ 5], abScan[bb+ 6], abScan[bb+ 7],
+                                                abScan[bb+ 8], abScan[bb+ 9], abScan[bb+10], abScan[bb+11],
+                                                abScan[bb+12], abScan[bb+13], abScan[bb+14], abScan[bb+15]);
+                                        /* Also read at known hot address 0xffffffff81e00060-0xffffffff81e000c0 */
+                                        uint8_t abHot[128];
+                                        RT_ZERO(abHot);
+                                        PGMPhysSimpleReadGCPtr(pVCpu, abHot, UINT64_C(0xffffffff81e00060), sizeof(abHot));
+                                        RTPrintf("[IDLE-BYTES] Hot addr 0xffffffff81e00060:\n");
+                                        for (int bb = 0; bb < (int)sizeof(abHot); bb += 16)
+                                            RTPrintf("[IDLE-BYTES]  +%3u: %02x %02x %02x %02x %02x %02x %02x %02x  %02x %02x %02x %02x %02x %02x %02x %02x\n",
+                                                bb,
+                                                abHot[bb+ 0], abHot[bb+ 1], abHot[bb+ 2], abHot[bb+ 3],
+                                                abHot[bb+ 4], abHot[bb+ 5], abHot[bb+ 6], abHot[bb+ 7],
+                                                abHot[bb+ 8], abHot[bb+ 9], abHot[bb+10], abHot[bb+11],
+                                                abHot[bb+12], abHot[bb+13], abHot[bb+14], abHot[bb+15]);
+                                    }
                                 }
                                 RTStrmFlush(g_pStdOut);
                             }

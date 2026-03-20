@@ -1528,8 +1528,8 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                     }
 
                     /* ── TASKS-WATCH: monitor init_task.tasks.next for new task creation ──
-                     * Fires every 10K instructions in 170M-210M window (rest_init period),
-                     * every 100K otherwise, from 50M to 2B.
+                     * Fires every 10K instructions in 1.1B-1.5B window (rest_init period after
+                     * check_bugs), every 100K otherwise, from 50M to 20B.
                      * Reads init_task.tasks.next (phys 0x2411778, VA 0xffffffff82411778).
                      * When changed from self-referential, a new task was added — dump its details.
                      * This catches kernel_thread() → copy_process() → list_add_tail_rcu(). */
@@ -1541,9 +1541,10 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                         static uint64_t s_uLastTasksNext  = UINT64_C(0xffffffff82411778); /* init value = self */
                         if (g_cWasmVirtualInstructions >= s_cNextTasksCheck)
                         {
-                            /* Use 10K interval in the critical rest_init window, 100K otherwise */
-                            bool fFineGrained = (g_cWasmVirtualInstructions >= UINT64_C(170000000)
-                                             && g_cWasmVirtualInstructions <= UINT64_C(210000000));
+                            /* Use 10K interval in the critical rest_init window (after check_bugs
+                             * at ~1.1B, rest_init should run by ~1.3B), 100K otherwise */
+                            bool fFineGrained = (g_cWasmVirtualInstructions >= UINT64_C(1100000000)
+                                             && g_cWasmVirtualInstructions <= UINT64_C(1500000000));
                             s_cNextTasksCheck = g_cWasmVirtualInstructions + (fFineGrained ? UINT64_C(10000) : UINT64_C(100000));
                             PVMCC pVMtw = pVCpu->CTX_SUFF(pVM);
                             uint64_t uTasksNext = 0;
@@ -1590,18 +1591,46 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                         }
                     }
 
+                    /* ── INIT-SECTION-ENTRY: fire once when EIP first enters __init text (≥0xffffffff82000000).
+                     * This tells us if rest_init / arch_call_rest_init / kernel_init_freeable runs. */
+                    if ((pVCpu->cpum.GstCtx.msrEFER & MSR_K6_EFER_LMA))
+                    {
+                        static bool s_fInitSectionSeen = false;
+                        uint64_t uEipNow = pVCpu->cpum.GstCtx.rip;
+                        if (!s_fInitSectionSeen
+                            && uEipNow >= UINT64_C(0xffffffff82000000)
+                            && uEipNow <= UINT64_C(0xffffffff83000000))
+                        {
+                            s_fInitSectionSeen = true;
+                            /* Dump 32 bytes of stack at current RSP */
+                            uint64_t uRspI = pVCpu->cpum.GstCtx.rsp;
+                            uint64_t uPhysRspI = uRspI - UINT64_C(0xffff888000000000);
+                            uint64_t stkI[4] = {0};
+                            PVMCC pVMi = pVCpu->CTX_SUFF(pVM);
+                            PGMPhysSimpleReadGCPhys(pVMi, stkI, (RTGCPHYS)uPhysRspI, 32);
+                            RTPrintf("[INIT-ENTRY] insns=%llu EIP=%#llx RSP=%#llx\n",
+                                (unsigned long long)g_cWasmVirtualInstructions,
+                                (unsigned long long)uEipNow,
+                                (unsigned long long)uRspI);
+                            RTPrintf("[INIT-ENTRY]   stk: %llx %llx %llx %llx\n",
+                                (unsigned long long)stkI[0], (unsigned long long)stkI[1],
+                                (unsigned long long)stkI[2], (unsigned long long)stkI[3]);
+                            RTStrmFlush(g_pStdOut);
+                        }
+                    }
+
                     /* ── EARLY-RIP: periodic EIP snapshot every 200M insns from 1.5B onward.
                      * Also fires at milestones before 1.5B.
                      * Shows what the kernel is doing; dumps call stack to find stuck loop. */
                     {
-                        static uint64_t s_cNextEarlyRip = UINT64_C(200000000); /* 200M */
+                        static uint64_t s_cNextEarlyRip = UINT64_C(100000000); /* 100M */
                         static int s_nEarlyRipShot = 0;
                         if ((pVCpu->cpum.GstCtx.msrEFER & MSR_K6_EFER_LMA)
                             && g_cWasmVirtualInstructions >= s_cNextEarlyRip)
                         {
                             s_nEarlyRipShot++;
-                            /* Next fire: every 200M instructions */
-                            s_cNextEarlyRip = g_cWasmVirtualInstructions + UINT64_C(200000000);
+                            /* Next fire: every 100M instructions */
+                            s_cNextEarlyRip = g_cWasmVirtualInstructions + UINT64_C(100000000);
                             /* Read tasks.next */
                             PVMCC pVMer = pVCpu->CTX_SUFF(pVM);
                             uint64_t uTN = 0;

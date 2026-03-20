@@ -1655,8 +1655,9 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                         }
                     }
 
-                    /* ── FC4: at 400M insns (earlier!), dump full stack + code at
-                     * return addresses to identify WHERE in start_kernel we're stuck */
+                    /* ── FC4 (version t): at 400M insns, read completion at 0xffffffff82427280
+                     * (identified from RSP+070 in wait_for_completion's frame) and write done=1
+                     * to unblock the boot stall.  Also scan for on-stack completion. */
                     {
                         static bool s_fFC4 = false;
                         if (!s_fFC4
@@ -1676,90 +1677,146 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                             {
                                 s_fFC4 = true;
                                 uint64_t uRsp = pVCpu->cpum.GstCtx.rsp;
+
+                                /* 1) All registers */
                                 RTPrintf("[FC4] insns=%llu RIP=%#llx RSP=%#llx\n",
                                     (unsigned long long)g_cWasmVirtualInstructions,
                                     (unsigned long long)pVCpu->cpum.GstCtx.rip,
                                     (unsigned long long)uRsp);
+                                RTPrintf("[FC4] RAX=%#llx RBX=%#llx RCX=%#llx RDX=%#llx\n",
+                                    (unsigned long long)pVCpu->cpum.GstCtx.rax,
+                                    (unsigned long long)pVCpu->cpum.GstCtx.rbx,
+                                    (unsigned long long)pVCpu->cpum.GstCtx.rcx,
+                                    (unsigned long long)pVCpu->cpum.GstCtx.rdx);
+                                RTPrintf("[FC4] RDI=%#llx RSI=%#llx RBP=%#llx\n",
+                                    (unsigned long long)pVCpu->cpum.GstCtx.rdi,
+                                    (unsigned long long)pVCpu->cpum.GstCtx.rsi,
+                                    (unsigned long long)pVCpu->cpum.GstCtx.rbp);
+                                RTPrintf("[FC4] R8=%#llx R9=%#llx R10=%#llx R11=%#llx\n",
+                                    (unsigned long long)pVCpu->cpum.GstCtx.r8,
+                                    (unsigned long long)pVCpu->cpum.GstCtx.r9,
+                                    (unsigned long long)pVCpu->cpum.GstCtx.r10,
+                                    (unsigned long long)pVCpu->cpum.GstCtx.r11);
+                                RTPrintf("[FC4] R12=%#llx R13=%#llx R14=%#llx R15=%#llx\n",
+                                    (unsigned long long)pVCpu->cpum.GstCtx.r12,
+                                    (unsigned long long)pVCpu->cpum.GstCtx.r13,
+                                    (unsigned long long)pVCpu->cpum.GstCtx.r14,
+                                    (unsigned long long)pVCpu->cpum.GstCtx.r15);
 
-                                /* Dump code at RIP (16 bytes) */
+                                /* 2) Read potential completion struct at 0xffffffff82427280
+                                 * Layout: done(u32)+pad(u32)+lock(u32)+pad(u32)+next(u64)+prev(u64) */
+                                bool bFixed = false;
                                 {
-                                    uint8_t code[16];
-                                    __builtin_memset(code, 0, 16);
-                                    PGMPhysSimpleReadGCPtr(pVCpu, code,
-                                        (RTGCPTR)pVCpu->cpum.GstCtx.rip, 16);
-                                    RTPrintf("[FC4] code@RIP:");
-                                    for (int i = 0; i < 16; i++)
-                                        RTPrintf(" %02x", code[i]);
-                                    RTPrintf("\n");
-                                }
-
-                                /* Dump full stack: 96 qwords = 768 bytes */
-                                uint8_t stkBuf[768];
-                                __builtin_memset(stkBuf, 0, sizeof(stkBuf));
-                                PGMPhysSimpleReadGCPtr(pVCpu, stkBuf,
-                                    (RTGCPTR)uRsp, 768);
-                                RTPrintf("[FC4] Stack (96 qwords):\n");
-                                for (unsigned q = 0; q < 96; q++)
-                                {
-                                    uint64_t sv;
-                                    __builtin_memcpy(&sv, &stkBuf[q * 8], 8);
-                                    if (sv != 0)
-                                        RTPrintf("[FC4] RSP+%03x: %#018llx\n",
-                                            q * 8, (unsigned long long)sv);
-                                }
-
-                                /* For each potential return addr on stack (kernel .text),
-                                 * read 5 bytes BEFORE it to check for CALL instruction.
-                                 * E8 xx xx xx xx = near call (5 bytes)
-                                 * FF 15 xx xx xx xx = call [rip+disp32] (6 bytes) */
-                                RTPrintf("[FC4] Call site verification:\n");
-                                for (unsigned q = 0; q < 96; q++)
-                                {
-                                    uint64_t sv;
-                                    __builtin_memcpy(&sv, &stkBuf[q * 8], 8);
-                                    /* Only check kernel .text range */
-                                    if (sv < UINT64_C(0xffffffff81000000)
-                                        || sv >= UINT64_C(0xffffffff82600000))
-                                        continue;
-                                    /* Read 8 bytes before the return address */
-                                    uint8_t pre[8];
-                                    __builtin_memset(pre, 0, 8);
-                                    PGMPhysSimpleReadGCPtr(pVCpu, pre,
-                                        (RTGCPTR)(sv - 8), 8);
-                                    /* Check for E8 (call rel32) at -5 */
-                                    bool isCall = (pre[3] == 0xe8);
-                                    /* Check for FF 14/15 at -6 */
-                                    bool isCallInd = (pre[2] == 0xff
-                                        && (pre[3] == 0x14 || pre[3] == 0x15));
-                                    /* Check for call reg: FF Dx at -2 */
-                                    bool isCallReg = (pre[6] == 0xff
-                                        && (pre[7] >= 0xd0 && pre[7] <= 0xd7));
-                                    if (isCall || isCallInd || isCallReg)
+                                    uint8_t compBuf[48];
+                                    __builtin_memset(compBuf, 0xcc, sizeof(compBuf));
+                                    int rc = PGMPhysSimpleReadGCPtr(pVCpu, compBuf,
+                                        (RTGCPTR)UINT64_C(0xffffffff82427280), 48);
+                                    if (RT_SUCCESS(rc))
                                     {
-                                        RTPrintf("[FC4] RSP+%03x=%#llx CALL@%#llx:"
-                                                 " %02x %02x %02x %02x %02x %02x %02x %02x\n",
-                                            q * 8, (unsigned long long)sv,
-                                            (unsigned long long)(sv - 8),
-                                            pre[0], pre[1], pre[2], pre[3],
-                                            pre[4], pre[5], pre[6], pre[7]);
+                                        uint32_t done, lock;
+                                        uint64_t wqN, wqP;
+                                        __builtin_memcpy(&done, &compBuf[0], 4);
+                                        __builtin_memcpy(&lock, &compBuf[8], 4);
+                                        __builtin_memcpy(&wqN,  &compBuf[16], 8);
+                                        __builtin_memcpy(&wqP,  &compBuf[24], 8);
+
+                                        RTPrintf("[FC4] @82427280: done=%u lock=%u "
+                                                 "wq.next=%#llx wq.prev=%#llx\n",
+                                            done, lock,
+                                            (unsigned long long)wqN,
+                                            (unsigned long long)wqP);
+
+                                        /* Raw hex dump (48 bytes = 6 qwords) */
+                                        RTPrintf("[FC4] @82427280 raw:");
+                                        for (unsigned i = 0; i < 48; i++)
+                                            RTPrintf(" %02x", compBuf[i]);
+                                        RTPrintf("\n");
+
+                                        /* Validate: done==0 means blocked completion.
+                                         * wq.next should point to stack (wait_queue_entry)
+                                         * or to self+0x10 (empty). */
+                                        if (done == 0)
+                                        {
+                                            /* Write done=1 via physical address.
+                                             * PA = VA - 0xffffffff80000000 */
+                                            uint32_t one = 1;
+                                            PGMPhysSimpleWriteGCPhys(pVMfc,
+                                                (RTGCPHYS)UINT64_C(0x02427280), &one, 4);
+
+                                            /* Verify */
+                                            uint32_t vfy = 0xDEAD;
+                                            PGMPhysSimpleReadGCPhys(pVMfc, &vfy,
+                                                (RTGCPHYS)UINT64_C(0x02427280), 4);
+                                            RTPrintf("[FC4] WROTE done=1 at 82427280 (verify=%u)\n",
+                                                vfy);
+                                            bFixed = true;
+                                        }
+                                    }
+                                    else
+                                        RTPrintf("[FC4] @82427280 READ FAILED rc=%d\n", rc);
+                                }
+
+                                /* 3) If 82427280 wasn't a completion (done≠0 or read failed),
+                                 * scan the stack for any pointer-sized value in kernel .data
+                                 * range that points to a completion with done==0. */
+                                if (!bFixed)
+                                {
+                                    uint8_t stkBuf[768];
+                                    __builtin_memset(stkBuf, 0, sizeof(stkBuf));
+                                    PGMPhysSimpleReadGCPtr(pVCpu, stkBuf,
+                                        (RTGCPTR)uRsp, 768);
+
+                                    RTPrintf("[FC4] Scanning stack for completion...\n");
+                                    for (unsigned q = 0; q < 96; q++)
+                                    {
+                                        uint64_t sv;
+                                        __builtin_memcpy(&sv, &stkBuf[q * 8], 8);
+                                        /* Look for kernel .data/.bss addresses
+                                         * (0xffffffff82400000-0xffffffff82600000) or
+                                         * heap/stack addresses */
+                                        if ((sv >= UINT64_C(0xffffffff82400000)
+                                             && sv < UINT64_C(0xffffffff82600000))
+                                            || (sv >= UINT64_C(0xffff888007c05000)
+                                                && sv < UINT64_C(0xffff888007c06000)))
+                                        {
+                                            uint8_t cb[32];
+                                            __builtin_memset(cb, 0xcc, 32);
+                                            int rc2 = PGMPhysSimpleReadGCPtr(pVCpu, cb,
+                                                (RTGCPTR)sv, 32);
+                                            if (RT_SUCCESS(rc2))
+                                            {
+                                                uint32_t d2;
+                                                __builtin_memcpy(&d2, &cb[0], 4);
+                                                if (d2 == 0)
+                                                {
+                                                    uint64_t n2, p2;
+                                                    __builtin_memcpy(&n2, &cb[16], 8);
+                                                    __builtin_memcpy(&p2, &cb[24], 8);
+                                                    RTPrintf("[FC4] CANDIDATE RSP+%03x → %#llx:"
+                                                             " done=0 wq.n=%#llx wq.p=%#llx\n",
+                                                        q*8, (unsigned long long)sv,
+                                                        (unsigned long long)n2,
+                                                        (unsigned long long)p2);
+                                                }
+                                            }
+                                        }
                                     }
                                 }
 
-                                /* Read 64 bytes at 0xffff888007412200 (frequently seen
-                                 * heap object) to identify what it is */
+                                /* 4) Condensed stack dump (non-zero slots only) */
                                 {
-                                    uint8_t buf[64];
-                                    __builtin_memset(buf, 0, 64);
-                                    int rc = PGMPhysSimpleReadGCPtr(pVCpu, buf,
-                                        (RTGCPTR)UINT64_C(0xffff888007412200), 64);
-                                    if (RT_SUCCESS(rc)) {
-                                        RTPrintf("[FC4] @0xffff888007412200:\n");
-                                        for (int q = 0; q < 8; q++) {
-                                            uint64_t v;
-                                            __builtin_memcpy(&v, &buf[q*8], 8);
-                                            RTPrintf("[FC4]   +%02x: %#018llx\n",
-                                                q*8, (unsigned long long)v);
-                                        }
+                                    uint8_t stkBuf[768];
+                                    __builtin_memset(stkBuf, 0, sizeof(stkBuf));
+                                    PGMPhysSimpleReadGCPtr(pVCpu, stkBuf,
+                                        (RTGCPTR)uRsp, 768);
+                                    RTPrintf("[FC4] Stack:\n");
+                                    for (unsigned q = 0; q < 96; q++)
+                                    {
+                                        uint64_t sv;
+                                        __builtin_memcpy(&sv, &stkBuf[q * 8], 8);
+                                        if (sv != 0)
+                                            RTPrintf("[FC4] RSP+%03x: %#018llx\n",
+                                                q * 8, (unsigned long long)sv);
                                     }
                                 }
 

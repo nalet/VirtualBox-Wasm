@@ -1535,7 +1535,7 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                      * This catches kernel_thread() → copy_process() → list_add_tail_rcu(). */
                     if ((pVCpu->cpum.GstCtx.msrEFER & MSR_K6_EFER_LMA)
                         && g_cWasmVirtualInstructions >= UINT64_C(50000000)
-                        && g_cWasmVirtualInstructions <= UINT64_C(2000000000))
+                        && g_cWasmVirtualInstructions <= UINT64_C(20000000000))
                     {
                         static uint64_t s_cNextTasksCheck = UINT64_C(50000000);
                         static uint64_t s_uLastTasksNext  = UINT64_C(0xffffffff82411778); /* init value = self */
@@ -1590,26 +1590,18 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                         }
                     }
 
-                    /* ── EARLY-RIP: milestone EIP snapshot at 100M-500M insns ──
-                     * Fires at 100M, 200M, 300M, 400M, 500M, 600M, 800M, 1B.
-                     * Shows what the kernel is doing when kernel_thread() should be called.
-                     * Also checks tasks.next to see if any task was created. */
+                    /* ── EARLY-RIP: periodic EIP snapshot every 200M insns from 1.5B onward.
+                     * Also fires at milestones before 1.5B.
+                     * Shows what the kernel is doing; dumps call stack to find stuck loop. */
                     {
-                        static uint64_t s_cNextEarlyRip = UINT64_C(100000000); /* 100M */
+                        static uint64_t s_cNextEarlyRip = UINT64_C(200000000); /* 200M */
                         static int s_nEarlyRipShot = 0;
-                        if (s_nEarlyRipShot < 12
-                            && (pVCpu->cpum.GstCtx.msrEFER & MSR_K6_EFER_LMA)
+                        if ((pVCpu->cpum.GstCtx.msrEFER & MSR_K6_EFER_LMA)
                             && g_cWasmVirtualInstructions >= s_cNextEarlyRip)
                         {
-                            static const uint64_t s_acEarlyMilestones[] = {
-                                UINT64_C(100000000), UINT64_C(200000000), UINT64_C(300000000),
-                                UINT64_C(400000000), UINT64_C(500000000), UINT64_C(600000000),
-                                UINT64_C(700000000), UINT64_C(800000000), UINT64_C(900000000),
-                                UINT64_C(1000000000), UINT64_C(1200000000), UINT64_C(1500000000)
-                            };
                             s_nEarlyRipShot++;
-                            if (s_nEarlyRipShot < 12)
-                                s_cNextEarlyRip = s_acEarlyMilestones[s_nEarlyRipShot];
+                            /* Next fire: every 200M instructions */
+                            s_cNextEarlyRip = g_cWasmVirtualInstructions + UINT64_C(200000000);
                             /* Read tasks.next */
                             PVMCC pVMer = pVCpu->CTX_SUFF(pVM);
                             uint64_t uTN = 0;
@@ -1619,17 +1611,24 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                             PGMPhysSimpleReadGCPhys(pVMer, &uCT, (RTGCPHYS)UINT64_C(0x7c15d00), 8);
                             bool fTasksSelf = (uTN == UINT64_C(0xffffffff82411778));
                             bool fCTisInit  = (uCT == UINT64_C(0xffffffff824114c0));
-                            RTPrintf("[EARLY-RIP] #%d insns=%llu EIP=%#llx RSP=%#llx\n",
+                            uint64_t uRsp = pVCpu->cpum.GstCtx.rsp;
+                            RTPrintf("[EARLY-RIP] #%d insns=%llu EIP=%#llx RSP=%#llx tasks=%s cur=%s\n",
                                 s_nEarlyRipShot,
                                 (unsigned long long)g_cWasmVirtualInstructions,
                                 (unsigned long long)pVCpu->cpum.GstCtx.rip,
-                                (unsigned long long)pVCpu->cpum.GstCtx.rsp);
-                            RTPrintf("[EARLY-RIP]   RDI=%#llx RSI=%#llx RDX=%#llx tasks.next=%s current=%s\n",
-                                (unsigned long long)pVCpu->cpum.GstCtx.rdi,
-                                (unsigned long long)pVCpu->cpum.GstCtx.rsi,
-                                (unsigned long long)pVCpu->cpum.GstCtx.rdx,
+                                (unsigned long long)uRsp,
                                 fTasksSelf ? "singleton" : "HAS-TASKS",
                                 fCTisInit ? "swapper" : "OTHER");
+                            /* Dump 8 stack QWORDs (call chain) */
+                            uint64_t uPhysRsp = uRsp - UINT64_C(0xffff888000000000);
+                            uint64_t stk[8] = {0};
+                            PGMPhysSimpleReadGCPhys(pVMer, stk, (RTGCPHYS)uPhysRsp, 64);
+                            RTPrintf("[EARLY-RIP]   stk: %llx %llx %llx %llx\n",
+                                (unsigned long long)stk[0], (unsigned long long)stk[1],
+                                (unsigned long long)stk[2], (unsigned long long)stk[3]);
+                            RTPrintf("[EARLY-RIP]   stk: %llx %llx %llx %llx\n",
+                                (unsigned long long)stk[4], (unsigned long long)stk[5],
+                                (unsigned long long)stk[6], (unsigned long long)stk[7]);
                             RTStrmFlush(g_pStdOut);
                         }
                     }

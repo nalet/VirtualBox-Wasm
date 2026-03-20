@@ -1340,10 +1340,15 @@ VBOXSTRICTRC iemExecInjectPendingTrap(PVMCPUCC pVCpu)
                 s_cIrqsDelivered++;
                 if (s_cIrqsDelivered - s_cIrqsLast >= 10000)
                 {
-                    RTPrintf("[IRQ-COUNT] #%llu deliveries at insns=%llu IRQ=%u\n",
+                    static uint64_t s_cPrevInsns = 0;
+                    uint64_t cDeltaInsns = g_cWasmVirtualInstructions - s_cPrevInsns;
+                    RTPrintf("[IRQ-COUNT] #%llu at insns=%llu IRQ=%u delta=%llu (%.1f IRQ/ms)\n",
                              (unsigned long long)s_cIrqsDelivered,
                              (unsigned long long)g_cWasmVirtualInstructions,
-                             (unsigned)u8TrapNo);
+                             (unsigned)u8TrapNo,
+                             (unsigned long long)cDeltaInsns,
+                             cDeltaInsns > 0 ? (10000.0 * 10000.0 / (double)cDeltaInsns) : 0.0);
+                    s_cPrevInsns = g_cWasmVirtualInstructions;
                     s_cIrqsLast = s_cIrqsDelivered;
                 }
             }

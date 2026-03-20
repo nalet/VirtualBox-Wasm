@@ -2550,7 +2550,15 @@ static void tmR3TimerQueueRunVirtualSync(PVM pVM)
      * and 2) lag behind at a steady rate.
      */
     const uint64_t  u64VirtualNow  = TMVirtualGetNoCheck(pVM);
+#ifdef __EMSCRIPTEN__
+    /* In Wasm, virtual time is deterministic (insn_count * 100ns).
+       The virtual-sync offset mechanism causes a 3.9x PIT rate because
+       offVirtualSync drifts and catch-up / give-up create discontinuities.
+       Bypass it entirely: virtual sync time = raw virtual time. */
+    uint64_t const  offSyncGivenUp = 0;
+#else
     uint64_t const  offSyncGivenUp = pVM->tm.s.offVirtualSyncGivenUp;
+#endif
     uint64_t        u64Now;
     if (!pVM->tm.s.fVirtualSyncTicking)
     {
@@ -2563,7 +2571,11 @@ static void tmR3TimerQueueRunVirtualSync(PVM pVM)
         /* Calc 'now'. */
         bool        fStopCatchup   = false;
         bool        fUpdateStuff   = false;
+#ifdef __EMSCRIPTEN__
+        uint64_t    off            = 0;
+#else
         uint64_t    off            = pVM->tm.s.offVirtualSync;
+#endif
         if (pVM->tm.s.fVirtualSyncCatchUp)
         {
             uint64_t u64Delta = u64VirtualNow - pVM->tm.s.u64VirtualSyncCatchUpPrev;
@@ -2776,10 +2788,15 @@ static void tmR3TimerQueueRunVirtualSync(PVM pVM)
                 /* give up */
                 STAM_COUNTER_INC(&pVM->tm.s.StatVirtualSyncGiveUp);
                 STAM_PROFILE_ADV_STOP(&pVM->tm.s.StatVirtualSyncCatchup, c);
+#ifdef __EMSCRIPTEN__
+                /* Wasm: don't accept lag — keep offsets at zero. */
+                Log4(("TM: %'RU64/%'8RU64: give-up SUPPRESSED (Wasm)\n", u64VirtualNow2 - offNew, offLag));
+#else
                 ASMAtomicWriteU64((uint64_t volatile *)&pVM->tm.s.offVirtualSyncGivenUp, offNew);
-                ASMAtomicWriteBool(&pVM->tm.s.fVirtualSyncCatchUp, false);
                 Log4(("TM: %'RU64/%'8RU64: give up %u%%\n", u64VirtualNow2 - offNew, offLag, pVM->tm.s.u32VirtualSyncCatchUpPercentage));
                 LogRel(("TM: Giving up catch-up attempt at a %'RU64 ns lag; new total: %'RU64 ns\n", offLag, offNew));
+#endif
+                ASMAtomicWriteBool(&pVM->tm.s.fVirtualSyncCatchUp, false);
             }
         }
         else if (offLag >= pVM->tm.s.aVirtualSyncCatchUpPeriods[0].u64Start)
@@ -2810,17 +2827,30 @@ static void tmR3TimerQueueRunVirtualSync(PVM pVM)
             {
                 /* don't bother */
                 STAM_COUNTER_INC(&pVM->tm.s.StatVirtualSyncGiveUpBeforeStarting);
+#ifdef __EMSCRIPTEN__
+                /* Wasm: don't accept lag — keep offsets at zero. */
+                Log4(("TM: %'RU64/%'8RU64: give-up SUPPRESSED (Wasm)\n", u64VirtualNow2 - offNew, offLag));
+#else
                 ASMAtomicWriteU64((uint64_t volatile *)&pVM->tm.s.offVirtualSyncGivenUp, offNew);
                 Log4(("TM: %'RU64/%'8RU64: give up\n", u64VirtualNow2 - offNew, offLag));
                 LogRel(("TM: Not bothering to attempt catching up a %'RU64 ns lag; new total: %'RU64\n", offLag, offNew));
+#endif
             }
         }
 
         /*
          * Update the offset and restart the clock.
          */
+#ifdef __EMSCRIPTEN__
+        /* Wasm: keep offset at zero — virtual sync = raw virtual time. */
+        ASMAtomicWriteU64(&pVM->tm.s.offVirtualSync, 0);
+        ASMAtomicWriteU64((uint64_t volatile *)&pVM->tm.s.offVirtualSyncGivenUp, 0);
+        ASMAtomicWriteBool(&pVM->tm.s.fVirtualSyncCatchUp, false);
+        ASMAtomicWriteU32(&pVM->tm.s.u32VirtualSyncCatchUpPercentage, 0);
+#else
         Assert(!(offNew & RT_BIT_64(63)));
         ASMAtomicWriteU64(&pVM->tm.s.offVirtualSync, offNew);
+#endif
         ASMAtomicWriteBool(&pVM->tm.s.fVirtualSyncTicking, true);
     }
 }

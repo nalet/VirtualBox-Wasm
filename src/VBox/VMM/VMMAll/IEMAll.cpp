@@ -1650,6 +1650,25 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                                 (unsigned long long)uTasksPrev,
                                 (unsigned long long)uCT,
                                 (unsigned long long)uGsBase);
+                            /* stk[0] is often the completion struct ptr; read its done field */
+                            if (stk[0] >= UINT64_C(0xffffffff80000000)
+                                && stk[0] <= UINT64_C(0xffffffff83000000))
+                            {
+                                uint64_t uCompPhys = stk[0] - UINT64_C(0xffffffff80000000);
+                                uint32_t uDone = 0xDEADBEEF;
+                                PGMPhysSimpleReadGCPhys(pVMer, &uDone, (RTGCPHYS)uCompPhys, 4);
+                                RTPrintf("[EARLY-RIP]   completion@%llx done=%u\n",
+                                    (unsigned long long)stk[0], uDone);
+                            }
+                            /* Dump 8 MORE stack QWORDs (higher frames = callers of wait) */
+                            uint64_t stk2[8] = {0};
+                            PGMPhysSimpleReadGCPhys(pVMer, stk2, (RTGCPHYS)(uPhysRsp + 64), 64);
+                            RTPrintf("[EARLY-RIP]   hi: %llx %llx %llx %llx\n",
+                                (unsigned long long)stk2[0], (unsigned long long)stk2[1],
+                                (unsigned long long)stk2[2], (unsigned long long)stk2[3]);
+                            RTPrintf("[EARLY-RIP]   hi: %llx %llx %llx %llx\n",
+                                (unsigned long long)stk2[4], (unsigned long long)stk2[5],
+                                (unsigned long long)stk2[6], (unsigned long long)stk2[7]);
                             RTStrmFlush(g_pStdOut);
                         }
                     }

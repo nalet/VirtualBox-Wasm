@@ -1528,7 +1528,8 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                     }
 
                     /* ── TASKS-WATCH: monitor init_task.tasks.next for new task creation ──
-                     * Fires every 100K instructions from 50M to 2B.
+                     * Fires every 10K instructions in 170M-210M window (rest_init period),
+                     * every 100K otherwise, from 50M to 2B.
                      * Reads init_task.tasks.next (phys 0x2411778, VA 0xffffffff82411778).
                      * When changed from self-referential, a new task was added — dump its details.
                      * This catches kernel_thread() → copy_process() → list_add_tail_rcu(). */
@@ -1540,7 +1541,10 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                         static uint64_t s_uLastTasksNext  = UINT64_C(0xffffffff82411778); /* init value = self */
                         if (g_cWasmVirtualInstructions >= s_cNextTasksCheck)
                         {
-                            s_cNextTasksCheck = g_cWasmVirtualInstructions + UINT64_C(100000); /* 100K */
+                            /* Use 10K interval in the critical rest_init window, 100K otherwise */
+                            bool fFineGrained = (g_cWasmVirtualInstructions >= UINT64_C(170000000)
+                                             && g_cWasmVirtualInstructions <= UINT64_C(210000000));
+                            s_cNextTasksCheck = g_cWasmVirtualInstructions + (fFineGrained ? UINT64_C(10000) : UINT64_C(100000));
                             PVMCC pVMtw = pVCpu->CTX_SUFF(pVM);
                             uint64_t uTasksNext = 0;
                             int rctw = PGMPhysSimpleReadGCPhys(pVMtw, &uTasksNext, (RTGCPHYS)UINT64_C(0x2411778), 8);

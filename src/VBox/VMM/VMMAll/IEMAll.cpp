@@ -1729,28 +1729,6 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
         } \
     } while (0)
 
-                                /* 0) One-shot: repair spinlock at heap+0xe0
-                                 * that was corrupted by FC4x selfRef8 bug.
-                                 * The spinlock should be 0 (unlocked). */
-                                {
-                                    static bool s_fLockRepaired = false;
-                                    if (!s_fLockRepaired)
-                                    {
-                                        s_fLockRepaired = true;
-                                        const RTGCPHYS lockPA = (RTGCPHYS)UINT64_C(0x74122e0);
-                                        uint32_t lockVal = 0xDEAD;
-                                        PGMPhysSimpleReadGCPhys(pVMfc, &lockVal, lockPA, 4);
-                                        if (lockVal != 0)
-                                        {
-                                            uint32_t zero = 0;
-                                            PGMPhysSimpleWriteGCPhys(pVMfc, lockPA, &zero, 4);
-                                            RTPrintf("[FC4z] REPAIRED spinlock@0x74122e0"
-                                                     " was=%u now=0\n", lockVal);
-                                            RTStrmFlush(g_pStdOut);
-                                        }
-                                    }
-                                }
-
                                 uint64_t uRsp = pVCpu->cpum.GstCtx.rsp;
                                 if (uRsp >= UINT64_C(0xffff888000000000))
                                 {
@@ -1818,92 +1796,11 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                                 /* 5) Re-check known completion at heap_obj+0xd8 */
                                 FC4_TRY_COMPLETE(UINT64_C(0xffff8880074122d8));
 
-                                /* 5b) NUCLEAR: patch wait_for_completion to ret.
-                                 * From MAX_TO stack dump: 0x810ce631 is return addr
-                                 * from wait_for_common inside wait_for_completion.
-                                 * Read code backwards from 0x810ce631 to find the
-                                 * function entry, then patch to ret (0xc3).
-                                 * This makes ALL wait_for_completion calls no-ops. */
-                                {
-                                    static bool s_fPatched = false;
-                                    if (!s_fPatched)
-                                    {
-                                        /* Read 64 bytes around wait_for_completion.
-                                         * Function likely starts at 0x810ce640 based on
-                                         * alignment and proximity to known addresses. */
-                                        uint8_t wfcCode[64];
-                                        __builtin_memset(wfcCode, 0, sizeof(wfcCode));
-                                        int rcWfc = PGMPhysSimpleReadGCPtr(pVCpu, wfcCode,
-                                            (RTGCPTR)UINT64_C(0xffffffff810ce620), 64);
-                                        if (RT_SUCCESS(rcWfc))
-                                        {
-                                            /* Dump the code so we can identify the entry */
-                                            RTPrintf("[FC4z] WFC code@810ce620:");
-                                            for (int _b = 0; _b < 64; _b++)
-                                                RTPrintf(" %02x", wfcCode[_b]);
-                                            RTPrintf("\n");
-
-                                            /* Find function entry: scan for common
-                                             * prologue bytes (push rbp = 0x55, or
-                                             * push rbx = 0x53, or push r15 = 0x41 0x57)
-                                             * in the range 0x810ce640-0x810ce660 */
-                                            int entry = -1;
-                                            for (int _b = 0x20; _b < 0x40; _b++)
-                                            {
-                                                /* Look for push-like prologue aligned
-                                                 * to likely function boundary */
-                                                if (wfcCode[_b] == 0x55 /* push rbp */
-                                                    || wfcCode[_b] == 0x53 /* push rbx */
-                                                    || (wfcCode[_b] == 0x41
-                                                        && _b+1 < 64
-                                                        && (wfcCode[_b+1] & 0xF8) == 0x50))
-                                                {
-                                                    /* Check if address is 16-byte aligned
-                                                     * (common for function starts) */
-                                                    uint64_t addr = UINT64_C(0xffffffff810ce620)
-                                                                  + _b;
-                                                    if ((addr & 0xF) == 0)
-                                                    {
-                                                        entry = _b;
-                                                        break;
-                                                    }
-                                                }
-                                            }
-
-                                            if (entry >= 0)
-                                            {
-                                                uint64_t entryVA = UINT64_C(0xffffffff810ce620)
-                                                                 + entry;
-                                                RTGCPHYS entryPA = (RTGCPHYS)(entryVA
-                                                    - UINT64_C(0xffffffff80000000));
-                                                /* Patch: write 0xc3 (ret) at entry */
-                                                uint8_t retInsn = 0xc3;
-                                                PGMPhysSimpleWriteGCPhys(pVMfc,
-                                                    entryPA, &retInsn, 1);
-                                                s_fPatched = true;
-                                                s_cFC4fixes++;
-                                                RTPrintf("[FC4z] #%u PATCHED wait_for_completion"
-                                                         " @%#llx → ret (0xc3)\n",
-                                                    s_cFC4fixes,
-                                                    (unsigned long long)entryVA);
-                                            }
-                                            else
-                                            {
-                                                /* Couldn't find prologue. Try 0x810ce640
-                                                 * directly since it appeared in comp0 dump */
-                                                RTGCPHYS pa640 = (RTGCPHYS)UINT64_C(0x10ce640);
-                                                uint8_t retInsn = 0xc3;
-                                                PGMPhysSimpleWriteGCPhys(pVMfc,
-                                                    pa640, &retInsn, 1);
-                                                s_fPatched = true;
-                                                s_cFC4fixes++;
-                                                RTPrintf("[FC4z] #%u PATCHED 810ce640 → ret"
-                                                         " (fallback)\n", s_cFC4fixes);
-                                            }
-                                            RTStrmFlush(g_pStdOut);
-                                        }
-                                    }
-                                }
+                                /* 5b) REMOVED: nuclear wait_for_completion patch.
+                                 * Patching WFC to ret killed kernel_init (PID 1)
+                                 * because it broke legitimate synchronization.
+                                 * Instead, just fix the known completion at heap+0xd8
+                                 * and let timed waits expire naturally. */
 
                                 /* 6) When MAX_SCHEDULE_TIMEOUT found, dump 16 slots
                                  * above it so we can identify the completion addr */

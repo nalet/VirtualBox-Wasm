@@ -1655,15 +1655,23 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                         }
                     }
 
-                    /* ── FC4 (version v): write done=1 to the completion at
-                     * 0xffff8880074122d8 (heap_obj+0xd8, found in version u) to
-                     * unblock the wait_for_completion deadlock. */
+                    /* ── FC4 (version w): periodic auto-completer for wait_for_completion.
+                     * Every 25M instructions after 350M, while tasks==singleton:
+                     * 1. Scan kernel stack for wait_for_completion return addr (0x810ce65a)
+                     * 2. Extract completion pointer from adjacent stack slot
+                     * 3. Validate completion struct (done==0, self-referencing list_head)
+                     * 4. Write done=1 to unblock
+                     * Also checks registers and known completion addresses. */
                     {
-                        static bool s_fFC4 = false;
-                        if (!s_fFC4
-                            && (pVCpu->cpum.GstCtx.msrEFER & MSR_K6_EFER_LMA)
-                            && g_cWasmVirtualInstructions >= UINT64_C(400000000))
+                        static uint64_t s_cNextFC4 = UINT64_C(350000000);
+                        static unsigned s_cFC4fixes = 0;
+                        static uint64_t s_aFixedAddrs[32];
+                        static unsigned s_cFixedCount = 0;
+                        if ((pVCpu->cpum.GstCtx.msrEFER & MSR_K6_EFER_LMA)
+                            && g_cWasmVirtualInstructions >= s_cNextFC4)
                         {
+                            s_cNextFC4 = g_cWasmVirtualInstructions + UINT64_C(25000000);
+
                             PVMCC pVMfc = pVCpu->CTX_SUFF(pVM);
                             const uint64_t kInitTaskPhys = UINT64_C(0x24114c0);
                             const uint64_t kInitTaskVA = UINT64_C(0xffffffff824114c0);
@@ -1673,68 +1681,118 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                             PGMPhysSimpleReadGCPhys(pVMfc, &uTN,
                                 (RTGCPHYS)(kInitTaskPhys + UINT64_C(0x310)), 8);
 
-                            if (uTN == kTasksSelf)
+                            if (uTN == kTasksSelf) /* only while no other tasks */
                             {
-                                s_fFC4 = true;
+                                /* Helper lambda-like: try to complete a candidate VA */
+#define FC4_TRY_COMPLETE(candVA) \
+    do { \
+        uint64_t _cva = (candVA); \
+        /* Skip if already fixed */ \
+        bool _dup = false; \
+        for (unsigned _d = 0; _d < s_cFixedCount; _d++) \
+            if (s_aFixedAddrs[_d] == _cva) { _dup = true; break; } \
+        if (_dup) break; \
+        /* Translate VA to PA */ \
+        RTGCPHYS _pa; \
+        if (_cva >= UINT64_C(0xffff888000000000)) \
+            _pa = (RTGCPHYS)(_cva - UINT64_C(0xffff888000000000)); \
+        else if (_cva >= UINT64_C(0xffffffff80000000)) \
+            _pa = (RTGCPHYS)(_cva - UINT64_C(0xffffffff80000000)); \
+        else break; \
+        uint8_t _cb[32]; \
+        __builtin_memset(_cb, 0xcc, sizeof(_cb)); \
+        int _rc = PGMPhysSimpleReadGCPhys(pVMfc, _cb, _pa, 32); \
+        if (RT_FAILURE(_rc)) break; \
+        uint32_t _done; \
+        __builtin_memcpy(&_done, &_cb[0], 4); \
+        uint64_t _wqN, _wqP; \
+        __builtin_memcpy(&_wqN, &_cb[16], 8); \
+        __builtin_memcpy(&_wqP, &_cb[24], 8); \
+        uint64_t _expSelf = _cva + 16; \
+        if (_done == 0 && _wqN == _expSelf && _wqP == _expSelf) \
+        { \
+            uint32_t _one = 1; \
+            PGMPhysSimpleWriteGCPhys(pVMfc, _pa, &_one, 4); \
+            s_cFC4fixes++; \
+            if (s_cFixedCount < 32) \
+                s_aFixedAddrs[s_cFixedCount++] = _cva; \
+            uint32_t _vfy = 0xDEAD; \
+            PGMPhysSimpleReadGCPhys(pVMfc, &_vfy, _pa, 4); \
+            RTPrintf("[FC4w] #%u insns=%llu FIXED comp@%#llx" \
+                     " (verify=%u) RIP=%#llx\n", \
+                s_cFC4fixes, \
+                (unsigned long long)g_cWasmVirtualInstructions, \
+                (unsigned long long)_cva, _vfy, \
+                (unsigned long long)pVCpu->cpum.GstCtx.rip); \
+            RTStrmFlush(g_pStdOut); \
+        } \
+        else if (_done == 0) \
+        { \
+            RTPrintf("[FC4w] insns=%llu CAND@%#llx done=%u" \
+                     " wq.n=%#llx wq.p=%#llx exp=%#llx\n", \
+                (unsigned long long)g_cWasmVirtualInstructions, \
+                (unsigned long long)_cva, _done, \
+                (unsigned long long)_wqN, (unsigned long long)_wqP, \
+                (unsigned long long)_expSelf); \
+            RTStrmFlush(g_pStdOut); \
+        } \
+    } while (0)
 
-                                RTPrintf("[FC4] insns=%llu RIP=%#llx RSP=%#llx\n",
-                                    (unsigned long long)g_cWasmVirtualInstructions,
-                                    (unsigned long long)pVCpu->cpum.GstCtx.rip,
-                                    (unsigned long long)pVCpu->cpum.GstCtx.rsp);
-
-                                /* 1) Read completion at heap_obj+0xd8
-                                 * heap_obj VA = 0xffff888007412200
-                                 * completion VA = 0xffff8880074122d8
-                                 * completion PA = 0x74122d8  (direct map: VA - 0xffff888000000000) */
-                                const uint64_t compVA  = UINT64_C(0xffff8880074122d8);
-                                const RTGCPHYS compPA  = (RTGCPHYS)UINT64_C(0x74122d8);
-
-                                uint8_t compBuf[32];
-                                __builtin_memset(compBuf, 0xcc, sizeof(compBuf));
-                                int rc = PGMPhysSimpleReadGCPhys(pVMfc, compBuf,
-                                    compPA, 32);
-                                if (RT_SUCCESS(rc))
+                                /* 1) Scan kernel stack for wait_for_completion
+                                 * return address and nearby completion pointers */
+                                uint64_t uRsp = pVCpu->cpum.GstCtx.rsp;
+                                if (uRsp >= UINT64_C(0xffff888000000000))
                                 {
-                                    uint32_t done;
-                                    __builtin_memcpy(&done, &compBuf[0], 4);
-                                    uint64_t wqN, wqP;
-                                    __builtin_memcpy(&wqN, &compBuf[16], 8);
-                                    __builtin_memcpy(&wqP, &compBuf[24], 8);
+                                    uint64_t uPhysRsp = uRsp - UINT64_C(0xffff888000000000);
+                                    uint64_t stkBuf[128];
+                                    __builtin_memset(stkBuf, 0, sizeof(stkBuf));
+                                    PGMPhysSimpleReadGCPhys(pVMfc, stkBuf,
+                                        (RTGCPHYS)uPhysRsp, sizeof(stkBuf));
 
-                                    RTPrintf("[FC4] COMP@%#llx: done=%u"
-                                             " wq.n=%#llx wq.p=%#llx\n",
-                                        (unsigned long long)compVA, done,
-                                        (unsigned long long)wqN,
-                                        (unsigned long long)wqP);
-
-                                    if (done == 0)
+                                    const uint64_t kWfcRet = UINT64_C(0xffffffff810ce65a);
+                                    for (int _i = 0; _i < 126; _i++)
                                     {
-                                        /* Write done=1 to unblock wait_for_completion */
-                                        uint32_t one = 1;
-                                        PGMPhysSimpleWriteGCPhys(pVMfc,
-                                            compPA, &one, 4);
+                                        if (stkBuf[_i] == kWfcRet)
+                                        {
+                                            /* Try slots around the return addr:
+                                             * i+1, i+2, i-1 as completion candidates */
+                                            if (_i + 1 < 128)
+                                                FC4_TRY_COMPLETE(stkBuf[_i + 1]);
+                                            if (_i + 2 < 128)
+                                                FC4_TRY_COMPLETE(stkBuf[_i + 2]);
+                                            if (_i > 0)
+                                                FC4_TRY_COMPLETE(stkBuf[_i - 1]);
+                                            break;
+                                        }
+                                    }
 
-                                        /* Verify */
-                                        uint32_t vfy = 0xDEAD;
-                                        PGMPhysSimpleReadGCPhys(pVMfc,
-                                            &vfy, compPA, 4);
-                                        RTPrintf("[FC4] WROTE done=1 (verify=%u)\n",
-                                            vfy);
-
-                                        /* Also set init_task.state = TASK_RUNNING (0)
-                                         * State is at task_struct offset +8 (after
-                                         * thread_info). PA = 0x24114c8. */
-                                        uint64_t zero = 0;
-                                        PGMPhysSimpleWriteGCPhys(pVMfc,
-                                            (RTGCPHYS)UINT64_C(0x24114c8),
-                                            &zero, 8);
-                                        RTPrintf("[FC4] Set init_task.state=RUNNING\n");
+                                    /* Also scan entire stack for any kernel addr
+                                     * that looks like a valid completion with done=0 */
+                                    for (int _i = 0; _i < 128; _i++)
+                                    {
+                                        uint64_t v = stkBuf[_i];
+                                        if ((v >= UINT64_C(0xffffffff82000000)
+                                             && v <= UINT64_C(0xffffffff83000000))
+                                            || (v >= UINT64_C(0xffff888007400000)
+                                                && v <= UINT64_C(0xffff888007500000)))
+                                        {
+                                            FC4_TRY_COMPLETE(v);
+                                        }
                                     }
                                 }
-                                else
-                                    RTPrintf("[FC4] COMP READ FAILED rc=%d\n", rc);
 
-                                RTStrmFlush(g_pStdOut);
+                                /* 2) Check callee-saved registers for completion ptrs */
+                                FC4_TRY_COMPLETE(pVCpu->cpum.GstCtx.rbx);
+                                FC4_TRY_COMPLETE(pVCpu->cpum.GstCtx.r12);
+                                FC4_TRY_COMPLETE(pVCpu->cpum.GstCtx.r13);
+                                FC4_TRY_COMPLETE(pVCpu->cpum.GstCtx.r14);
+                                FC4_TRY_COMPLETE(pVCpu->cpum.GstCtx.r15);
+                                FC4_TRY_COMPLETE(pVCpu->cpum.GstCtx.rdi);
+
+                                /* 3) Re-check known completion at heap_obj+0xd8 */
+                                FC4_TRY_COMPLETE(UINT64_C(0xffff8880074122d8));
+
+#undef FC4_TRY_COMPLETE
                             }
                         }
                     }

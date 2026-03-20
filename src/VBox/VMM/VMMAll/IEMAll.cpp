@@ -1650,13 +1650,22 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                                 (unsigned long long)uTasksPrev,
                                 (unsigned long long)uCT,
                                 (unsigned long long)uGsBase);
-                            /* Always read kthreadd_done.done (VA 0xffffffff824b8280, phys 0x24b8280)
-                             * and tasks.next actual value to diagnose the boot deadlock. */
+                            /* Read kthreadd_done.done via stk[0] if it's a kernel VA,
+                             * using page-table walk (PGMPhysSimpleReadGCPtr) to get correct phys.
+                             * Also try VA 0xffffffff824b8280 directly in case stk differs.
+                             * Print tasks.next actual value. */
                             {
-                                uint32_t uKtDone = 0xDEADBEEF;
-                                PGMPhysSimpleReadGCPhys(pVMer, &uKtDone, (RTGCPHYS)UINT64_C(0x24b8280), 4);
-                                RTPrintf("[EARLY-RIP]   kthreadd_done.done=%u tasks.next=%llx\n",
-                                    uKtDone, (unsigned long long)uTN);
+                                uint32_t uKtDone1 = 0xDEADBEEF, uKtDone2 = 0xDEADBEEF;
+                                /* Read via stk[0] if it looks like a kernel completion VA */
+                                if (stk[0] >= UINT64_C(0xffffffff80000000)
+                                    && stk[0] <= UINT64_C(0xffffffff83000000))
+                                {
+                                    PGMPhysSimpleReadGCPtr(pVCpu, &uKtDone1, (RTGCPTR)stk[0], 4);
+                                }
+                                /* Always read VA 0xffffffff824b8280 (suspected kthreadd_done) */
+                                PGMPhysSimpleReadGCPtr(pVCpu, &uKtDone2, (RTGCPTR)UINT64_C(0xffffffff824b8280), 4);
+                                RTPrintf("[EARLY-RIP]   done_stk0=%u done_kt=%u tasks.next=%llx\n",
+                                    uKtDone1, uKtDone2, (unsigned long long)uTN);
                             }
                             /* Dump 8 MORE stack QWORDs (higher frames = callers of wait) */
                             uint64_t stk2[8] = {0};

@@ -2793,9 +2793,18 @@ static void tmR3TimerQueueRunVirtualSync(PVM pVM)
                        &&   offLag >= pVM->tm.s.aVirtualSyncCatchUpPeriods[i + 1].u64Start)
                     i++;
                 STAM_COUNTER_INC(&pVM->tm.s.aStatVirtualSyncCatchupInitial[i]);
+#ifdef __EMSCRIPTEN__
+                /* In Wasm, virtual time is deterministic (insn_count * 100ns).
+                   Catch-up causes an interrupt storm (PIT fires 3-4x too fast)
+                   that consumes ~87% of CPU time.  Suppress it entirely. */
+                ASMAtomicWriteU32(&pVM->tm.s.u32VirtualSyncCatchUpPercentage, 0);
+                ASMAtomicWriteBool(&pVM->tm.s.fVirtualSyncCatchUp, false);
+                Log4(("TM: %'RU64/%'8RU64: catch-up SUPPRESSED (Wasm)\n", u64VirtualNow2 - offNew, offLag));
+#else
                 ASMAtomicWriteU32(&pVM->tm.s.u32VirtualSyncCatchUpPercentage, pVM->tm.s.aVirtualSyncCatchUpPeriods[i].u32Percentage);
                 ASMAtomicWriteBool(&pVM->tm.s.fVirtualSyncCatchUp, true);
                 Log4(("TM: %'RU64/%'8RU64: catch-up %u%%\n", u64VirtualNow2 - offNew, offLag, pVM->tm.s.u32VirtualSyncCatchUpPercentage));
+#endif
             }
             else
             {

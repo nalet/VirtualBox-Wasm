@@ -1655,22 +1655,23 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                         }
                     }
 
-                    /* ── FC4 (version E): three-phase wait_for_completion fix.
+                    /* ── FC4 (version F): improved nuclear patch with done=1.
                      *
-                     * Phase 1 (tasks==singleton): Patch WFC to ret (0xc3) during
-                     *   start_kernel to bypass ALL deadlocking completions.
+                     * Phase 1 (tasks==singleton): Patch WFC to
+                     *   `mov dword [rdi], 1; ret` (7 bytes: c7 07 01 00 00 00 c3).
+                     *   This sets completion->done=1 AND returns immediately.
+                     *   Better than plain ret because callers see done=1 (no retries).
                      *
-                     * Phase 2 (tasks created): Restore original WFC byte (0x41).
+                     * Phase 2 (tasks created): Restore original 7 bytes.
                      *
-                     * Phase 3 (ongoing): Inject SHORT TIMEOUT on any stack that has
-                     *   MAX_SCHEDULE_TIMEOUT. Replace 0x7fffffffffffffff with 100
-                     *   (jiffies). This makes wait_for_completion timeout gracefully
-                     *   after ~100 PIT ticks instead of deadlocking. The function
-                     *   runs its NORMAL exit path (cleanup wait queue, return 0),
-                     *   so no data structure corruption.
+                     * Phase 3 (ongoing): Timeout injection — replace
+                     *   MAX_SCHEDULE_TIMEOUT with 1 on any stack. Timeout of 1 jiffy
+                     *   means the wait exits after a single timer tick (~25K insns).
+                     *   Combined with done=1 from phase 1 for pre-existing completions,
+                     *   this prevents cascading deadlocks during do_initcalls.
                      *
                      * wait_for_completion at VA 0xffffffff810ce640, PA 0x10ce640.
-                     * Original first byte: 0x41 (push r12). */
+                     * Original 7 bytes: 41 54 55 53 48 89 fb */
                     {
                         static bool s_fWfcPatched = false;
                         static bool s_fWfcRestored = false;
@@ -1689,34 +1690,41 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                             PGMPhysSimpleReadGCPhys(pVMfc, &uTN,
                                 (RTGCPHYS)(kInitTaskPhys + UINT64_C(0x310)), 8);
 
-                            /* Phase 1: Patch WFC to ret while no tasks exist */
+                            /* Phase 1: Patch WFC to "mov dword [rdi], 1; ret"
+                             * while no tasks exist. Sets done=1 on the completion
+                             * AND returns immediately. */
                             if (!s_fWfcPatched && uTN == kTasksSelf)
                             {
-                                uint8_t retInsn = 0xc3;
-                                PGMPhysSimpleWriteGCPhys(pVMfc, kWfcPA, &retInsn, 1);
+                                /* c7 07 01 00 00 00 = mov dword [rdi], 1
+                                 * c3                = ret */
+                                uint8_t patch[7] = {0xc7, 0x07, 0x01, 0x00,
+                                                    0x00, 0x00, 0xc3};
+                                PGMPhysSimpleWriteGCPhys(pVMfc, kWfcPA, patch, 7);
                                 s_fWfcPatched = true;
-                                RTPrintf("[FC4E] PATCHED WFC → ret insns=%llu\n",
+                                RTPrintf("[FC4F] PATCHED WFC → mov [rdi],1; ret"
+                                         " insns=%llu\n",
                                     (unsigned long long)g_cWasmVirtualInstructions);
                                 RTStrmFlush(g_pStdOut);
                             }
 
-                            /* Phase 2: Restore original byte once tasks are created */
+                            /* Phase 2: Restore original 7 bytes once tasks exist */
                             if (s_fWfcPatched && !s_fWfcRestored && uTN != kTasksSelf)
                             {
-                                uint8_t origByte = 0x41; /* push r12 */
-                                PGMPhysSimpleWriteGCPhys(pVMfc, kWfcPA, &origByte, 1);
+                                /* Original: 41 54 55 53 48 89 fb
+                                 * = push r12; push rbp; push rbx; mov rbx, rdi */
+                                uint8_t orig[7] = {0x41, 0x54, 0x55, 0x53,
+                                                   0x48, 0x89, 0xfb};
+                                PGMPhysSimpleWriteGCPhys(pVMfc, kWfcPA, orig, 7);
                                 s_fWfcRestored = true;
-                                RTPrintf("[FC4E] RESTORED WFC (0x41) insns=%llu\n",
+                                RTPrintf("[FC4F] RESTORED WFC insns=%llu\n",
                                     (unsigned long long)g_cWasmVirtualInstructions);
                                 RTStrmFlush(g_pStdOut);
                             }
 
-                            /* Phase 3: Timeout injection for ALL tasks.
-                             * Scan current stack for MAX_SCHEDULE_TIMEOUT and
-                             * replace with 100 (jiffies). This makes any
-                             * wait_for_completion timeout after ~100 PIT ticks
-                             * instead of deadlocking forever. The WFC function
-                             * runs its normal exit path (cleanup, return 0). */
+                            /* Phase 3: Timeout injection — replace
+                             * MAX_SCHEDULE_TIMEOUT with 1 (single jiffy).
+                             * This makes WFC timeout after ~1 PIT tick (~25K insns)
+                             * instead of deadlocking. Much faster than 100 jiffies. */
                             if (s_fWfcRestored)
                             {
                                 uint64_t uRsp = pVCpu->cpum.GstCtx.rsp;
@@ -1724,7 +1732,6 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                                 {
                                     uint64_t uPhysRsp = uRsp
                                         - UINT64_C(0xffff888000000000);
-                                    /* Read 2KB of stack */
                                     uint64_t stkBuf[256];
                                     __builtin_memset(stkBuf, 0, sizeof(stkBuf));
                                     PGMPhysSimpleReadGCPhys(pVMfc, stkBuf,
@@ -1736,17 +1743,15 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                                     {
                                         if (stkBuf[_i] == kMaxTO)
                                         {
-                                            /* Replace with short timeout (100 jiffies).
-                                             * Write directly to guest stack memory. */
-                                            uint64_t shortTO = UINT64_C(100);
+                                            uint64_t shortTO = UINT64_C(1);
                                             RTGCPHYS stkSlotPA = (RTGCPHYS)(
                                                 uPhysRsp + _i * 8);
                                             PGMPhysSimpleWriteGCPhys(pVMfc,
                                                 stkSlotPA, &shortTO, 8);
                                             s_cTimeoutInjections++;
-                                            if ((s_cTimeoutInjections % 100) == 1)
+                                            if ((s_cTimeoutInjections % 500) == 1)
                                             {
-                                                RTPrintf("[FC4E] timeout #%u"
+                                                RTPrintf("[FC4F] timeout #%u"
                                                     " insns=%llu stk[%d]\n",
                                                     s_cTimeoutInjections,
                                                     (unsigned long long)
@@ -1754,7 +1759,7 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                                                     _i);
                                                 RTStrmFlush(g_pStdOut);
                                             }
-                                            break; /* one per check */
+                                            break;
                                         }
                                     }
                                 }

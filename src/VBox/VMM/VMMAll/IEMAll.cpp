@@ -1655,339 +1655,58 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                         }
                     }
 
-                    /* ── FC4 (version x): periodic auto-completer for wait_for_completion.
-                     * Every 25M instructions after 350M, while tasks==singleton:
-                     * 1. Scan stack for MAX_SCHEDULE_TIMEOUT (0x7fffffffffffffff)
-                     * 2. When found, search nearby for completion pointer
-                     * 3. Accept completion with done==0 AND either self-referencing
-                     *    OR zero'd wait queue head (not all completions are init'd)
-                     * 4. Write done=1 to unblock
-                     * 5. Also probe register values and known addresses. */
+                    /* ── FC4 (version D): temporary nuclear patch for wait_for_completion.
+                     *
+                     * Strategy: patch wait_for_completion to `ret` (0xc3) during
+                     * start_kernel's init phase (before tasks are created). Once
+                     * rest_init creates the first task (TASK-BORN), restore the
+                     * original byte (0x41 = push r12) to re-enable normal behavior.
+                     *
+                     * This gives start_kernel a "free pass" through ALL deadlocking
+                     * wait_for_completion calls, then restores correctness for
+                     * kernel_init and subsequent threads.
+                     *
+                     * wait_for_completion at VA 0xffffffff810ce640, PA 0x10ce640.
+                     * Original first byte: 0x41 (push r12). */
                     {
+                        static bool s_fWfcPatched = false;
+                        static bool s_fWfcRestored = false;
                         static uint64_t s_cNextFC4 = UINT64_C(350000000);
-                        static unsigned s_cFC4fixes = 0;
                         if ((pVCpu->cpum.GstCtx.msrEFER & MSR_K6_EFER_LMA)
                             && g_cWasmVirtualInstructions >= s_cNextFC4)
                         {
                             s_cNextFC4 = g_cWasmVirtualInstructions + UINT64_C(1000000);
-
                             PVMCC pVMfc = pVCpu->CTX_SUFF(pVM);
+                            const RTGCPHYS kWfcPA = (RTGCPHYS)UINT64_C(0x10ce640);
                             const uint64_t kInitTaskPhys = UINT64_C(0x24114c0);
-                            const uint64_t kInitTaskVA = UINT64_C(0xffffffff824114c0);
-                            const uint64_t kTasksSelf = kInitTaskVA + UINT64_C(0x310);
+                            const uint64_t kTasksSelf = UINT64_C(0xffffffff824117d0);
 
                             uint64_t uTN = 0;
                             PGMPhysSimpleReadGCPhys(pVMfc, &uTN,
                                 (RTGCPHYS)(kInitTaskPhys + UINT64_C(0x310)), 8);
 
-                            if (uTN == kTasksSelf) /* only while no other tasks */
+                            /* Phase 1: Patch WFC to ret while no tasks exist */
+                            if (!s_fWfcPatched && uTN == kTasksSelf)
                             {
-                                /* Helper: try to complete a candidate VA.
-                                 * Accepts done==0 with EITHER self-referencing OR zero wq. */
-#define FC4_TRY_COMPLETE(candVA) \
-    do { \
-        uint64_t _cva = (candVA); \
-        if (_cva == 0) break; \
-        /* Translate VA to PA */ \
-        RTGCPHYS _pa; \
-        if (_cva >= UINT64_C(0xffff888000000000) \
-            && _cva < UINT64_C(0xffff889000000000)) \
-            _pa = (RTGCPHYS)(_cva - UINT64_C(0xffff888000000000)); \
-        else if (_cva >= UINT64_C(0xffffffff80000000) \
-                 && _cva < UINT64_C(0xffffffff83000000)) \
-            _pa = (RTGCPHYS)(_cva - UINT64_C(0xffffffff80000000)); \
-        else break; \
-        if (_pa > UINT64_C(0x8000000)) break; /* 128MB RAM limit */ \
-        uint8_t _cb[32]; \
-        __builtin_memset(_cb, 0xcc, sizeof(_cb)); \
-        int _rc = PGMPhysSimpleReadGCPhys(pVMfc, _cb, _pa, 32); \
-        if (RT_FAILURE(_rc)) break; \
-        uint32_t _done; \
-        __builtin_memcpy(&_done, &_cb[0], 4); \
-        uint64_t _wqN, _wqP; \
-        __builtin_memcpy(&_wqN, &_cb[16], 8); \
-        __builtin_memcpy(&_wqP, &_cb[24], 8); \
-        uint64_t _expSelf = _cva + 16; \
-        bool _selfRef = (_wqN == _expSelf && _wqP == _expSelf); \
-        /* Only check self-ref at offset+16. The offset+8 check caused \
-         * false positives: it matched the spinlock field INSIDE a real \
-         * completion and corrupted it by writing done=1 to the lock. */ \
-        if (_done == 0 && _selfRef) \
-        { \
-            uint32_t _one = 1; \
-            PGMPhysSimpleWriteGCPhys(pVMfc, _pa, &_one, 4); \
-            s_cFC4fixes++; \
-            uint32_t _vfy = 0xDEAD; \
-            PGMPhysSimpleReadGCPhys(pVMfc, &_vfy, _pa, 4); \
-            RTPrintf("[FC4z] #%u insns=%llu FIXED comp@%#llx" \
-                     " (verify=%u) RIP=%#llx\n", \
-                s_cFC4fixes, \
-                (unsigned long long)g_cWasmVirtualInstructions, \
-                (unsigned long long)_cva, _vfy, \
-                (unsigned long long)pVCpu->cpum.GstCtx.rip); \
-            RTStrmFlush(g_pStdOut); \
-        } \
-    } while (0)
-
-                                uint64_t uRsp = pVCpu->cpum.GstCtx.rsp;
-                                if (uRsp >= UINT64_C(0xffff888000000000))
-                                {
-                                    uint64_t uPhysRsp = uRsp - UINT64_C(0xffff888000000000);
-                                    uint64_t stkBuf[128];
-                                    __builtin_memset(stkBuf, 0, sizeof(stkBuf));
-                                    PGMPhysSimpleReadGCPhys(pVMfc, stkBuf,
-                                        (RTGCPHYS)uPhysRsp, sizeof(stkBuf));
-
-                                    /* 1) Scan for MAX_SCHEDULE_TIMEOUT on stack.
-                                     * When found, the completion pointer is typically
-                                     * 2-4 slots above (in the caller's frame). */
-                                    const uint64_t kMaxTO = UINT64_C(0x7fffffffffffffff);
-                                    for (int _i = 0; _i < 126; _i++)
-                                    {
-                                        if (stkBuf[_i] == kMaxTO)
-                                        {
-                                            /* Slots i+1..i+4 may have the
-                                             * wait_for_completion return addr, then
-                                             * the completion pointer in the next slot */
-                                            for (int _j = _i + 1; _j < _i + 6 && _j < 128; _j++)
-                                                FC4_TRY_COMPLETE(stkBuf[_j]);
-                                            break;
-                                        }
-                                    }
-
-                                    /* 2) Also scan for the known return address */
-                                    const uint64_t kWfcRet = UINT64_C(0xffffffff810ce65a);
-                                    for (int _i = 0; _i < 126; _i++)
-                                    {
-                                        if (stkBuf[_i] == kWfcRet)
-                                        {
-                                            if (_i + 1 < 128)
-                                                FC4_TRY_COMPLETE(stkBuf[_i + 1]);
-                                            if (_i + 2 < 128)
-                                                FC4_TRY_COMPLETE(stkBuf[_i + 2]);
-                                            break;
-                                        }
-                                    }
-
-                                    /* 3) Scan stack for heap/data addrs that look
-                                     * like valid completions */
-                                    for (int _i = 0; _i < 128; _i++)
-                                    {
-                                        uint64_t v = stkBuf[_i];
-                                        if ((v >= UINT64_C(0xffffffff82000000)
-                                             && v <= UINT64_C(0xffffffff83000000))
-                                            || (v >= UINT64_C(0xffff888007400000)
-                                                && v <= UINT64_C(0xffff888007500000)))
-                                        {
-                                            FC4_TRY_COMPLETE(v);
-                                        }
-                                    }
-                                }
-
-                                /* 4) Check callee-saved registers for completion ptrs */
-                                FC4_TRY_COMPLETE(pVCpu->cpum.GstCtx.rbx);
-                                FC4_TRY_COMPLETE(pVCpu->cpum.GstCtx.rbp);
-                                FC4_TRY_COMPLETE(pVCpu->cpum.GstCtx.r12);
-                                FC4_TRY_COMPLETE(pVCpu->cpum.GstCtx.r13);
-                                FC4_TRY_COMPLETE(pVCpu->cpum.GstCtx.r14);
-                                FC4_TRY_COMPLETE(pVCpu->cpum.GstCtx.r15);
-                                FC4_TRY_COMPLETE(pVCpu->cpum.GstCtx.rdi);
-
-                                /* 5) Re-check known completion at heap_obj+0xd8 */
-                                FC4_TRY_COMPLETE(UINT64_C(0xffff8880074122d8));
-
-                                /* 5b) REMOVED: nuclear wait_for_completion patch.
-                                 * Patching WFC to ret killed kernel_init (PID 1)
-                                 * because it broke legitimate synchronization.
-                                 * Instead, just fix the known completion at heap+0xd8
-                                 * and let timed waits expire naturally. */
-
-                                /* 6) When MAX_SCHEDULE_TIMEOUT found, dump 16 slots
-                                 * above it so we can identify the completion addr */
-                                if (uRsp >= UINT64_C(0xffff888000000000))
-                                {
-                                    uint64_t uPhysRsp2 = uRsp - UINT64_C(0xffff888000000000);
-                                    uint64_t stkBuf2[256];
-                                    __builtin_memset(stkBuf2, 0, sizeof(stkBuf2));
-                                    PGMPhysSimpleReadGCPhys(pVMfc, stkBuf2,
-                                        (RTGCPHYS)uPhysRsp2,
-                                        sizeof(stkBuf2) < 2048 ? sizeof(stkBuf2) : 2048);
-                                    const uint64_t kMaxTO2 = UINT64_C(0x7fffffffffffffff);
-                                    for (int _i = 0; _i < 240; _i++)
-                                    {
-                                        if (stkBuf2[_i] == kMaxTO2)
-                                        {
-                                            /* Dump 16 slots above MAX_SCHEDULE_TIMEOUT */
-                                            RTPrintf("[FC4z] MAX_TO@stk[%d] RSP=%#llx "
-                                                     "insns=%llu\n", _i,
-                                                (unsigned long long)uRsp,
-                                                (unsigned long long)g_cWasmVirtualInstructions);
-                                            for (int _k = 1; _k <= 16 && _i+_k < 256; _k++)
-                                            {
-                                                uint64_t sv = stkBuf2[_i + _k];
-                                                RTPrintf("[FC4z]   +%d: %#018llx\n",
-                                                    _k, (unsigned long long)sv);
-                                                FC4_TRY_COMPLETE(sv);
-                                            }
-                                            /* KEY INSIGHT: wait_for_completion saves
-                                             * completion ptr to RBX at 0x810ce644.
-                                             * RBX is callee-saved, so it holds the
-                                             * completion ptr throughout the wait loop.
-                                             * Force-complete whatever RBX points to. */
-                                            {
-                                                uint64_t rbxVal = pVCpu->cpum.GstCtx.rbx;
-                                                RTPrintf("[FC4z] RBX=%#llx (completion?)\n",
-                                                    (unsigned long long)rbxVal);
-                                                /* Force-complete RBX if it looks like
-                                                 * a completion with done==0.
-                                                 * ONLY accept completions with self-ref
-                                                 * list_head to avoid corrupting other
-                                                 * data structures (IRQ work lists etc). */
-                                                if (rbxVal >= UINT64_C(0xffff888000000000)
-                                                    && rbxVal < UINT64_C(0xffff889000000000))
-                                                {
-                                                    RTGCPHYS rbxPA = (RTGCPHYS)(rbxVal
-                                                        - UINT64_C(0xffff888000000000));
-                                                    uint8_t cb[32];
-                                                    __builtin_memset(cb, 0xcc, sizeof(cb));
-                                                    int rcb = PGMPhysSimpleReadGCPhys(pVMfc,
-                                                        cb, rbxPA, 32);
-                                                    if (RT_SUCCESS(rcb))
-                                                    {
-                                                        uint32_t dn;
-                                                        __builtin_memcpy(&dn, &cb[0], 4);
-                                                        uint64_t wn, wp;
-                                                        __builtin_memcpy(&wn, &cb[16], 8);
-                                                        __builtin_memcpy(&wp, &cb[24], 8);
-                                                        RTPrintf("[FC4z] RBX comp: done=%u"
-                                                                 " wq16=%#llx/%#llx\n",
-                                                            dn,
-                                                            (unsigned long long)wn,
-                                                            (unsigned long long)wp);
-                                                        /* Only force-complete if
-                                                         * list_head is self-referencing
-                                                         * (valid empty completion) */
-                                                        uint64_t expSelf = rbxVal + 16;
-                                                        if (dn == 0
-                                                            && wn == expSelf
-                                                            && wp == expSelf)
-                                                        {
-                                                            uint32_t one = 1;
-                                                            PGMPhysSimpleWriteGCPhys(pVMfc,
-                                                                rbxPA, &one, 4);
-                                                            s_cFC4fixes++;
-                                                            RTPrintf("[FC4z] #%u FIXED"
-                                                                " comp@RBX=%#llx\n",
-                                                                s_cFC4fixes,
-                                                                (unsigned long long)rbxVal);
-                                                        }
-                                                        else if (dn == 0)
-                                                        {
-                                                            RTPrintf("[FC4z] RBX skip:"
-                                                                " wq not self-ref\n");
-                                                        }
-                                                    }
-                                                }
-                                                else if (rbxVal >= UINT64_C(0xffffffff80000000)
-                                                         && rbxVal < UINT64_C(0xffffffff83000000))
-                                                {
-                                                    RTGCPHYS rbxPA = (RTGCPHYS)(rbxVal
-                                                        - UINT64_C(0xffffffff80000000));
-                                                    uint8_t cb[32];
-                                                    __builtin_memset(cb, 0xcc, sizeof(cb));
-                                                    int rcb = PGMPhysSimpleReadGCPhys(pVMfc,
-                                                        cb, rbxPA, 32);
-                                                    if (RT_SUCCESS(rcb))
-                                                    {
-                                                        uint32_t dn;
-                                                        __builtin_memcpy(&dn, &cb[0], 4);
-                                                        uint64_t wn2, wp2;
-                                                        __builtin_memcpy(&wn2, &cb[16], 8);
-                                                        __builtin_memcpy(&wp2, &cb[24], 8);
-                                                        uint64_t expSelf2 = rbxVal + 16;
-                                                        RTPrintf("[FC4z] RBX comp(kdata):"
-                                                                 " done=%u wq=%#llx/%#llx\n",
-                                                            dn,
-                                                            (unsigned long long)wn2,
-                                                            (unsigned long long)wp2);
-                                                        if (dn == 0
-                                                            && wn2 == expSelf2
-                                                            && wp2 == expSelf2)
-                                                        {
-                                                            uint32_t one = 1;
-                                                            PGMPhysSimpleWriteGCPhys(pVMfc,
-                                                                rbxPA, &one, 4);
-                                                            s_cFC4fixes++;
-                                                            RTPrintf("[FC4z] #%u FIXED"
-                                                                " comp@RBX=%#llx\n",
-                                                                s_cFC4fixes,
-                                                                (unsigned long long)rbxVal);
-                                                        }
-                                                        else if (dn == 0)
-                                                        {
-                                                            RTPrintf("[FC4z] RBX skip(kdata):"
-                                                                " wq not self-ref\n");
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                            RTStrmFlush(g_pStdOut);
-                                            break;
-                                        }
-                                    }
-                                }
-
-#undef FC4_TRY_COMPLETE
+                                uint8_t retInsn = 0xc3;
+                                PGMPhysSimpleWriteGCPhys(pVMfc, kWfcPA, &retInsn, 1);
+                                s_fWfcPatched = true;
+                                RTPrintf("[FC4D] PATCHED wait_for_completion → ret"
+                                         " insns=%llu\n",
+                                    (unsigned long long)g_cWasmVirtualInstructions);
+                                RTStrmFlush(g_pStdOut);
                             }
 
-                            /* 7) Walk task list and dump ALL tasks' state.
-                             * Also scan pid offsets to find the correct one. */
+                            /* Phase 2: Restore original byte once tasks are created */
+                            if (s_fWfcPatched && !s_fWfcRestored && uTN != kTasksSelf)
                             {
-                                uint64_t uTCur = 0;
-                                PGMPhysSimpleReadGCPhys(pVMfc, &uTCur,
-                                    (RTGCPHYS)UINT64_C(0x24117d0), 8);
-                                const uint64_t kSelfTasks = UINT64_C(0xffffffff824117d0);
-                                int taskCount = 0;
-                                while (uTCur != kSelfTasks && uTCur != 0 && taskCount < 10)
-                                {
-                                    taskCount++;
-                                    uint64_t taskVA = uTCur - UINT64_C(0x310);
-                                    RTGCPHYS taskPA;
-                                    if (taskVA >= UINT64_C(0xffff888000000000))
-                                        taskPA = (RTGCPHYS)(taskVA - UINT64_C(0xffff888000000000));
-                                    else
-                                        taskPA = (RTGCPHYS)(taskVA - UINT64_C(0xffffffff80000000));
-                                    uint64_t state = 0xDEAD;
-                                    PGMPhysSimpleReadGCPhys(pVMfc, &state,
-                                        (RTGCPHYS)(taskPA + 8), 8);
-                                    char comm[17] = {0};
-                                    PGMPhysSimpleReadGCPhys(pVMfc, comm,
-                                        (RTGCPHYS)(taskPA + UINT64_C(0x5c8)), 16);
-                                    comm[16] = '\0';
-                                    /* Scan for pid: try offsets 0x470-0x4a0 */
-                                    uint32_t pidCands[4] = {0};
-                                    PGMPhysSimpleReadGCPhys(pVMfc, &pidCands[0],
-                                        (RTGCPHYS)(taskPA + UINT64_C(0x470)), 4);
-                                    PGMPhysSimpleReadGCPhys(pVMfc, &pidCands[1],
-                                        (RTGCPHYS)(taskPA + UINT64_C(0x480)), 4);
-                                    PGMPhysSimpleReadGCPhys(pVMfc, &pidCands[2],
-                                        (RTGCPHYS)(taskPA + UINT64_C(0x490)), 4);
-                                    PGMPhysSimpleReadGCPhys(pVMfc, &pidCands[3],
-                                        (RTGCPHYS)(taskPA + UINT64_C(0x4a0)), 4);
-                                    RTPrintf("[FC4z-TASK] #%d @%#llx state=%lld"
-                                             " comm='%.16s'"
-                                             " pid@470=%d @480=%d @490=%d @4a0=%d\n",
-                                        taskCount,
-                                        (unsigned long long)taskVA,
-                                        (long long)state, comm,
-                                        pidCands[0], pidCands[1],
-                                        pidCands[2], pidCands[3]);
-                                    /* Follow tasks.next */
-                                    PGMPhysSimpleReadGCPhys(pVMfc, &uTCur,
-                                        (RTGCPHYS)(taskPA + UINT64_C(0x310)), 8);
-                                }
-                                if (taskCount > 0)
-                                    RTStrmFlush(g_pStdOut);
+                                uint8_t origByte = 0x41; /* push r12 */
+                                PGMPhysSimpleWriteGCPhys(pVMfc, kWfcPA, &origByte, 1);
+                                s_fWfcRestored = true;
+                                RTPrintf("[FC4D] RESTORED wait_for_completion (0x41)"
+                                         " insns=%llu — tasks created!\n",
+                                    (unsigned long long)g_cWasmVirtualInstructions);
+                                RTStrmFlush(g_pStdOut);
                             }
                         }
                     }

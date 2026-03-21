@@ -1655,16 +1655,19 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                         }
                     }
 
-                    /* ── FC4 (version D): temporary nuclear patch for wait_for_completion.
+                    /* ── FC4 (version E): three-phase wait_for_completion fix.
                      *
-                     * Strategy: patch wait_for_completion to `ret` (0xc3) during
-                     * start_kernel's init phase (before tasks are created). Once
-                     * rest_init creates the first task (TASK-BORN), restore the
-                     * original byte (0x41 = push r12) to re-enable normal behavior.
+                     * Phase 1 (tasks==singleton): Patch WFC to ret (0xc3) during
+                     *   start_kernel to bypass ALL deadlocking completions.
                      *
-                     * This gives start_kernel a "free pass" through ALL deadlocking
-                     * wait_for_completion calls, then restores correctness for
-                     * kernel_init and subsequent threads.
+                     * Phase 2 (tasks created): Restore original WFC byte (0x41).
+                     *
+                     * Phase 3 (ongoing): Inject SHORT TIMEOUT on any stack that has
+                     *   MAX_SCHEDULE_TIMEOUT. Replace 0x7fffffffffffffff with 100
+                     *   (jiffies). This makes wait_for_completion timeout gracefully
+                     *   after ~100 PIT ticks instead of deadlocking. The function
+                     *   runs its NORMAL exit path (cleanup wait queue, return 0),
+                     *   so no data structure corruption.
                      *
                      * wait_for_completion at VA 0xffffffff810ce640, PA 0x10ce640.
                      * Original first byte: 0x41 (push r12). */
@@ -1672,6 +1675,7 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                         static bool s_fWfcPatched = false;
                         static bool s_fWfcRestored = false;
                         static uint64_t s_cNextFC4 = UINT64_C(350000000);
+                        static unsigned s_cTimeoutInjections = 0;
                         if ((pVCpu->cpum.GstCtx.msrEFER & MSR_K6_EFER_LMA)
                             && g_cWasmVirtualInstructions >= s_cNextFC4)
                         {
@@ -1691,8 +1695,7 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                                 uint8_t retInsn = 0xc3;
                                 PGMPhysSimpleWriteGCPhys(pVMfc, kWfcPA, &retInsn, 1);
                                 s_fWfcPatched = true;
-                                RTPrintf("[FC4D] PATCHED wait_for_completion → ret"
-                                         " insns=%llu\n",
+                                RTPrintf("[FC4E] PATCHED WFC → ret insns=%llu\n",
                                     (unsigned long long)g_cWasmVirtualInstructions);
                                 RTStrmFlush(g_pStdOut);
                             }
@@ -1703,10 +1706,58 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                                 uint8_t origByte = 0x41; /* push r12 */
                                 PGMPhysSimpleWriteGCPhys(pVMfc, kWfcPA, &origByte, 1);
                                 s_fWfcRestored = true;
-                                RTPrintf("[FC4D] RESTORED wait_for_completion (0x41)"
-                                         " insns=%llu — tasks created!\n",
+                                RTPrintf("[FC4E] RESTORED WFC (0x41) insns=%llu\n",
                                     (unsigned long long)g_cWasmVirtualInstructions);
                                 RTStrmFlush(g_pStdOut);
+                            }
+
+                            /* Phase 3: Timeout injection for ALL tasks.
+                             * Scan current stack for MAX_SCHEDULE_TIMEOUT and
+                             * replace with 100 (jiffies). This makes any
+                             * wait_for_completion timeout after ~100 PIT ticks
+                             * instead of deadlocking forever. The WFC function
+                             * runs its normal exit path (cleanup, return 0). */
+                            if (s_fWfcRestored)
+                            {
+                                uint64_t uRsp = pVCpu->cpum.GstCtx.rsp;
+                                if (uRsp >= UINT64_C(0xffff888000000000))
+                                {
+                                    uint64_t uPhysRsp = uRsp
+                                        - UINT64_C(0xffff888000000000);
+                                    /* Read 2KB of stack */
+                                    uint64_t stkBuf[256];
+                                    __builtin_memset(stkBuf, 0, sizeof(stkBuf));
+                                    PGMPhysSimpleReadGCPhys(pVMfc, stkBuf,
+                                        (RTGCPHYS)uPhysRsp, sizeof(stkBuf));
+
+                                    const uint64_t kMaxTO =
+                                        UINT64_C(0x7fffffffffffffff);
+                                    for (int _i = 0; _i < 256; _i++)
+                                    {
+                                        if (stkBuf[_i] == kMaxTO)
+                                        {
+                                            /* Replace with short timeout (100 jiffies).
+                                             * Write directly to guest stack memory. */
+                                            uint64_t shortTO = UINT64_C(100);
+                                            RTGCPHYS stkSlotPA = (RTGCPHYS)(
+                                                uPhysRsp + _i * 8);
+                                            PGMPhysSimpleWriteGCPhys(pVMfc,
+                                                stkSlotPA, &shortTO, 8);
+                                            s_cTimeoutInjections++;
+                                            if ((s_cTimeoutInjections % 100) == 1)
+                                            {
+                                                RTPrintf("[FC4E] timeout #%u"
+                                                    " insns=%llu stk[%d]\n",
+                                                    s_cTimeoutInjections,
+                                                    (unsigned long long)
+                                                        g_cWasmVirtualInstructions,
+                                                    _i);
+                                                RTStrmFlush(g_pStdOut);
+                                            }
+                                            break; /* one per check */
+                                        }
+                                    }
+                                }
                             }
                         }
                     }

@@ -1690,33 +1690,29 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                             PGMPhysSimpleReadGCPhys(pVMfc, &uTN,
                                 (RTGCPHYS)(kInitTaskPhys + UINT64_C(0x310)), 8);
 
-                            /* Phase 1: Patch WFC to "mov dword [rdi], 1; ret"
-                             * while no tasks exist. Sets done=1 on the completion
-                             * AND returns immediately. */
+                            /* Phase 1: Patch WFC to plain `ret` (0xc3)
+                             * while no tasks exist. Do NOT write to [rdi]
+                             * because RDI sometimes points to function pointer
+                             * tables, not completion structs (0x824b8280 crash). */
                             if (!s_fWfcPatched && uTN == kTasksSelf)
                             {
-                                /* c7 07 01 00 00 00 = mov dword [rdi], 1
-                                 * c3                = ret */
-                                uint8_t patch[7] = {0xc7, 0x07, 0x01, 0x00,
-                                                    0x00, 0x00, 0xc3};
-                                PGMPhysSimpleWriteGCPhys(pVMfc, kWfcPA, patch, 7);
+                                uint8_t retByte = 0xc3;
+                                PGMPhysSimpleWriteGCPhys(pVMfc, kWfcPA,
+                                    &retByte, 1);
                                 s_fWfcPatched = true;
-                                RTPrintf("[FC4F] PATCHED WFC → mov [rdi],1; ret"
-                                         " insns=%llu\n",
+                                RTPrintf("[FC4G] PATCHED WFC → ret insns=%llu\n",
                                     (unsigned long long)g_cWasmVirtualInstructions);
                                 RTStrmFlush(g_pStdOut);
                             }
 
-                            /* Phase 2: Restore original 7 bytes once tasks exist */
+                            /* Phase 2: Restore original byte once tasks exist */
                             if (s_fWfcPatched && !s_fWfcRestored && uTN != kTasksSelf)
                             {
-                                /* Original: 41 54 55 53 48 89 fb
-                                 * = push r12; push rbp; push rbx; mov rbx, rdi */
-                                uint8_t orig[7] = {0x41, 0x54, 0x55, 0x53,
-                                                   0x48, 0x89, 0xfb};
-                                PGMPhysSimpleWriteGCPhys(pVMfc, kWfcPA, orig, 7);
+                                uint8_t origByte = 0x41; /* push r12 */
+                                PGMPhysSimpleWriteGCPhys(pVMfc, kWfcPA,
+                                    &origByte, 1);
                                 s_fWfcRestored = true;
-                                RTPrintf("[FC4F] RESTORED WFC insns=%llu\n",
+                                RTPrintf("[FC4G] RESTORED WFC insns=%llu\n",
                                     (unsigned long long)g_cWasmVirtualInstructions);
                                 RTStrmFlush(g_pStdOut);
                             }
@@ -1751,7 +1747,7 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                                             s_cTimeoutInjections++;
                                             if ((s_cTimeoutInjections % 500) == 1)
                                             {
-                                                RTPrintf("[FC4F] timeout #%u"
+                                                RTPrintf("[FC4G] timeout #%u"
                                                     " insns=%llu stk[%d]\n",
                                                     s_cTimeoutInjections,
                                                     (unsigned long long)

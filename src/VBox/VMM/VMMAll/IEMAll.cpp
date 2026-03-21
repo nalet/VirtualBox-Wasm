@@ -1838,9 +1838,11 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                                                 uint64_t rbxVal = pVCpu->cpum.GstCtx.rbx;
                                                 RTPrintf("[FC4z] RBX=%#llx (completion?)\n",
                                                     (unsigned long long)rbxVal);
-                                                /* Try RBX as completion, but also
-                                                 * force-complete if done==0 even without
-                                                 * self-referencing list_head */
+                                                /* Force-complete RBX if it looks like
+                                                 * a completion with done==0.
+                                                 * ONLY accept completions with self-ref
+                                                 * list_head to avoid corrupting other
+                                                 * data structures (IRQ work lists etc). */
                                                 if (rbxVal >= UINT64_C(0xffff888000000000)
                                                     && rbxVal < UINT64_C(0xffff889000000000))
                                                 {
@@ -1862,16 +1864,27 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                                                             dn,
                                                             (unsigned long long)wn,
                                                             (unsigned long long)wp);
-                                                        if (dn == 0)
+                                                        /* Only force-complete if
+                                                         * list_head is self-referencing
+                                                         * (valid empty completion) */
+                                                        uint64_t expSelf = rbxVal + 16;
+                                                        if (dn == 0
+                                                            && wn == expSelf
+                                                            && wp == expSelf)
                                                         {
                                                             uint32_t one = 1;
                                                             PGMPhysSimpleWriteGCPhys(pVMfc,
                                                                 rbxPA, &one, 4);
                                                             s_cFC4fixes++;
-                                                            RTPrintf("[FC4z] #%u FORCE-FIXED"
+                                                            RTPrintf("[FC4z] #%u FIXED"
                                                                 " comp@RBX=%#llx\n",
                                                                 s_cFC4fixes,
                                                                 (unsigned long long)rbxVal);
+                                                        }
+                                                        else if (dn == 0)
+                                                        {
+                                                            RTPrintf("[FC4z] RBX skip:"
+                                                                " wq not self-ref\n");
                                                         }
                                                     }
                                                 }
@@ -1888,18 +1901,32 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                                                     {
                                                         uint32_t dn;
                                                         __builtin_memcpy(&dn, &cb[0], 4);
+                                                        uint64_t wn2, wp2;
+                                                        __builtin_memcpy(&wn2, &cb[16], 8);
+                                                        __builtin_memcpy(&wp2, &cb[24], 8);
+                                                        uint64_t expSelf2 = rbxVal + 16;
                                                         RTPrintf("[FC4z] RBX comp(kdata):"
-                                                                 " done=%u\n", dn);
-                                                        if (dn == 0)
+                                                                 " done=%u wq=%#llx/%#llx\n",
+                                                            dn,
+                                                            (unsigned long long)wn2,
+                                                            (unsigned long long)wp2);
+                                                        if (dn == 0
+                                                            && wn2 == expSelf2
+                                                            && wp2 == expSelf2)
                                                         {
                                                             uint32_t one = 1;
                                                             PGMPhysSimpleWriteGCPhys(pVMfc,
                                                                 rbxPA, &one, 4);
                                                             s_cFC4fixes++;
-                                                            RTPrintf("[FC4z] #%u FORCE-FIXED"
+                                                            RTPrintf("[FC4z] #%u FIXED"
                                                                 " comp@RBX=%#llx\n",
                                                                 s_cFC4fixes,
                                                                 (unsigned long long)rbxVal);
+                                                        }
+                                                        else if (dn == 0)
+                                                        {
+                                                            RTPrintf("[FC4z] RBX skip(kdata):"
+                                                                " wq not self-ref\n");
                                                         }
                                                     }
                                                 }

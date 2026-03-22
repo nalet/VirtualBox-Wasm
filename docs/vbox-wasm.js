@@ -12796,7 +12796,6 @@ function assignWasmImports() {
     /** @export */ memory: wasmMemory,
     /** @export */ proc_exit: _proc_exit,
     /** @export */ wasmCallFuncPtrTrampoline,
-    /** @export */ wasmFastBootDecompress,
     /** @export */ wasmJitExecBlock,
     /** @export */ wasmJitLog,
     /** @export */ wasmJitSetA20,

@@ -1155,7 +1155,7 @@ function execBlock(cpuP, ramB, maxInsn) {
         // code32_start
         writeDword(setupBase + 0x214, 0x100000);
         // Command line
-        const cmdline = 'pmedia=cd BOOT_IMAGE=/vmlinuz console=ttyS0,115200 earlyprintk=serial,ttyS0,115200 loglevel=7 idle=halt notsc clocksource=jiffies acpi=off nopti nospectre_v1 nospectre_v2 pci=lastbus=0 raid=noautodetect';
+        const cmdline = 'pmedia=cd BOOT_IMAGE=/vmlinuz quiet loglevel=7 idle=halt notsc clocksource=jiffies acpi=off nopti nospectre_v1 nospectre_v2 pci=lastbus=0 raid=noautodetect';
         for (let i = 0; i < cmdline.length; i++)
           mem8[ramBase + 0x99000 + i] = cmdline.charCodeAt(i);
         mem8[ramBase + 0x99000 + cmdline.length] = 0;
@@ -1239,7 +1239,7 @@ function execBlock(cpuP, ramB, maxInsn) {
           console.log('[JIT-BOOT] cmdline @0x' + cmdPtr.toString(16) + ' (' + cmdLen + ' bytes)');
         }
         // Append serial console options to command line
-        const serialOpts = ' console=ttyS0,115200 earlyprintk=serial,ttyS0,115200 loglevel=7 idle=halt notsc clocksource=jiffies acpi=off nopti nospectre_v1 nospectre_v2 pci=lastbus=0 raid=noautodetect';
+        const serialOpts = ' console=ttyS0,115200 earlyprintk=serial,ttyS0,115200 loglevel=4 idle=halt notsc clocksource=jiffies acpi=off nopti nospectre_v1 nospectre_v2 pci=lastbus=0 raid=noautodetect mitigations=off notrace lpj=100';
         for (let i = 0; i < serialOpts.length; i++)
           mem8[ramBase + 0x99000 + cmdLen + i] = serialOpts.charCodeAt(i);
         mem8[ramBase + 0x99000 + cmdLen + serialOpts.length] = 0;
@@ -4121,7 +4121,7 @@ function execBlock(cpuP, ramB, maxInsn) {
                 highRamPtr + (INITRD_GPA - 0x100000));
 
               // Write kernel command line at guest 0x20000
-              const cmdline = 'console=ttyS0,115200 earlyprintk=serial,ttyS0,115200 loglevel=7 lpj=5000 auto idle=halt notsc clocksource=jiffies acpi=off\0';
+              const cmdline = 'console=ttyS0,115200 earlyprintk=serial,ttyS0,115200 loglevel=4 lpj=5000 auto idle=halt notsc clocksource=jiffies acpi=off\0';
               for (let ci = 0; ci < cmdline.length; ci++)
                 mem8[ramBase + CMDLINE_GPA + ci] = cmdline.charCodeAt(ci);
 
@@ -4739,7 +4739,7 @@ function execBlockWrapped(cpuP, ramB, maxInsn, highRamP, highRamSz) {
           // Check if initrd was loaded (typically at ~0x1000000 for 32MB systems)
           // For now, we rely on the kernel finding it via initrd= cmdline or embedded
           // Command line
-          const cmdline = 'pmedia=cd BOOT_IMAGE=/vmlinuz console=ttyS0,115200 earlyprintk=serial,ttyS0,115200 loglevel=7 idle=halt notsc clocksource=jiffies acpi=off nopti nospectre_v1 nospectre_v2 pci=lastbus=0 raid=noautodetect';
+          const cmdline = 'pmedia=cd BOOT_IMAGE=/vmlinuz console=ttyS0,115200 earlyprintk=serial,ttyS0,115200 loglevel=4 idle=halt notsc clocksource=jiffies acpi=off nopti nospectre_v1 nospectre_v2 pci=lastbus=0 raid=noautodetect mitigations=off notrace lpj=100';
           for (let ci = 0; ci < cmdline.length; ci++)
             mem8[rb + 0x99000 + ci] = cmdline.charCodeAt(ci);
           mem8[rb + 0x99000 + cmdline.length] = 0;
@@ -5211,7 +5211,7 @@ function fastBootDecompress() {
       if (mf[rb + cmdPtr + i] === 0) { cmdLen = i; break; }
     }
     for (let i = 0; i < cmdLen; i++) mf[rb + 0x99000 + i] = mf[rb + cmdPtr + i];
-    const serialOpts = ' console=ttyS0,115200 earlyprintk=serial,ttyS0,115200 loglevel=7 idle=halt notsc clocksource=jiffies acpi=off nopti nospectre_v1 nospectre_v2 pci=lastbus=0 raid=noautodetect';
+    const serialOpts = ' console=ttyS0,115200 earlyprintk=serial,ttyS0,115200 loglevel=4 idle=halt notsc clocksource=jiffies acpi=off nopti nospectre_v1 nospectre_v2 pci=lastbus=0 raid=noautodetect mitigations=off notrace lpj=100';
     for (let i = 0; i < serialOpts.length; i++)
       mf[rb + 0x99000 + cmdLen + i] = serialOpts.charCodeAt(i);
     mf[rb + 0x99000 + cmdLen + serialOpts.length] = 0;

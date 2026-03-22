@@ -187,6 +187,9 @@ volatile uint16_t g_wasmFBBootCS = 0;       /* current CS during boot monitoring
 volatile uint8_t  g_wasmFBBootActive = 0;   /* 1 = boot monitoring active */
 volatile uint8_t  g_wasmFBTriggered = 0;    /* 1 = fast boot triggered */
 
+/** When true, skip heavy diagnostics (EARLY-RIP, TASK-WALK, etc.) for speed. */
+static bool g_fProductionMode = true;
+
 EM_JS(int, wasmJitExecBlock, (void *pCpumCtx, void *pvRAM, int maxInsn, void *pvHighRAM, int cbHighRAM, int fIrqPending), {
     if (typeof globalThis.VBoxJIT === 'undefined') return 0;
     if (!globalThis.VBoxJIT._initialized) {
@@ -1537,7 +1540,8 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                      * tasks list_head is at offset 0x310 → VA 0xffffffff824117d0 (phys 0x24117d0).
                      * task_struct field offsets: state=0x10, pid=0x488, comm=0x5c8.
                      * Fires at 300M, then every 500M instructions. */
-                    if ((pVCpu->cpum.GstCtx.msrEFER & MSR_K6_EFER_LMA)
+                    if (!g_fProductionMode
+                        && (pVCpu->cpum.GstCtx.msrEFER & MSR_K6_EFER_LMA)
                         && g_cWasmVirtualInstructions >= UINT64_C(300000000))
                     {
                         static uint64_t s_cNextTaskWalk = UINT64_C(300000000);
@@ -1745,7 +1749,7 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                                             PGMPhysSimpleWriteGCPhys(pVMfc,
                                                 stkSlotPA, &shortTO, 8);
                                             s_cTimeoutInjections++;
-                                            if ((s_cTimeoutInjections % 500) == 1)
+                                            if ((s_cTimeoutInjections % 5000) == 1)
                                             {
                                                 RTPrintf("[FC4G] timeout #%u"
                                                     " insns=%llu stk[%d]\n",
@@ -1765,7 +1769,7 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
 
                     /* ── INIT-SECTION-ENTRY: fire once when EIP first enters __init text (≥0xffffffff82000000).
                      * This tells us if rest_init / arch_call_rest_init / kernel_init_freeable runs. */
-                    if ((pVCpu->cpum.GstCtx.msrEFER & MSR_K6_EFER_LMA))
+                    if (!g_fProductionMode && (pVCpu->cpum.GstCtx.msrEFER & MSR_K6_EFER_LMA))
                     {
                         static bool s_fInitSectionSeen = false;
                         uint64_t uEipNow = pVCpu->cpum.GstCtx.rip;
@@ -1794,7 +1798,7 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                     /* ── EARLY-RIP: periodic EIP snapshot every 200M insns from 1.5B onward.
                      * Also fires at milestones before 1.5B.
                      * Shows what the kernel is doing; dumps call stack to find stuck loop. */
-                    {
+                    if (!g_fProductionMode) {
                         static uint64_t s_cNextEarlyRip = UINT64_C(100000000); /* 100M */
                         static int s_nEarlyRipShot = 0;
                         if ((pVCpu->cpum.GstCtx.msrEFER & MSR_K6_EFER_LMA)
@@ -1961,7 +1965,8 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                      * Fires every 50M instructions once in 64-bit kernel mode.
                      * Logs when RSP moves to a different 4K page, which indicates
                      * a context switch away from the idle thread stack. */
-                    if ((pVCpu->cpum.GstCtx.msrEFER & MSR_K6_EFER_LMA)
+                    if (!g_fProductionMode
+                        && (pVCpu->cpum.GstCtx.msrEFER & MSR_K6_EFER_LMA)
                         && g_cWasmVirtualInstructions >= UINT64_C(2000000000))
                     {
                         static uint64_t s_cNextRspCheck = UINT64_C(2000000000);
@@ -1987,7 +1992,7 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                     }
 
                     static uint64_t s_cNextDiag = UINT64_C(100000000); /* 100M insns: first fire */
-                    if (g_cWasmVirtualInstructions >= s_cNextDiag)
+                    if (!g_fProductionMode && g_cWasmVirtualInstructions >= s_cNextDiag)
                     {
                         s_cNextDiag = g_cWasmVirtualInstructions
                                     + (s_uDelayRip ? UINT64_C(1000000000) : UINT64_C(500000000));
@@ -3496,7 +3501,7 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                 rcStrict = iemExecDecodeAndInterpretTargetInstruction(pVCpu);
 #ifdef __EMSCRIPTEN__
                 /* Monitor kernel boot progress: log CS changes and milestones */
-                {
+                if (!g_fProductionMode) {
                     static bool     s_fBootActive = false;
                     static bool     s_fFB64Active = false;
                     static uint16_t s_uLastCS = 0;

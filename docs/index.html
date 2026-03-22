@@ -155,6 +155,16 @@
     <input type="file" id="file-input" accept=".img,.iso,.raw,.vdi,.vmdk,.qcow2">
   </div>
 
+    <div class="vm-settings" style="margin-top:0.5rem;display:flex;gap:1rem;align-items:center;font-size:0.85rem;color:#aaa;">
+      <label>RAM: <select id="ram-select" style="background:#1a1a2e;color:#fff;border:1px solid #444;padding:2px 6px;border-radius:3px;">
+        <option value="64">64 MB</option>
+        <option value="128" selected>128 MB</option>
+        <option value="256">256 MB</option>
+      </select></label>
+      <label><input type="checkbox" id="chk-logging" checked> Console Log</label>
+      <label><input type="checkbox" id="chk-serial" checked> Serial Output</label>
+    </div>
+
   <div id="download-progress" style="display:none; width:724px; margin-bottom:0.8rem;">
     <div style="display:flex; justify-content:space-between; font-size:0.8rem; color:#888; margin-bottom:4px;">
       <span id="dl-label">Downloading FossaPup64 9.5...</span>
@@ -214,10 +224,14 @@
     let useCustomImage = false;
 
     function appendLine(text, cls) {
+      if (!document.getElementById('chk-logging').checked) return;
       const span = document.createElement('span');
       span.className = cls || 'log';
       span.textContent = text + '\n';
       con.appendChild(span);
+      // Limit console to 500 lines to prevent memory bloat
+      while (con.childNodes.length > 500)
+        con.removeChild(con.firstChild);
       con.scrollTop = con.scrollHeight;
     }
 
@@ -620,7 +634,7 @@
         // Cache key includes a build version so new deploys invalidate old cache.
         // The JS file changes on each build, so use a hash of the JS URL's
         // last-modified or just use the script element's src with a version.
-        const wasmCacheKey = wasmUrl + '?v=dbg20260321h';
+        const wasmCacheKey = wasmUrl + '?v=opt20260322a';
         appendLine('Loading WebAssembly module...', 'info');
         const t0 = performance.now();
 
@@ -1128,7 +1142,7 @@
 
       try {
         const script = document.createElement('script');
-        script.src = 'vbox-wasm.js?v=20260321h';
+        script.src = 'vbox-wasm.js?v=20260322a';
         script.onerror = function() {
           appendLine('ERROR: Failed to load vbox-wasm.js.', 'err');
           statusEl.className = 'error';

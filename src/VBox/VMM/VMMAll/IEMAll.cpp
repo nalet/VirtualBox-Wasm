@@ -1722,40 +1722,15 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                                 RTStrmFlush(g_pStdOut);
                             }
 
-                            /* init_task address depends on kernel:
-                             * - FossaPup 5.4: PA 0x24114c0, tasks.self=0xffffffff824117d0
-                             * - TinyCore 6.12: PA 0x200ef80, tasks.self=0xffffffff8200f290 */
-                            static uint64_t s_kInitTaskPhys = 0;
-                            static uint64_t s_kTasksSelf = 0;
-                            if (!s_kInitTaskPhys)
-                            {
-                                if (s_kWfcPA == (RTGCPHYS)UINT64_C(0x19f18a0))
-                                {
-                                    s_kInitTaskPhys = UINT64_C(0x200ef80);
-                                    s_kTasksSelf = UINT64_C(0xffffffff8200f290);
-                                }
-                                else
-                                {
-                                    s_kInitTaskPhys = UINT64_C(0x24114c0);
-                                    s_kTasksSelf = UINT64_C(0xffffffff824117d0);
-                                }
-                            }
-                            const uint64_t kInitTaskPhys = s_kInitTaskPhys;
-                            const uint64_t kTasksSelf = s_kTasksSelf;
-
-                            uint64_t uTN = 0;
-                            PGMPhysSimpleReadGCPhys(pVMfc, &uTN,
-                                (RTGCPHYS)(kInitTaskPhys + UINT64_C(0x310)), 8);
-
-                            /* Phase 1: Patch WFC to plain `ret` (0xc3)
-                             * while no tasks exist. */
-                            if (!s_fWfcPatched && s_kWfcPA > 1
-                                && uTN == kTasksSelf)
+                            static uint64_t s_patchedAt = 0;
+                            /* Phase 1: Patch WFC to `ret` immediately. */
+                            if (!s_fWfcPatched && s_kWfcPA > 1)
                             {
                                 uint8_t retByte = 0xc3;
                                 PGMPhysSimpleWriteGCPhys(pVMfc, s_kWfcPA,
                                     &retByte, 1);
                                 s_fWfcPatched = true;
+                                s_patchedAt = g_cWasmVirtualInstructions;
                                 RTPrintf("[FC4G] PATCHED WFC @%#llx → ret"
                                          " insns=%llu\n",
                                     (unsigned long long)s_kWfcPA,
@@ -1763,9 +1738,9 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                                 RTStrmFlush(g_pStdOut);
                             }
 
-                            /* Phase 2: Restore original byte once tasks exist */
+                            /* Phase 2: Restore after 50M more instructions. */
                             if (s_fWfcPatched && !s_fWfcRestored
-                                && uTN != kTasksSelf)
+                                && g_cWasmVirtualInstructions >= s_patchedAt + UINT64_C(50000000))
                             {
                                 PGMPhysSimpleWriteGCPhys(pVMfc, s_kWfcPA,
                                     &s_origByte, 1);

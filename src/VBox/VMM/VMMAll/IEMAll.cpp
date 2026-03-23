@@ -1681,7 +1681,7 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                     {
                         static bool s_fWfcPatched = false;
                         static bool s_fWfcRestored = false;
-                        static uint64_t s_cNextFC4 = UINT64_C(350000000);
+                        static uint64_t s_cNextFC4 = UINT64_C(100000000);
                         static unsigned s_cTimeoutInjections = 0;
                         static RTGCPHYS s_kWfcPA = 0;
                         static uint8_t  s_origByte = 0;
@@ -1691,8 +1691,10 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                             s_cNextFC4 = g_cWasmVirtualInstructions + UINT64_C(1000000);
                             PVMCC pVMfc = pVCpu->CTX_SUFF(pVM);
 
-                            /* Auto-detect WFC address on first run */
-                            if (!s_kWfcPA)
+                            /* Auto-detect WFC address — only after kernel is
+                             * loaded (CR0.PG=1 means paging is on = 64-bit kernel) */
+                            if (!s_kWfcPA
+                                && (pVCpu->cpum.GstCtx.cr0 & UINT64_C(0x80000000)))
                             {
                                 uint8_t b1 = 0, b2 = 0;
                                 /* TinyCore 6.12: 0x55 (push rbp) at PA 0x19f18a0 */

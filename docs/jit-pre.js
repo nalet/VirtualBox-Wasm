@@ -164,16 +164,7 @@ function jsGunzip(input) {
 }
 
 function jsInflate(data, pos) {
-  let outBuf;
-  try {
-    outBuf = new Uint8Array(32 * 1024 * 1024); // 32MB initial
-  } catch(e) {
-    try {
-      outBuf = new Uint8Array(8 * 1024 * 1024); // fallback 8MB
-    } catch(e2) {
-      outBuf = new Uint8Array(2 * 1024 * 1024); // minimal 2MB
-    }
-  }
+  let outBuf = new Uint8Array(8 * 1024 * 1024); // 8MB initial (reduced from 32MB)
   let outPos = 0;
   let bitBuf = 0, bitCnt = 0;
 
@@ -184,19 +175,8 @@ function jsInflate(data, pos) {
 
   function grow(need) {
     while (outPos + need > outBuf.length) {
-      try {
-        const b = new Uint8Array(outBuf.length * 2); b.set(outBuf); outBuf = b;
-      } catch(e) {
-        // Can't grow — try 50% increase
-        try {
-          const b = new Uint8Array(outBuf.length + (outBuf.length >> 1)); b.set(outBuf); outBuf = b;
-        } catch(e2) {
-          console.error('[jsInflate] grow failed at ' + outBuf.length);
-          return false;
-        }
-      }
+      const b = new Uint8Array(outBuf.length * 2); b.set(outBuf); outBuf = b;
     }
-    return true;
   }
 
   function buildTree(lens, n) {

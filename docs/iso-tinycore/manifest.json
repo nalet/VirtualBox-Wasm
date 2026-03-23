@@ -1,0 +1,11 @@
+{
+  "name": "TinyCorePure64 16.2",
+  "version": "16.2",
+  "size": 41943040,
+  "parts": [
+    "tinycore.part00",
+    "tinycore.part01",
+    "tinycore.part02",
+    "tinycore.part03"
+  ]
+}

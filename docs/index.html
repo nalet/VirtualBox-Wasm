@@ -151,7 +151,7 @@
   <div class="controls">
     <button id="btn-start" class="btn btn-start" disabled>Start VM</button>
     <button id="btn-upload" class="btn btn-upload">Upload Custom ISO</button>
-    <span id="disk-info">Default: FossaPup64 9.5 (409 MB)</span>
+    <span id="disk-info">Default: TinyCorePure64 16.2 (40 MB)</span>
     <input type="file" id="file-input" accept=".img,.iso,.raw,.vdi,.vmdk,.qcow2">
   </div>
 
@@ -167,7 +167,7 @@
 
   <div id="download-progress" style="display:none; width:724px; margin-bottom:0.8rem;">
     <div style="display:flex; justify-content:space-between; font-size:0.8rem; color:#888; margin-bottom:4px;">
-      <span id="dl-label">Downloading FossaPup64 9.5...</span>
+      <span id="dl-label">Downloading TinyCorePure64 16.2...</span>
       <span id="dl-percent">0%</span>
     </div>
     <div style="height:6px; background:#333; border-radius:3px; overflow:hidden;">
@@ -180,7 +180,7 @@
     <div id="placeholder" class="placeholder">
       <div style="font-size:3rem;">&#128187;</div>
       <div>VGA display</div>
-      <div style="margin-top:0.5rem;font-size:0.8rem;">Click Start VM to boot FossaPup64, or upload a custom ISO</div>
+      <div style="margin-top:0.5rem;font-size:0.8rem;">Click Start VM to boot TinyCorePure64, or upload a custom ISO</div>
     </div>
   </div>
 
@@ -213,8 +213,8 @@
     const fileInput = document.getElementById('file-input');
     const placeholder = document.getElementById('placeholder');
 
-    const DEFAULT_ISO_MANIFEST = 'iso/manifest.json';
-    const DEFAULT_ISO_NAME = 'FossaPup64 9.5';
+    const DEFAULT_ISO_MANIFEST = 'iso-tinycore/manifest.json';
+    const DEFAULT_ISO_NAME = 'TinyCorePure64 16.2';
     const ISO_CACHE_DB = 'vbox-iso-cache';
     const ISO_CACHE_STORE = 'isos';
 
@@ -634,7 +634,7 @@
         // Cache key includes a build version so new deploys invalidate old cache.
         // The JS file changes on each build, so use a hash of the JS URL's
         // last-modified or just use the script element's src with a version.
-        const wasmCacheKey = wasmUrl + '?v=opt20260322a';
+        const wasmCacheKey = wasmUrl + '?v=tc20260323a';
         appendLine('Loading WebAssembly module...', 'info');
         const t0 = performance.now();
 
@@ -1142,7 +1142,7 @@
 
       try {
         const script = document.createElement('script');
-        script.src = 'vbox-wasm.js?v=20260322a';
+        script.src = 'vbox-wasm.js?v=20260323a';
         script.onerror = function() {
           appendLine('ERROR: Failed to load vbox-wasm.js.', 'err');
           statusEl.className = 'error';

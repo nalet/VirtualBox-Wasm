@@ -1155,7 +1155,7 @@ function execBlock(cpuP, ramB, maxInsn) {
         // code32_start
         writeDword(setupBase + 0x214, 0x100000);
         // Command line
-        const cmdline = 'pmedia=cd BOOT_IMAGE=/vmlinuz quiet loglevel=7 idle=halt notsc clocksource=jiffies acpi=off nopti nospectre_v1 nospectre_v2 pci=lastbus=0 raid=noautodetect';
+        const cmdline = 'loglevel=3 cde vga=791 console=ttyS0,115200 idle=halt notsc clocksource=jiffies acpi=off nopti nospectre_v1 nospectre_v2 pci=lastbus=0 mitigations=off notrace lpj=100';
         for (let i = 0; i < cmdline.length; i++)
           mem8[ramBase + 0x99000 + i] = cmdline.charCodeAt(i);
         mem8[ramBase + 0x99000 + cmdline.length] = 0;
@@ -1239,7 +1239,7 @@ function execBlock(cpuP, ramB, maxInsn) {
           console.log('[JIT-BOOT] cmdline @0x' + cmdPtr.toString(16) + ' (' + cmdLen + ' bytes)');
         }
         // Append serial console options to command line
-        const serialOpts = ' console=ttyS0,115200 earlyprintk=serial,ttyS0,115200 loglevel=4 idle=halt notsc clocksource=jiffies acpi=off nopti nospectre_v1 nospectre_v2 pci=lastbus=0 raid=noautodetect mitigations=off notrace lpj=100';
+        const serialOpts = ' console=ttyS0,115200 loglevel=3 cde idle=halt notsc clocksource=jiffies acpi=off nopti nospectre_v1 nospectre_v2 pci=lastbus=0 mitigations=off notrace lpj=100';
         for (let i = 0; i < serialOpts.length; i++)
           mem8[ramBase + 0x99000 + cmdLen + i] = serialOpts.charCodeAt(i);
         mem8[ramBase + 0x99000 + cmdLen + serialOpts.length] = 0;

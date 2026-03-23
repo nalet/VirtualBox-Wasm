@@ -823,6 +823,9 @@
         const ISO_SECTOR = 2048;
         var directBootVmlinuz = null, directBootInitrd = null;
         try {
+          console.log('[DIRECT-BOOT] ISO size=' + diskImageData.length +
+            ' vmlinuz@' + (VMLINUZ_SECTOR * ISO_SECTOR) + '+' + VMLINUZ_SIZE +
+            ' initrd@' + (INITRD_SECTOR * ISO_SECTOR) + '+' + INITRD_SIZE);
           directBootVmlinuz = diskImageData.slice(
             VMLINUZ_SECTOR * ISO_SECTOR,
             VMLINUZ_SECTOR * ISO_SECTOR + VMLINUZ_SIZE);
@@ -833,16 +836,19 @@
           const hdrMagic = String.fromCharCode(
             directBootVmlinuz[0x202], directBootVmlinuz[0x203],
             directBootVmlinuz[0x204], directBootVmlinuz[0x205]);
+          console.log('[DIRECT-BOOT] hdrMagic=' + hdrMagic +
+            ' vmlinuz.len=' + directBootVmlinuz.length +
+            ' initrd.len=' + directBootInitrd.length);
           if (hdrMagic === 'HdrS') {
             appendLine('Direct boot: extracted vmlinuz (' +
               (VMLINUZ_SIZE/1024/1024).toFixed(1) + ' MB) + initrd (' +
               (INITRD_SIZE/1024).toFixed(0) + ' KB)', 'info');
           } else {
-            appendLine('Direct boot: invalid kernel header, disabled', 'warn');
+            console.warn('[DIRECT-BOOT] invalid kernel header: ' + hdrMagic);
             directBootVmlinuz = null; directBootInitrd = null;
           }
         } catch(e) {
-          appendLine('Direct boot: extraction failed: ' + e.message, 'warn');
+          console.error('[DIRECT-BOOT] extraction failed: ' + e.message);
           directBootVmlinuz = null; directBootInitrd = null;
         }
 

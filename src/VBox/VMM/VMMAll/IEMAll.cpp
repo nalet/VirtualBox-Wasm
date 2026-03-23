@@ -1674,49 +1674,103 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                      *   Combined with done=1 from phase 1 for pre-existing completions,
                      *   this prevents cascading deadlocks during do_initcalls.
                      *
-                     * wait_for_completion at VA 0xffffffff810ce640, PA 0x10ce640.
-                     * Original 7 bytes: 41 54 55 53 48 89 fb */
+                     * wait_for_completion addresses (kernel-dependent):
+                     * - FossaPup64 5.4.53: VA 0x810ce640, PA 0x10ce640, orig 0x41
+                     * - TinyCorePure64 6.12.11: VA 0x819f18a0, PA 0x19f18a0, orig 0x55
+                     * Auto-detect by probing both addresses for known prologues. */
                     {
                         static bool s_fWfcPatched = false;
                         static bool s_fWfcRestored = false;
                         static uint64_t s_cNextFC4 = UINT64_C(350000000);
                         static unsigned s_cTimeoutInjections = 0;
+                        static RTGCPHYS s_kWfcPA = 0;
+                        static uint8_t  s_origByte = 0;
                         if ((pVCpu->cpum.GstCtx.msrEFER & MSR_K6_EFER_LMA)
                             && g_cWasmVirtualInstructions >= s_cNextFC4)
                         {
                             s_cNextFC4 = g_cWasmVirtualInstructions + UINT64_C(1000000);
                             PVMCC pVMfc = pVCpu->CTX_SUFF(pVM);
-                            const RTGCPHYS kWfcPA = (RTGCPHYS)UINT64_C(0x10ce640);
-                            const uint64_t kInitTaskPhys = UINT64_C(0x24114c0);
-                            const uint64_t kTasksSelf = UINT64_C(0xffffffff824117d0);
+
+                            /* Auto-detect WFC address on first run */
+                            if (!s_kWfcPA)
+                            {
+                                uint8_t b1 = 0, b2 = 0;
+                                /* TinyCore 6.12: 0x55 (push rbp) at PA 0x19f18a0 */
+                                PGMPhysSimpleReadGCPhys(pVMfc, &b1,
+                                    (RTGCPHYS)UINT64_C(0x19f18a0), 1);
+                                /* FossaPup 5.4: 0x41 (push r12) at PA 0x10ce640 */
+                                PGMPhysSimpleReadGCPhys(pVMfc, &b2,
+                                    (RTGCPHYS)UINT64_C(0x10ce640), 1);
+                                if (b1 == 0x55) {
+                                    s_kWfcPA = (RTGCPHYS)UINT64_C(0x19f18a0);
+                                    s_origByte = 0x55;
+                                    RTPrintf("[FC4G] Detected TinyCore 6.12 WFC"
+                                             " @PA 0x19f18a0\n");
+                                } else if (b2 == 0x41) {
+                                    s_kWfcPA = (RTGCPHYS)UINT64_C(0x10ce640);
+                                    s_origByte = 0x41;
+                                    RTPrintf("[FC4G] Detected FossaPup 5.4 WFC"
+                                             " @PA 0x10ce640\n");
+                                } else {
+                                    /* Unknown kernel — skip WFC patching */
+                                    s_kWfcPA = 1; /* non-zero = checked */
+                                    RTPrintf("[FC4G] Unknown kernel (b1=%#x b2=%#x)"
+                                             " — WFC patch disabled\n", b1, b2);
+                                }
+                                RTStrmFlush(g_pStdOut);
+                            }
+
+                            /* init_task address depends on kernel:
+                             * - FossaPup 5.4: PA 0x24114c0, tasks.self=0xffffffff824117d0
+                             * - TinyCore 6.12: PA 0x200ef80, tasks.self=0xffffffff8200f290 */
+                            static uint64_t s_kInitTaskPhys = 0;
+                            static uint64_t s_kTasksSelf = 0;
+                            if (!s_kInitTaskPhys)
+                            {
+                                if (s_kWfcPA == (RTGCPHYS)UINT64_C(0x19f18a0))
+                                {
+                                    s_kInitTaskPhys = UINT64_C(0x200ef80);
+                                    s_kTasksSelf = UINT64_C(0xffffffff8200f290);
+                                }
+                                else
+                                {
+                                    s_kInitTaskPhys = UINT64_C(0x24114c0);
+                                    s_kTasksSelf = UINT64_C(0xffffffff824117d0);
+                                }
+                            }
+                            const uint64_t kInitTaskPhys = s_kInitTaskPhys;
+                            const uint64_t kTasksSelf = s_kTasksSelf;
 
                             uint64_t uTN = 0;
                             PGMPhysSimpleReadGCPhys(pVMfc, &uTN,
                                 (RTGCPHYS)(kInitTaskPhys + UINT64_C(0x310)), 8);
 
                             /* Phase 1: Patch WFC to plain `ret` (0xc3)
-                             * while no tasks exist. Do NOT write to [rdi]
-                             * because RDI sometimes points to function pointer
-                             * tables, not completion structs (0x824b8280 crash). */
-                            if (!s_fWfcPatched && uTN == kTasksSelf)
+                             * while no tasks exist. */
+                            if (!s_fWfcPatched && s_kWfcPA > 1
+                                && uTN == kTasksSelf)
                             {
                                 uint8_t retByte = 0xc3;
-                                PGMPhysSimpleWriteGCPhys(pVMfc, kWfcPA,
+                                PGMPhysSimpleWriteGCPhys(pVMfc, s_kWfcPA,
                                     &retByte, 1);
                                 s_fWfcPatched = true;
-                                RTPrintf("[FC4G] PATCHED WFC → ret insns=%llu\n",
+                                RTPrintf("[FC4G] PATCHED WFC @%#llx → ret"
+                                         " insns=%llu\n",
+                                    (unsigned long long)s_kWfcPA,
                                     (unsigned long long)g_cWasmVirtualInstructions);
                                 RTStrmFlush(g_pStdOut);
                             }
 
                             /* Phase 2: Restore original byte once tasks exist */
-                            if (s_fWfcPatched && !s_fWfcRestored && uTN != kTasksSelf)
+                            if (s_fWfcPatched && !s_fWfcRestored
+                                && uTN != kTasksSelf)
                             {
-                                uint8_t origByte = 0x41; /* push r12 */
-                                PGMPhysSimpleWriteGCPhys(pVMfc, kWfcPA,
-                                    &origByte, 1);
+                                PGMPhysSimpleWriteGCPhys(pVMfc, s_kWfcPA,
+                                    &s_origByte, 1);
                                 s_fWfcRestored = true;
-                                RTPrintf("[FC4G] RESTORED WFC insns=%llu\n",
+                                RTPrintf("[FC4G] RESTORED WFC (0x%02x)"
+                                         " insns=%llu\n",
+                                    s_origByte,
                                     (unsigned long long)g_cWasmVirtualInstructions);
                                 RTStrmFlush(g_pStdOut);
                             }

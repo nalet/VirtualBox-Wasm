@@ -164,7 +164,16 @@ function jsGunzip(input) {
 }
 
 function jsInflate(data, pos) {
-  let outBuf = new Uint8Array(32 * 1024 * 1024); // 32MB initial
+  let outBuf;
+  try {
+    outBuf = new Uint8Array(32 * 1024 * 1024); // 32MB initial
+  } catch(e) {
+    try {
+      outBuf = new Uint8Array(8 * 1024 * 1024); // fallback 8MB
+    } catch(e2) {
+      outBuf = new Uint8Array(2 * 1024 * 1024); // minimal 2MB
+    }
+  }
   let outPos = 0;
   let bitBuf = 0, bitCnt = 0;
 
@@ -175,8 +184,19 @@ function jsInflate(data, pos) {
 
   function grow(need) {
     while (outPos + need > outBuf.length) {
-      const b = new Uint8Array(outBuf.length * 2); b.set(outBuf); outBuf = b;
+      try {
+        const b = new Uint8Array(outBuf.length * 2); b.set(outBuf); outBuf = b;
+      } catch(e) {
+        // Can't grow — try 50% increase
+        try {
+          const b = new Uint8Array(outBuf.length + (outBuf.length >> 1)); b.set(outBuf); outBuf = b;
+        } catch(e2) {
+          console.error('[jsInflate] grow failed at ' + outBuf.length);
+          return false;
+        }
+      }
     }
+    return true;
   }
 
   function buildTree(lens, n) {
@@ -1155,7 +1175,7 @@ function execBlock(cpuP, ramB, maxInsn) {
         // code32_start
         writeDword(setupBase + 0x214, 0x100000);
         // Command line
-        const cmdline = 'loglevel=7 cde vga=791 console=ttyS0,115200 earlyprintk=serial,ttyS0,115200 idle=halt notsc clocksource=jiffies acpi=off nopti nospectre_v1 nospectre_v2 pci=lastbus=0 mitigations=off notrace lpj=100';
+        const cmdline = 'loglevel=3 cde vga=791 console=ttyS0,115200 idle=halt notsc clocksource=jiffies acpi=off nopti nospectre_v1 nospectre_v2 pci=lastbus=0 mitigations=off notrace lpj=100';
         for (let i = 0; i < cmdline.length; i++)
           mem8[ramBase + 0x99000 + i] = cmdline.charCodeAt(i);
         mem8[ramBase + 0x99000 + cmdline.length] = 0;

@@ -188,7 +188,7 @@ volatile uint8_t  g_wasmFBBootActive = 0;   /* 1 = boot monitoring active */
 volatile uint8_t  g_wasmFBTriggered = 0;    /* 1 = fast boot triggered */
 
 /** When true, skip heavy diagnostics (EARLY-RIP, TASK-WALK, etc.) for speed. */
-static bool g_fProductionMode = true;
+static bool g_fProductionMode = false;
 
 EM_JS(int, wasmJitExecBlock, (void *pCpumCtx, void *pvRAM, int maxInsn, void *pvHighRAM, int cbHighRAM, int fIrqPending), {
     if (typeof globalThis.VBoxJIT === 'undefined') return 0;

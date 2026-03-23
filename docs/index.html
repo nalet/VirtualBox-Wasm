@@ -953,8 +953,8 @@
             const mem = new Uint8Array(wasmMemory.buffer);
             const bufLen = wasmMemory.buffer.byteLength;
 
-            // Stage kernel data at end of Wasm memory (last 16MB)
-            const STAGE_SIZE = 16 * 1024 * 1024;
+            // Stage kernel data at end of Wasm memory (last 32MB for larger initrds)
+            const STAGE_SIZE = 32 * 1024 * 1024;
             const stageBase = bufLen - STAGE_SIZE;
             if (stageBase < 0x2000000) return; // safety: need at least 32MB headroom
 

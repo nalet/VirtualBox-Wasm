@@ -735,7 +735,8 @@
       let received = 0;
 
       for (let i = 0; i < parts.length; i++) {
-        const partUrl = 'iso/' + parts[i];
+        const isoDir = DEFAULT_ISO_MANIFEST.substring(0, DEFAULT_ISO_MANIFEST.lastIndexOf('/') + 1);
+        const partUrl = isoDir + parts[i];
         appendLine('  Part ' + (i + 1) + '/' + parts.length + ': ' + parts[i], 'log');
 
         const resp = await fetch(partUrl);

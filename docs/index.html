@@ -817,8 +817,9 @@
         // ISOLINUX's 32-bit core gets corrupted during decompression under
         // IEM/Wasm, so we bypass it entirely by preloading the kernel and
         // initrd into guest RAM and jumping directly to the kernel setup code.
-        const VMLINUZ_SECTOR = 191639, VMLINUZ_SIZE = 6575264;
-        const INITRD_SECTOR = 141554, INITRD_SIZE = 1372644;
+        // TinyCorePure64 16.2: vmlinuz64 at LBA 10271, corepure64.gz at LBA 2041
+        const VMLINUZ_SECTOR = 10271, VMLINUZ_SIZE = 7160320;
+        const INITRD_SECTOR = 2041, INITRD_SIZE = 16854643;
         const ISO_SECTOR = 2048;
         var directBootVmlinuz = null, directBootInitrd = null;
         try {

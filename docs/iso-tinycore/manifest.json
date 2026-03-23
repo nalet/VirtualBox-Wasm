@@ -3,9 +3,6 @@
   "version": "16.2",
   "totalSize": 41943040,
   "parts": [
-    "tinycore.part00",
-    "tinycore.part01",
-    "tinycore.part02",
-    "tinycore.part03"
+    "TinyCorePure64.iso"
   ]
 }

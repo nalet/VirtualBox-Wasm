@@ -33,3 +33,4 @@ tools/linux.x86/
 tools/darwin.amd64/
 tools/win.amd64/
 tools/win.x86/
+.playwright-cli/

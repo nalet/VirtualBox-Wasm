@@ -634,7 +634,7 @@
         // Cache key includes a build version so new deploys invalidate old cache.
         // The JS file changes on each build, so use a hash of the JS URL's
         // last-modified or just use the script element's src with a version.
-        const wasmCacheKey = wasmUrl + '?v=tc20260324d';
+        const wasmCacheKey = wasmUrl + '?v=tc20260324e';
         appendLine('Loading WebAssembly module...', 'info');
         const t0 = performance.now();
 
@@ -1150,7 +1150,7 @@
 
       try {
         const script = document.createElement('script');
-        script.src = 'vbox-wasm.js?v=20260324d';
+        script.src = 'vbox-wasm.js?v=20260324e';
         script.onerror = function() {
           appendLine('ERROR: Failed to load vbox-wasm.js.', 'err');
           statusEl.className = 'error';

@@ -5446,7 +5446,7 @@ globalThis.VBoxJIT = (function() {
           // Trigger: 30K+ HLTs at BIOS halt_forever (f000:709c) + KRNL magic present.
           // BIOS POST is already complete by this point (ISOLINUX has run and failed).
           const hltSP = gr16(4);
-          if (hltCnt >= 3e4 && hltCS === 61440 && ip === 28828 && !execBlock._directBootDone) {
+          if (hltCnt >= 200 && hltCS === 61440 && !execBlock._directBootDone) {
             const md = ramBase + 1280;
             if (mem8[md + 12] === 75 && mem8[md + 13] === 82 && mem8[md + 14] === 78 && mem8[md + 15] === 76) {
               // "KRNL" magic

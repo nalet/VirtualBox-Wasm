@@ -4074,7 +4074,7 @@ function execBlock(cpuP, ramB, maxInsn) {
         // Trigger: 30K+ HLTs at BIOS halt_forever (f000:709c) + KRNL magic present.
         // BIOS POST is already complete by this point (ISOLINUX has run and failed).
         const hltSP = gr16(4);
-        if (hltCnt >= 30000 && hltCS === 0xF000 && ip === 0x709c &&
+        if (hltCnt >= 200 && hltCS === 0xF000 &&
             !execBlock._directBootDone) {
           const md = ramBase + 0x500;
           if (mem8[md+12] === 0x4B && mem8[md+13] === 0x52 &&

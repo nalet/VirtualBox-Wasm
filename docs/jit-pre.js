@@ -1257,7 +1257,7 @@ function execBlock(cpuP, ramB, maxInsn) {
           console.log('[JIT-BOOT] cmdline @0x' + cmdPtr.toString(16) + ' (' + cmdLen + ' bytes)');
         }
         // Append serial console options to command line
-        const serialOpts = ' console=ttyS0,115200 loglevel=3 cde idle=halt notsc clocksource=jiffies acpi=off nopti nospectre_v1 nospectre_v2 pci=lastbus=0 mitigations=off notrace lpj=100';
+        const serialOpts = ' console=ttyS0,115200 loglevel=3 idle=halt notsc clocksource=jiffies acpi=off nopti nospectre_v1 nospectre_v2 pci=lastbus=0 mitigations=off notrace lpj=100';
         for (let i = 0; i < serialOpts.length; i++)
           mem8[ramBase + 0x99000 + cmdLen + i] = serialOpts.charCodeAt(i);
         mem8[ramBase + 0x99000 + cmdLen + serialOpts.length] = 0;

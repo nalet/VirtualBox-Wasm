@@ -1681,7 +1681,7 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                     {
                         static bool s_fWfcPatched = false;
                         static bool s_fWfcRestored = false;
-                        static uint64_t s_cNextFC4 = UINT64_C(999999999999);
+                        static uint64_t s_cNextFC4 = UINT64_C(500000000);
                         static unsigned s_cTimeoutInjections = 0;
                         static RTGCPHYS s_kWfcPA = 0;
                         static uint8_t  s_origByte = 0;

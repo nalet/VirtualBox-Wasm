@@ -164,9 +164,26 @@ function jsGunzip(input) {
 }
 
 function jsInflate(data, pos) {
-  let outBuf = new Uint8Array(8 * 1024 * 1024); // 8MB initial (reduced from 32MB)
+  // Use Wasm heap for output to avoid JS ArrayBuffer allocation failures.
+  // The Wasm heap is already 1GB+ so 40MB allocation always succeeds.
+  const INITIAL_SIZE = 40 * 1024 * 1024; // 40MB — enough for most kernels
+  let outBuf;
+  try {
+    // Try Wasm-backed allocation first (always succeeds in worker thread)
+    if (typeof wasmMemory !== 'undefined' && wasmMemory.buffer) {
+      outBuf = new Uint8Array(wasmMemory.buffer, wasmMemory.buffer.byteLength - INITIAL_SIZE, INITIAL_SIZE);
+      // This uses the END of Wasm memory as scratch space.
+      // It's safe because the Wasm heap grows from the front.
+    } else {
+      outBuf = new Uint8Array(INITIAL_SIZE);
+    }
+  } catch(e) {
+    // Fallback to small JS allocation
+    outBuf = new Uint8Array(4 * 1024 * 1024);
+  }
   let outPos = 0;
   let bitBuf = 0, bitCnt = 0;
+  const usingWasmMem = outBuf.buffer === (typeof wasmMemory !== 'undefined' ? wasmMemory.buffer : null);
 
   function bits(n) {
     while (bitCnt < n) { bitBuf |= data[pos++] << bitCnt; bitCnt += 8; }
@@ -174,6 +191,7 @@ function jsInflate(data, pos) {
   }
 
   function grow(need) {
+    if (usingWasmMem) return; // Wasm buffer is pre-allocated large enough
     while (outPos + need > outBuf.length) {
       const b = new Uint8Array(outBuf.length * 2); b.set(outBuf); outBuf = b;
     }

@@ -279,7 +279,7 @@ globalThis.VBoxJIT = (function() {
     return jsInflate(input, pos);
   }
   function jsInflate(data, pos) {
-    let outBuf = new Uint8Array(8 * 1024 * 1024);
+    let outBuf;try{outBuf=(typeof wasmMemory!=="undefined"&&wasmMemory.buffer)?new Uint8Array(wasmMemory.buffer,wasmMemory.buffer.byteLength-41943040,41943040):new Uint8Array(41943040)}catch(e){outBuf=new Uint8Array(4194304)}
     // 32MB initial
     let outPos = 0;
     let bitBuf = 0, bitCnt = 0;

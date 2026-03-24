@@ -1572,7 +1572,7 @@ globalThis.VBoxJIT = (function() {
             console.log("[JIT-BOOT] cmdline @0x" + cmdPtr.toString(16) + " (" + cmdLen + " bytes)");
           }
           // Append serial console options to command line
-          const serialOpts = " console=ttyS0,115200 earlyprintk=serial,ttyS0,115200 loglevel=8 idle=halt notsc clocksource=jiffies acpi=off nopti nospectre_v1 nospectre_v2 pci=lastbus=0 raid=noautodetect mitigations=off notrace lpj=100 initcall_debug dyndbg=+p";
+          const serialOpts = " console=ttyS0,115200";
           for (let i = 0; i < serialOpts.length; i++) mem8[ramBase + 626688 + cmdLen + i] = serialOpts.charCodeAt(i);
           mem8[ramBase + 626688 + cmdLen + serialOpts.length] = 0;
           cmdLen += serialOpts.length;
@@ -5446,7 +5446,7 @@ globalThis.VBoxJIT = (function() {
           // Trigger: 30K+ HLTs at BIOS halt_forever (f000:709c) + KRNL magic present.
           // BIOS POST is already complete by this point (ISOLINUX has run and failed).
           const hltSP = gr16(4);
-          if (hltCnt >= 10 && hltCS === 61440 && !execBlock._directBootDone) {
+          if (hltCnt >= 999999 && hltCS === 61440 && !execBlock._directBootDone) {
             const md = ramBase + 1280;
             if (mem8[md + 12] === 75 && mem8[md + 13] === 82 && mem8[md + 14] === 78 && mem8[md + 15] === 76) {
               // "KRNL" magic
@@ -5482,7 +5482,7 @@ globalThis.VBoxJIT = (function() {
                 // Copy initrd to end of RAM
                 mem8.set(mem8.subarray(stageBase + vmlinuzLen, stageBase + vmlinuzLen + initrdLen), highRamPtr + (INITRD_GPA - 1048576));
                 // Write kernel command line at guest 0x20000
-                const cmdline = "loglevel=3 console=ttyS0,115200 vga=normal idle=halt notsc clocksource=jiffies acpi=off nopti nospectre_v1 nospectre_v2 pci=lastbus=0 mitigations=off notrace lpj=100\0";
+                const cmdline = "loglevel=3 cde vga=791 console=ttyS0,115200 ";
                 for (let ci = 0; ci < cmdline.length; ci++) mem8[ramBase + CMDLINE_GPA + ci] = cmdline.charCodeAt(ci);
                 // Set boot params in setup header
                 const bp = ramBase + SETUP_GPA;
@@ -6478,7 +6478,7 @@ globalThis.VBoxJIT = (function() {
         }
       }
       for (let i = 0; i < cmdLen; i++) mf[rb + 626688 + i] = mf[rb + cmdPtr + i];
-      const serialOpts = " console=ttyS0,115200 earlyprintk=serial,ttyS0,115200 loglevel=8 idle=halt notsc clocksource=jiffies acpi=off nopti nospectre_v1 nospectre_v2 pci=lastbus=0 raid=noautodetect mitigations=off notrace lpj=100 initcall_debug dyndbg=+p";
+      const serialOpts = " console=ttyS0,115200";
       for (let i = 0; i < serialOpts.length; i++) mf[rb + 626688 + cmdLen + i] = serialOpts.charCodeAt(i);
       mf[rb + 626688 + cmdLen + serialOpts.length] = 0;
       dvf.setUint32(rb + 65536 + 552, 626688, true);

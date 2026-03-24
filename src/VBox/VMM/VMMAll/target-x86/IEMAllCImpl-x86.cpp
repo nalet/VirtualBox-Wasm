@@ -7491,6 +7491,27 @@ IEM_CIMPL_DEF_3(iemCImpl_in, uint16_t, u16Port, uint8_t, cbReg, uint8_t, bImmAnd
     PVMCC const pVM      = pVCpu->CTX_SUFF(pVM);
     uint32_t    u32Value = 0;
     rcStrict = IOMIOPortRead(pVM, pVCpu, u16Port, &u32Value, cbReg);
+#ifdef __EMSCRIPTEN__
+    {
+        extern uint64_t g_cWasmVirtualInstructions; /* NOLINT */
+        uint64_t _c = g_cWasmVirtualInstructions;
+        if (_c >= UINT64_C(900000000) && _c <= UINT64_C(1500000000) && IOM_SUCCESS(rcStrict))
+        {
+            static uint8_t s_PortSeenIn[8192]; /* 64K-bit first-occurrence bitmask */
+            static bool s_fPortSeenInit = false;
+            if (!s_fPortSeenInit) { s_fPortSeenInit = true; __builtin_memset(s_PortSeenIn, 0, sizeof(s_PortSeenIn)); }
+            uint32_t _idx = u16Port >> 3;
+            uint8_t  _bit = (uint8_t)(1u << (u16Port & 7));
+            if (!(s_PortSeenIn[_idx] & _bit))
+            {
+                s_PortSeenIn[_idx] |= _bit;
+                RTPrintf("[IO-IN]  insns=%llu port=%#06x sz=%d val=%#x EIP=%#llx\n",
+                         (unsigned long long)_c, (unsigned)u16Port, (int)cbReg,
+                         (unsigned)u32Value, (unsigned long long)pVCpu->cpum.GstCtx.rip);
+            }
+        }
+    }
+#endif
     if (IOM_SUCCESS(rcStrict))
     {
         switch (cbReg)
@@ -7613,6 +7634,28 @@ IEM_CIMPL_DEF_3(iemCImpl_out, uint16_t, u16Port, uint8_t, cbReg, uint8_t, bImmAn
         case 4: u32Value = pVCpu->cpum.GstCtx.eax; break;
         default: AssertFailedReturn(VERR_IEM_IPE_4);
     }
+    /* --- I/O port trace window 900M-1500M insns --- */
+#ifdef __EMSCRIPTEN__
+    {
+        extern uint64_t g_cWasmVirtualInstructions; /* NOLINT */
+        uint64_t _c = g_cWasmVirtualInstructions;
+        if (_c >= UINT64_C(900000000) && _c <= UINT64_C(1500000000))
+        {
+            static uint8_t s_PortSeenOut[8192]; /* 64K-bit first-occurrence bitmask */
+            static bool s_fPortSeenOutInit = false;
+            if (!s_fPortSeenOutInit) { s_fPortSeenOutInit = true; __builtin_memset(s_PortSeenOut, 0, sizeof(s_PortSeenOut)); }
+            uint32_t _idx = u16Port >> 3;
+            uint8_t  _bit = (uint8_t)(1u << (u16Port & 7));
+            if (!(s_PortSeenOut[_idx] & _bit))
+            {
+                s_PortSeenOut[_idx] |= _bit;
+                RTPrintf("[IO-OUT] insns=%llu port=%#06x sz=%d val=%#x EIP=%#llx\n",
+                         (unsigned long long)_c, (unsigned)u16Port, (int)cbReg,
+                         (unsigned)u32Value, (unsigned long long)pVCpu->cpum.GstCtx.rip);
+            }
+        }
+    }
+#endif
     rcStrict = IOMIOPortWrite(pVM, pVCpu, u16Port, u32Value, cbReg);
 #ifdef __EMSCRIPTEN__
     /* Capture serial port output (COM1 data register at 0x3F8) for kernel console */

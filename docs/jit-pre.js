@@ -1153,7 +1153,7 @@ function execBlock(cpuP, ramB, maxInsn) {
         // Entry 1: 0x100000 - RAM_TOP usable
         writeDword(setupBase + e820Base + 20, 0x100000);
         writeDword(setupBase + e820Base + 24, 0);
-        const ramTop = highRamEnd ? (0x100000 + (highRamEnd - 0x100000)) : 0x2000000;
+        const ramTop = highRamEnd ? highRamEnd : 0x8000000; /* 128MB default */
         writeDword(setupBase + e820Base + 28, ramTop - 0x100000);
         writeDword(setupBase + e820Base + 32, 0);
         writeDword(setupBase + e820Base + 36, 1);
@@ -4733,7 +4733,7 @@ function execBlockWrapped(cpuP, ramB, maxInsn, highRamP, highRamSz) {
           // Entry 1: 0x100000 - highRamEnd usable
           writeDword(setupBase + e820Base + 20, 0x100000);
           writeDword(setupBase + e820Base + 24, 0);
-          const ramTop = highRamEnd ? highRamEnd : 0x2000000;
+          const ramTop = highRamEnd ? highRamEnd : 0x8000000; /* 128MB default */
           writeDword(setupBase + e820Base + 28, ramTop - 0x100000);
           writeDword(setupBase + e820Base + 32, 0);
           writeDword(setupBase + e820Base + 36, 1);

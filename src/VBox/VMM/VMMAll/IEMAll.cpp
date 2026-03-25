@@ -1707,10 +1707,75 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                                     RTPrintf("[FC4G] Detected FossaPup 5.4 WFC"
                                              " @PA 0x10ce640\n");
                                 } else {
-                                    /* Unknown kernel — skip WFC patching */
-                                    s_kWfcPA = 1; /* non-zero = checked */
-                                    RTPrintf("[FC4G] Unknown kernel (b1=%#x b2=%#x)"
-                                             " — WFC patch disabled\n", b1, b2);
+                                    /* Unknown kernel — scan for WFC prologue.
+                                     * Pattern: XX XX XX 48 89 fb e8 (pushes + mov rbx,rdi + call)
+                                     * where XX is push r12 (41 54) or push rbp (55) or push rbx (53).
+                                     * Scan kernel text (PA 0x1000000-0x2000000) at 16-byte boundaries. */
+                                    RTPrintf("[FC4G] Scanning for WFC prologue"
+                                             " (b1=%#x b2=%#x)...\n", b1, b2);
+                                    bool found = false;
+                                    for (RTGCPHYS scanPA = UINT64_C(0x1000000);
+                                         scanPA < UINT64_C(0x2000000) && !found;
+                                         scanPA += 16)
+                                    {
+                                        uint8_t buf[16];
+                                        PGMPhysSimpleReadGCPhys(pVMfc, buf, scanPA, 16);
+                                        /* Pattern 1: 41 54 55 53 48 89 fb e8 (FossaPup) */
+                                        /* Pattern 2: 55 53 48 89 fb e8 (TinyCore variant) */
+                                        /* Pattern 3: 41 54 53 48 89 fb e8 (another variant) */
+                                        for (int off = 0; off < 10; off++)
+                                        {
+                                            if (off + 7 > 16) break;
+                                            if (buf[off+0] == 0x48
+                                                && buf[off+1] == 0x89
+                                                && buf[off+2] == 0xfb
+                                                && buf[off+3] == 0xe8)
+                                            {
+                                                /* Found `mov rbx, rdi; call XXX` */
+                                                /* Check if preceded by push instructions */
+                                                int pushes = 0;
+                                                for (int p = off - 1; p >= 0; p--)
+                                                {
+                                                    if (buf[p] == 0x55 || buf[p] == 0x53
+                                                        || buf[p] == 0x54 || buf[p] == 0x56
+                                                        || buf[p] == 0x57)
+                                                        pushes++;
+                                                    else if (p >= 1 && buf[p-1] == 0x41
+                                                             && (buf[p] >= 0x50 && buf[p] <= 0x57))
+                                                    { pushes++; p--; }
+                                                    else break;
+                                                }
+                                                if (pushes >= 2)
+                                                {
+                                                    /* Find the start (first push) */
+                                                    int start = off;
+                                                    for (int p = off - 1; p >= 0; p--)
+                                                    {
+                                                        if (buf[p] == 0x55 || buf[p] == 0x53
+                                                            || buf[p] == 0x54 || buf[p] == 0x56
+                                                            || buf[p] == 0x57)
+                                                            start = p;
+                                                        else if (p >= 1 && buf[p-1] == 0x41
+                                                                 && (buf[p] >= 0x50 && buf[p] <= 0x57))
+                                                        { start = p - 1; p--; }
+                                                        else break;
+                                                    }
+                                                    s_kWfcPA = scanPA + start;
+                                                    s_origByte = buf[start];
+                                                    found = true;
+                                                    RTPrintf("[FC4G] FOUND WFC @PA %#llx"
+                                                             " (orig=0x%02x pushes=%d)\n",
+                                                        (unsigned long long)s_kWfcPA,
+                                                        s_origByte, pushes);
+                                                    break;
+                                                }
+                                            }
+                                        }
+                                    }
+                                    if (!found) {
+                                        s_kWfcPA = 1; /* checked but not found */
+                                        RTPrintf("[FC4G] WFC NOT FOUND — patch disabled\n");
+                                    }
                                 }
                                 RTStrmFlush(g_pStdOut);
                             }

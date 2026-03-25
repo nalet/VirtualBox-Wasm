@@ -1456,6 +1456,9 @@ globalThis.VBoxJIT = (function() {
           writeDword(setupBase + e820Base + 20, 1048576);
           writeDword(setupBase + e820Base + 24, 0);
           const ramTop = highRamEnd ? highRamEnd : 134217728;
+          console.log('[E820] highRamEnd=0x' + highRamEnd.toString(16) +
+            ' ramTop=0x' + ramTop.toString(16) +
+            ' e820_size=0x' + (ramTop - 1048576).toString(16));
           writeDword(setupBase + e820Base + 28, ramTop - 1048576);
           writeDword(setupBase + e820Base + 32, 0);
           writeDword(setupBase + e820Base + 36, 1);

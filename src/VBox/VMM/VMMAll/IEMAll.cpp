@@ -188,7 +188,7 @@ volatile uint8_t  g_wasmFBBootActive = 0;   /* 1 = boot monitoring active */
 volatile uint8_t  g_wasmFBTriggered = 0;    /* 1 = fast boot triggered */
 
 /** When true, skip heavy diagnostics (EARLY-RIP, TASK-WALK, etc.) for speed. */
-static bool g_fProductionMode = true;
+bool g_fProductionMode = true;
 
 EM_JS(int, wasmJitExecBlock, (void *pCpumCtx, void *pvRAM, int maxInsn, void *pvHighRAM, int cbHighRAM, int fIrqPending), {
     if (typeof globalThis.VBoxJIT === 'undefined') return 0;
@@ -1674,7 +1674,7 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                     {
                         static bool s_fWfcPatched = false;
                         static bool s_fWfcRestored = false;
-                        static uint64_t s_cNextFC4 = UINT64_C(500000000);
+                        static uint64_t s_cNextFC4 = UINT64_C(350000000);
                         static unsigned s_cTimeoutInjections = 0;
                         static RTGCPHYS s_kWfcPA = 0;
                         static uint8_t  s_origByte = 0;

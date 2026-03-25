@@ -2318,19 +2318,23 @@ iemRaiseXcptOrInt(PVMCPUCC    pVCpu,
 
 #ifdef __EMSCRIPTEN__
     /* Log exceptions in long mode for early kernel init debugging */
-    if ((pVCpu->cpum.GstCtx.msrEFER & MSR_K6_EFER_LMA)
-        && (fFlags & IEM_XCPT_FLAGS_T_CPU_XCPT))
     {
-        static uint32_t s_cXcptLog = 0;
-        if (s_cXcptLog < 50)
+        extern bool g_fProductionMode;
+        if (!g_fProductionMode
+            && (pVCpu->cpum.GstCtx.msrEFER & MSR_K6_EFER_LMA)
+            && (fFlags & IEM_XCPT_FLAGS_T_CPU_XCPT))
         {
-            extern volatile uint64_t g_cWasmVirtualInstructions;
-            RTPrintf("[XCPT] #%u vec=%#x err=%#x EIP=%#llx CR2=%#llx insns=%llu\n",
-                     ++s_cXcptLog, u8Vector, uErr,
-                     (unsigned long long)pVCpu->cpum.GstCtx.rip,
-                     (unsigned long long)uCr2,
-                     (unsigned long long)g_cWasmVirtualInstructions);
-            RTStrmFlush(g_pStdOut);
+            static uint32_t s_cXcptLog = 0;
+            if (s_cXcptLog < 50)
+            {
+                extern volatile uint64_t g_cWasmVirtualInstructions;
+                RTPrintf("[XCPT] #%u vec=%#x err=%#x EIP=%#llx CR2=%#llx insns=%llu\n",
+                         ++s_cXcptLog, u8Vector, uErr,
+                         (unsigned long long)pVCpu->cpum.GstCtx.rip,
+                         (unsigned long long)uCr2,
+                         (unsigned long long)g_cWasmVirtualInstructions);
+                RTStrmFlush(g_pStdOut);
+            }
         }
     }
 #endif

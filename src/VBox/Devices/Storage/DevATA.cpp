@@ -4067,8 +4067,13 @@ static void atapiR3ParseCmd(PPDMDEVINS pDevIns, PATACONTROLLER pCtl, PATADEVSTAT
     const uint8_t *pbPacket = s->abATAPICmd;
 
 #ifdef __EMSCRIPTEN__
-    RTPrintf("[ATAPI] LUN#%d CMD=%#04x DMA=%d\n", s->iLUN, pbPacket[0], s->fDMA);
-    RTStrmFlush(g_pStdOut);
+    {
+        extern bool g_fProductionMode;
+        if (!g_fProductionMode) {
+            RTPrintf("[ATAPI] LUN#%d CMD=%#04x DMA=%d\n", s->iLUN, pbPacket[0], s->fDMA);
+            RTStrmFlush(g_pStdOut);
+        }
+    }
 #endif
 
 # ifdef DEBUG
@@ -6075,9 +6080,14 @@ static DECLCALLBACK(int) ataR3AsyncIOThread(RTTHREAD hThreadSelf, void *pvUser)
 
         ATAAIO ReqType = pReq->ReqType;
 #ifdef __EMSCRIPTEN__
-        RTPrintf("[ATA-IO] Ctl#%u req=%d state=%d\n",
-                pCtl->iCtl, ReqType, pCtl->uAsyncIOState);
-        RTStrmFlush(g_pStdOut);
+        {
+            extern bool g_fProductionMode;
+            if (!g_fProductionMode) {
+                RTPrintf("[ATA-IO] Ctl#%u req=%d state=%d\n",
+                        pCtl->iCtl, ReqType, pCtl->uAsyncIOState);
+                RTStrmFlush(g_pStdOut);
+            }
+        }
 #endif
 
         Log(("PIIX3 ATA: Ctl#%d: async I/O thread processing request type=%d (state=%d)\n",

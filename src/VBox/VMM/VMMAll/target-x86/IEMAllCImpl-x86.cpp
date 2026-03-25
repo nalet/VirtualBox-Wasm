@@ -5201,13 +5201,18 @@ IEM_CIMPL_DEF_3(iemCImpl_lidt, uint8_t, iEffSeg, RTGCPTR, GCPtrEffSrc, IEMMODE, 
         {
 #ifdef __EMSCRIPTEN__
             /* Trace IDT setup — diagnose why IRQ-ENABLE check doesn't fire. */
-            extern uint64_t g_cWasmVirtualInstructions; /* NOLINT */
-            RTPrintf("[LIDT] insns=%llu base=%#llx limit=%u IF=%d\n",
-                     (unsigned long long)g_cWasmVirtualInstructions,
-                     (unsigned long long)GCPtrBase,
-                     (unsigned)cbLimit,
-                     !!(pVCpu->cpum.GstCtx.rflags.u & X86_EFL_IF));
-            RTStrmFlush(g_pStdOut);
+            {
+                extern bool g_fProductionMode;
+                if (!g_fProductionMode) {
+                    extern uint64_t g_cWasmVirtualInstructions; /* NOLINT */
+                    RTPrintf("[LIDT] insns=%llu base=%#llx limit=%u IF=%d\n",
+                             (unsigned long long)g_cWasmVirtualInstructions,
+                             (unsigned long long)GCPtrBase,
+                             (unsigned)cbLimit,
+                             !!(pVCpu->cpum.GstCtx.rflags.u & X86_EFL_IF));
+                    RTStrmFlush(g_pStdOut);
+                }
+            }
 #endif
             CPUMSetGuestIDTR(pVCpu, GCPtrBase, cbLimit);
             rcStrict = iemRegAddToRipAndFinishingClearingRF(pVCpu, cbInstr);
@@ -7654,6 +7659,19 @@ IEM_CIMPL_DEF_3(iemCImpl_out, uint16_t, u16Port, uint8_t, cbReg, uint8_t, bImmAn
                          (unsigned)u32Value, (unsigned long long)pVCpu->cpum.GstCtx.rip);
             }
         }
+    }
+#endif
+    /* ── Reboot intercept: block OUT 0xFE → port 0x64 (keyboard controller reset) ── */
+#ifdef __EMSCRIPTEN__
+    if (u16Port == 0x64 && cbReg == 1 && (u32Value & 0xFF) == 0xFE)
+    {
+        extern uint64_t g_cWasmVirtualInstructions;
+        RTPrintf("[REBOOT-BLOCKED] OUT 0xFE to port 0x64 blocked at insns=%llu EIP=%#llx\n",
+                 (unsigned long long)g_cWasmVirtualInstructions,
+                 (unsigned long long)pVCpu->cpum.GstCtx.rip);
+        RTStrmFlush(g_pStdOut);
+        /* Skip the I/O write — just advance RIP and return success */
+        return iemRegAddToRipAndFinishingClearingRF(pVCpu, cbInstr);
     }
 #endif
     rcStrict = IOMIOPortWrite(pVM, pVCpu, u16Port, u32Value, cbReg);

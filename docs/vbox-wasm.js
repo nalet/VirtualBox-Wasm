@@ -279,7 +279,7 @@ globalThis.VBoxJIT = (function() {
     return jsInflate(input, pos);
   }
   function jsInflate(data, pos) {
-    let outBuf;try{outBuf=(typeof wasmMemory!=="undefined"&&wasmMemory.buffer)?new Uint8Array(wasmMemory.buffer,wasmMemory.buffer.byteLength-41943040,41943040):new Uint8Array(41943040)}catch(e){outBuf=new Uint8Array(4194304)}
+    let outBuf = new Uint8Array(32 * 1024 * 1024);
     // 32MB initial
     let outPos = 0;
     let bitBuf = 0, bitCnt = 0;
@@ -1476,7 +1476,7 @@ globalThis.VBoxJIT = (function() {
           // code32_start
           writeDword(setupBase + 532, 1048576);
           // Command line
-          const cmdline = "pmedia=cd BOOT_IMAGE=/vmlinuz console=ttyS0,115200 earlyprintk=serial,ttyS0,115200 loglevel=3 cde vga=791 console=ttyS0,115200 idle=halt notsc clocksource=jiffies acpi=off nopti nospectre_v1 nospectre_v2 mitigations=off       ";
+          const cmdline = "pmedia=cd BOOT_IMAGE=/vmlinuz console=ttyS0,115200 earlyprintk=serial,ttyS0,115200 loglevel=8 idle=halt notsc clocksource=jiffies acpi=off nopti nospectre_v1 nospectre_v2 pci=lastbus=0 raid=noautodetect mitigations=off notrace";
           for (let i = 0; i < cmdline.length; i++) mem8[ramBase + 626688 + i] = cmdline.charCodeAt(i);
           mem8[ramBase + 626688 + cmdline.length] = 0;
           writeDword(setupBase + 552, 626688);
@@ -1572,7 +1572,7 @@ globalThis.VBoxJIT = (function() {
             console.log("[JIT-BOOT] cmdline @0x" + cmdPtr.toString(16) + " (" + cmdLen + " bytes)");
           }
           // Append serial console options to command line
-          const serialOpts = " console=ttyS0,115200";
+          const serialOpts = " console=ttyS0,115200 earlyprintk=serial,ttyS0,115200 loglevel=8 idle=halt notsc clocksource=jiffies acpi=off nopti nospectre_v1 nospectre_v2 pci=lastbus=0 raid=noautodetect mitigations=off notrace lpj=100 initcall_debug dyndbg=+p";
           for (let i = 0; i < serialOpts.length; i++) mem8[ramBase + 626688 + cmdLen + i] = serialOpts.charCodeAt(i);
           mem8[ramBase + 626688 + cmdLen + serialOpts.length] = 0;
           cmdLen += serialOpts.length;
@@ -5446,7 +5446,7 @@ globalThis.VBoxJIT = (function() {
           // Trigger: 30K+ HLTs at BIOS halt_forever (f000:709c) + KRNL magic present.
           // BIOS POST is already complete by this point (ISOLINUX has run and failed).
           const hltSP = gr16(4);
-          if (hltCnt >= 999999 && hltCS === 61440 && !execBlock._directBootDone) {
+          if (hltCnt >= 3e4 && hltCS === 61440 && ip === 28828 && !execBlock._directBootDone) {
             const md = ramBase + 1280;
             if (mem8[md + 12] === 75 && mem8[md + 13] === 82 && mem8[md + 14] === 78 && mem8[md + 15] === 76) {
               // "KRNL" magic
@@ -5482,7 +5482,7 @@ globalThis.VBoxJIT = (function() {
                 // Copy initrd to end of RAM
                 mem8.set(mem8.subarray(stageBase + vmlinuzLen, stageBase + vmlinuzLen + initrdLen), highRamPtr + (INITRD_GPA - 1048576));
                 // Write kernel command line at guest 0x20000
-                const cmdline = "loglevel=3 cde vga=791 console=ttyS0,115200 ";
+                const cmdline = "console=ttyS0,115200 earlyprintk=serial,ttyS0,115200 loglevel=8 lpj=5000 auto idle=halt notsc clocksource=jiffies acpi=off\0";
                 for (let ci = 0; ci < cmdline.length; ci++) mem8[ramBase + CMDLINE_GPA + ci] = cmdline.charCodeAt(ci);
                 // Set boot params in setup header
                 const bp = ramBase + SETUP_GPA;
@@ -6045,7 +6045,7 @@ globalThis.VBoxJIT = (function() {
             // Check if initrd was loaded (typically at ~0x1000000 for 32MB systems)
             // For now, we rely on the kernel finding it via initrd= cmdline or embedded
             // Command line
-            const cmdline = "pmedia=cd BOOT_IMAGE=/vmlinuz console=ttyS0,115200 earlyprintk=serial,ttyS0,115200 loglevel=3 cde vga=791 console=ttyS0,115200 idle=halt notsc clocksource=jiffies acpi=off nopti nospectre_v1 nospectre_v2 mitigations=off       ";
+            const cmdline = "pmedia=cd BOOT_IMAGE=/vmlinuz console=ttyS0,115200 earlyprintk=serial,ttyS0,115200 loglevel=8 idle=halt notsc clocksource=jiffies acpi=off nopti nospectre_v1 nospectre_v2 pci=lastbus=0 raid=noautodetect mitigations=off notrace";
             for (let ci = 0; ci < cmdline.length; ci++) mem8[rb + 626688 + ci] = cmdline.charCodeAt(ci);
             mem8[rb + 626688 + cmdline.length] = 0;
             writeDword(setupBase + 552, 626688);
@@ -6478,7 +6478,7 @@ globalThis.VBoxJIT = (function() {
         }
       }
       for (let i = 0; i < cmdLen; i++) mf[rb + 626688 + i] = mf[rb + cmdPtr + i];
-      const serialOpts = " console=ttyS0,115200";
+      const serialOpts = " console=ttyS0,115200 earlyprintk=serial,ttyS0,115200 loglevel=8 idle=halt notsc clocksource=jiffies acpi=off nopti nospectre_v1 nospectre_v2 pci=lastbus=0 raid=noautodetect mitigations=off notrace lpj=100 initcall_debug dyndbg=+p";
       for (let i = 0; i < serialOpts.length; i++) mf[rb + 626688 + cmdLen + i] = serialOpts.charCodeAt(i);
       mf[rb + 626688 + cmdLen + serialOpts.length] = 0;
       dvf.setUint32(rb + 65536 + 552, 626688, true);
@@ -6772,12 +6772,6 @@ if (ENVIRONMENT_IS_PTHREAD) {
 // ENVIRONMENT_IS_PTHREAD
 // end include: runtime_pthread.js
 // Memory management
-var /** @type {!Int8Array} */ HEAP8, /** @type {!Uint8Array} */ HEAPU8, /** @type {!Int16Array} */ HEAP16, /** @type {!Uint16Array} */ HEAPU16, /** @type {!Int32Array} */ HEAP32, /** @type {!Uint32Array} */ HEAPU32, /** @type {!Float32Array} */ HEAPF32, /** @type {!Float64Array} */ HEAPF64;
-
-// BigInt64Array type is not correctly defined in closure
-var /** not-@type {!BigInt64Array} */ HEAP64, /* BigUint64Array type is not correctly defined in closure
-/** not-@type {!BigUint64Array} */ HEAPU64;
-
 var runtimeInitialized = false;
 
 function updateMemoryViews() {
@@ -7021,6 +7015,26 @@ class ExitStatus {
     this.status = status;
   }
 }
+
+/** @type {!Int16Array} */ var HEAP16;
+
+/** @type {!Int32Array} */ var HEAP32;
+
+/** not-@type {!BigInt64Array} */ var HEAP64;
+
+/** @type {!Int8Array} */ var HEAP8;
+
+/** @type {!Float32Array} */ var HEAPF32;
+
+/** @type {!Float64Array} */ var HEAPF64;
+
+/** @type {!Uint16Array} */ var HEAPU16;
+
+/** @type {!Uint32Array} */ var HEAPU32;
+
+/** not-@type {!BigUint64Array} */ var HEAPU64;
+
+/** @type {!Uint8Array} */ var HEAPU8;
 
 var terminateWorker = worker => {
   worker.terminate();
@@ -7346,8 +7360,8 @@ var onPostRuns = [];
 var addOnPostRun = cb => onPostRuns.push(cb);
 
 function establishStackSpace(pthread_ptr) {
-  var stackHigh = Number((growMemViews(), HEAPU64)[(((pthread_ptr) + (88)) / 8)]);
-  var stackSize = Number((growMemViews(), HEAPU64)[(((pthread_ptr) + (96)) / 8)]);
+  var stackHigh = Number((growMemViews(), HEAPU64)[(((pthread_ptr) + (80)) / 8)]);
+  var stackSize = Number((growMemViews(), HEAPU64)[(((pthread_ptr) + (88)) / 8)]);
   var stackLow = stackHigh - stackSize;
   // Set stack limits used by `emscripten/stack.h` function.  These limits are
   // cached in wasm-side globals to make checks as fast as possible.
@@ -11943,7 +11957,7 @@ function __emscripten_thread_mailbox_await(pthread_ptr) {
     // TODO: How to make this work with wasm64?
     var wait = Atomics.waitAsync((growMemViews(), HEAP32), ((pthread_ptr) / 4), pthread_ptr);
     wait.value.then(checkMailbox);
-    var waitingAsync = pthread_ptr + 228;
+    var waitingAsync = pthread_ptr + 212;
     Atomics.store((growMemViews(), HEAP32), ((waitingAsync) / 4), 1);
   }
 }

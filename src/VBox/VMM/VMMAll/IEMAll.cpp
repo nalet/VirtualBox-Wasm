@@ -1491,16 +1491,9 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                                 {
                                     uint64_t jiffies_advance = remaining * 2 * 100 / 1000000;
                                     if (jiffies_advance > 100) jiffies_advance = 100; /* cap */
-                                    if (jiffies_advance > 0)
-                                    {
-                                        PVMCC pVMJ = pVCpu->CTX_SUFF(pVM);
-                                        uint64_t uJiffies = 0;
-                                        PGMPhysRead(pVMJ, UINT64_C(0x02406980), &uJiffies,
-                                                    sizeof(uJiffies), PGMACCESSORIGIN_DEBUGGER);
-                                        uJiffies += jiffies_advance;
-                                        PGMPhysWrite(pVMJ, UINT64_C(0x02406980), &uJiffies,
-                                                     sizeof(uJiffies), PGMACCESSORIGIN_DEBUGGER);
-                                    }
+                                    /* Only write jiffies for known kernels
+                                     * (0x02406980 is FossaPup64-specific) */
+                                    (void)jiffies_advance;
                                 }
                                 pVCpu->cpum.GstCtx.rax = 1;
                             }
@@ -2078,15 +2071,8 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                                      * (500M insns), force-advance it to unblock spin-wait loops. */
                                     if (s_cJiffiesStuck >= 5)
                                     {
-                                        uint64_t uNewJiffies = uJiffies + 1;
-                                        VBOXSTRICTRC rcW = PGMPhysWrite(pVMJ, UINT64_C(0x02406980),
-                                            &uNewJiffies, sizeof(uNewJiffies), PGMACCESSORIGIN_DEBUGGER);
-                                        RTPrintf("[JIFFIES-FIX] #%u stuck %u intervals, forcing 0x%llx->0x%llx rc=%d\n",
-                                            s_cJiffiesChecks, s_cJiffiesStuck,
-                                            (unsigned long long)uJiffies,
-                                            (unsigned long long)uNewJiffies,
-                                            (int)VBOXSTRICTRC_VAL(rcW));
-                                        s_uPrevJiffies = uNewJiffies;
+                                        /* DISABLED: 0x02406980 is FossaPup64-specific.
+                                         * Writing here corrupts other kernels. */
                                         s_cJiffiesStuck = 0;
                                     }
                                     else
@@ -2913,40 +2899,11 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                             }
 
                             /* General-purpose kernel-spin accelerator:
-                             * When the kernel is stuck in a non-delay, non-CRC loop in kernel
-                             * text range (ffffffff81xxxxxx) with IF=1, advance jiffies_64
-                             * directly in guest memory.  The timer (now firing every ~25k
-                             * actual insns) will deliver IRQs; this just speeds up jiffies
-                             * advancement for loops that wait for jiffies to change. */
-                            if (   s_cSameRip >= 3
-                                && curRip >= UINT64_C(0xffffffff81000000)
-                                && curRip <  UINT64_C(0xffffffff82000000)
-                                && (pVCpu->cpum.GstCtx.eflags.u & X86_EFL_IF)
-                                && s_uDelayRip == 0   /* delay accel not yet active */
-                                && curRip != s_uLastAccelRip)
-                            {
-                                static uint64_t s_uLastKernSpinRip = 0;
-                                static uint32_t s_cKernSpinBoosts  = 0;
-                                /* Advance jiffies on first detection and every 10 intervals */
-                                if (curRip != s_uLastKernSpinRip || (s_cSameRip % 10) == 3)
-                                {
-                                    s_uLastKernSpinRip = curRip;
-                                    s_cKernSpinBoosts++;
-                                    /* Advance jiffies by 10 (≈10ms) to unblock spin-wait loops */
-                                    PVMCC pVMJ2 = pVCpu->CTX_SUFF(pVM);
-                                    uint64_t uJ2 = 0;
-                                    PGMPhysRead(pVMJ2, UINT64_C(0x02406980), &uJ2,
-                                                sizeof(uJ2), PGMACCESSORIGIN_DEBUGGER);
-                                    uJ2 += 10;
-                                    PGMPhysWrite(pVMJ2, UINT64_C(0x02406980), &uJ2,
-                                                 sizeof(uJ2), PGMACCESSORIGIN_DEBUGGER);
-                                    RTPrintf("[KERN-SPIN] #%u: RIP=%#llx IF=1 insns=%llu jiffies+=10\n",
-                                        s_cKernSpinBoosts,
-                                        (unsigned long long)curRip,
-                                        (unsigned long long)pVCpu->iem.s.cInstructions);
-                                    RTStrmFlush(g_pStdOut);
-                                }
-                            }
+                             * DISABLED — the hardcoded jiffies PA (0x02406980) is
+                             * specific to FossaPup64 5.4.53.  Writing to this address
+                             * in other kernels (e.g., TinyCore 5.15) corrupts random
+                             * kernel data and causes reboots.  Needs kernel-version-
+                             * aware jiffies detection to be re-enabled safely. */
 
                             /* FORCE-IF for IF=0 stuck loops: only enable IF when the kernel
                              * has been stuck at the SAME instruction for ≥5 intervals
@@ -3325,8 +3282,8 @@ VMM_INT_DECL(VBOXSTRICTRC) IEMExecLots(PVMCPUCC pVCpu, uint32_t cMaxInstructions
                                         szCmdLine[255] = '\0';
                                         size_t cchExisting = strlen(szCmdLine);
                                         RTPrintf("[FAST-BOOT-64] existing cmdline: '%s'\n", szCmdLine);
-                                        /* Append mitigation disablers */
-                                        static const char szExtra[] = " mitigations=off notrace";
+                                        /* Append mitigation disablers + debug */
+                                        static const char szExtra[] = " mitigations=off console=ttyS0,115200 earlyprintk=serial,ttyS0,115200 loglevel=8";
                                         if (cchExisting + sizeof(szExtra) < sizeof(szCmdLine))
                                             memcpy(szCmdLine + cchExisting, szExtra, sizeof(szExtra));
                                         RTPrintf("[FAST-BOOT-64] new cmdline: '%s'\n", szCmdLine);

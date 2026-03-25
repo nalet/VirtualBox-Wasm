@@ -1476,7 +1476,7 @@ globalThis.VBoxJIT = (function() {
           // code32_start
           writeDword(setupBase + 532, 1048576);
           // Command line
-          const cmdline = "pmedia=cd BOOT_IMAGE=/vmlinuz console=ttyS0,115200 earlyprintk=serial,ttyS0,115200 loglevel=8 idle=halt notsc clocksource=jiffies acpi=off nopti nospectre_v1 nospectre_v2 pci=lastbus=0 raid=noautodetect mitigations=off notrace";
+          const cmdline = "pmedia=cd BOOT_IMAGE=/vmlinuz console=ttyS0,115200 earlyprintk=serial,ttyS0,115200 loglevel=3 cde vga=791 console=ttyS0,115200 idle=halt notsc clocksource=jiffies acpi=off nopti nospectre_v1 nospectre_v2 mitigations=off       ";
           for (let i = 0; i < cmdline.length; i++) mem8[ramBase + 626688 + i] = cmdline.charCodeAt(i);
           mem8[ramBase + 626688 + cmdline.length] = 0;
           writeDword(setupBase + 552, 626688);
@@ -6045,7 +6045,7 @@ globalThis.VBoxJIT = (function() {
             // Check if initrd was loaded (typically at ~0x1000000 for 32MB systems)
             // For now, we rely on the kernel finding it via initrd= cmdline or embedded
             // Command line
-            const cmdline = "pmedia=cd BOOT_IMAGE=/vmlinuz console=ttyS0,115200 earlyprintk=serial,ttyS0,115200 loglevel=8 idle=halt notsc clocksource=jiffies acpi=off nopti nospectre_v1 nospectre_v2 pci=lastbus=0 raid=noautodetect mitigations=off notrace";
+            const cmdline = "pmedia=cd BOOT_IMAGE=/vmlinuz console=ttyS0,115200 earlyprintk=serial,ttyS0,115200 loglevel=3 cde vga=791 console=ttyS0,115200 idle=halt notsc clocksource=jiffies acpi=off nopti nospectre_v1 nospectre_v2 mitigations=off       ";
             for (let ci = 0; ci < cmdline.length; ci++) mem8[rb + 626688 + ci] = cmdline.charCodeAt(ci);
             mem8[rb + 626688 + cmdline.length] = 0;
             writeDword(setupBase + 552, 626688);

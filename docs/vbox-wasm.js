@@ -1455,7 +1455,7 @@ globalThis.VBoxJIT = (function() {
           // Entry 1: 0x100000 - RAM_TOP usable
           writeDword(setupBase + e820Base + 20, 1048576);
           writeDword(setupBase + e820Base + 24, 0);
-          const ramTop = highRamEnd ? (1048576 + (highRamEnd - 1048576)) : 33554432;
+          const ramTop = highRamEnd ? highRamEnd : 134217728;
           writeDword(setupBase + e820Base + 28, ramTop - 1048576);
           writeDword(setupBase + e820Base + 32, 0);
           writeDword(setupBase + e820Base + 36, 1);
@@ -6017,7 +6017,7 @@ globalThis.VBoxJIT = (function() {
             // Entry 1: 0x100000 - highRamEnd usable
             writeDword(setupBase + e820Base + 20, 1048576);
             writeDword(setupBase + e820Base + 24, 0);
-            const ramTop = highRamEnd ? highRamEnd : 33554432;
+            const ramTop = highRamEnd ? highRamEnd : 134217728;
             writeDword(setupBase + e820Base + 28, ramTop - 1048576);
             writeDword(setupBase + e820Base + 32, 0);
             writeDword(setupBase + e820Base + 36, 1);

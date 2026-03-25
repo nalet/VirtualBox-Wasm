@@ -1446,20 +1446,36 @@ globalThis.VBoxJIT = (function() {
           // e820 memory map: entries at offset 0xD00 (boot_params.e820_table)
           // Entry format: 20 bytes each (addr:8, size:8, type:4)
           const e820Base = 3328;
-          // Entry 0: 0x0 - 0x9FC00 usable
+          const ramTop = highRamEnd ? highRamEnd : 134217728; /* 128MB */
+          const ramUsable = ramTop - 65536; /* leave 64K at top reserved */
+          // Entry 0: 0x0 - 0x9FC00 usable (conventional memory)
           writeDword(setupBase + e820Base + 0, 0);
           writeDword(setupBase + e820Base + 4, 0);
-          writeDword(setupBase + e820Base + 8, 654336);
+          writeDword(setupBase + e820Base + 8, 654336); /* 0x9FC00 */
           writeDword(setupBase + e820Base + 12, 0);
-          writeDword(setupBase + e820Base + 16, 1);
-          // Entry 1: 0x100000 - RAM_TOP usable
-          writeDword(setupBase + e820Base + 20, 1048576);
+          writeDword(setupBase + e820Base + 16, 1); /* usable */
+          // Entry 1: 0x9FC00 - 0xA0000 reserved (EBDA)
+          writeDword(setupBase + e820Base + 20, 654336);
           writeDword(setupBase + e820Base + 24, 0);
-          const ramTop = highRamEnd ? (1048576 + (highRamEnd - 1048576)) : 33554432;
-          writeDword(setupBase + e820Base + 28, ramTop - 1048576);
+          writeDword(setupBase + e820Base + 28, 1024); /* 0x400 */
           writeDword(setupBase + e820Base + 32, 0);
-          writeDword(setupBase + e820Base + 36, 1);
-          mem8[setupBase + 488] = 2;
+          writeDword(setupBase + e820Base + 36, 2); /* reserved */
+          // Entry 2: 0xF0000 - 0x100000 reserved (BIOS)
+          writeDword(setupBase + e820Base + 40, 983040); /* 0xF0000 */
+          writeDword(setupBase + e820Base + 44, 0);
+          writeDword(setupBase + e820Base + 48, 65536); /* 0x10000 */
+          writeDword(setupBase + e820Base + 52, 0);
+          writeDword(setupBase + e820Base + 56, 2); /* reserved */
+          // Entry 3: 0x100000 - ramUsable usable (main memory)
+          writeDword(setupBase + e820Base + 60, 1048576); /* 0x100000 */
+          writeDword(setupBase + e820Base + 64, 0);
+          writeDword(setupBase + e820Base + 68, ramUsable - 1048576);
+          writeDword(setupBase + e820Base + 72, 0);
+          writeDword(setupBase + e820Base + 76, 1); /* usable */
+          console.log('[E820] ramTop=0x' + ramTop.toString(16) +
+            ' usable=0x100000-0x' + ramUsable.toString(16) +
+            ' (' + ((ramUsable - 1048576) >> 20) + 'MB)');
+          mem8[setupBase + 488] = 4; /* 4 e820 entries */
           // e820_entries count
           // HdrS signature for kernel validation
           mem8[setupBase + 514] = 72;
@@ -6006,22 +6022,37 @@ globalThis.VBoxJIT = (function() {
             const setupBase = rb + 589824;
             // Clear boot_params (first 4K)
             for (let i = 0; i < 4096; i++) mem8[setupBase + i] = 0;
-            // e820 memory map at offset 0xD00
+            // e820 memory map at offset 0xD00 — match VirtualBox BIOS format
             const e820Base = 3328;
+            const ramTop = highRamEnd ? highRamEnd : 134217728; /* 128MB */
+            const ramUsable = ramTop - 65536;
             // Entry 0: 0x0 - 0x9FC00 usable
             writeDword(setupBase + e820Base + 0, 0);
             writeDword(setupBase + e820Base + 4, 0);
             writeDword(setupBase + e820Base + 8, 654336);
             writeDword(setupBase + e820Base + 12, 0);
             writeDword(setupBase + e820Base + 16, 1);
-            // Entry 1: 0x100000 - highRamEnd usable
-            writeDword(setupBase + e820Base + 20, 1048576);
+            // Entry 1: 0x9FC00 - 0xA0000 reserved (EBDA)
+            writeDword(setupBase + e820Base + 20, 654336);
             writeDword(setupBase + e820Base + 24, 0);
-            const ramTop = highRamEnd ? highRamEnd : 33554432;
-            writeDword(setupBase + e820Base + 28, ramTop - 1048576);
+            writeDword(setupBase + e820Base + 28, 1024);
             writeDword(setupBase + e820Base + 32, 0);
-            writeDword(setupBase + e820Base + 36, 1);
-            mem8[setupBase + 488] = 2;
+            writeDword(setupBase + e820Base + 36, 2);
+            // Entry 2: 0xF0000 - 0x100000 reserved (BIOS)
+            writeDword(setupBase + e820Base + 40, 983040);
+            writeDword(setupBase + e820Base + 44, 0);
+            writeDword(setupBase + e820Base + 48, 65536);
+            writeDword(setupBase + e820Base + 52, 0);
+            writeDword(setupBase + e820Base + 56, 2);
+            // Entry 3: 0x100000 - ramUsable usable
+            writeDword(setupBase + e820Base + 60, 1048576);
+            writeDword(setupBase + e820Base + 64, 0);
+            writeDword(setupBase + e820Base + 68, ramUsable - 1048576);
+            writeDword(setupBase + e820Base + 72, 0);
+            writeDword(setupBase + e820Base + 76, 1);
+            console.log('[E820-2] ramTop=0x' + ramTop.toString(16) +
+              ' usable=' + ((ramUsable - 1048576) >> 20) + 'MB');
+            mem8[setupBase + 488] = 4;
             // e820_entries count
             // HdrS signature
             mem8[setupBase + 514] = 72;

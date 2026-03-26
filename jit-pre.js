@@ -4093,20 +4093,50 @@ function execBlock(cpuP, ramB, maxInsn) {
             !execBlock._directBootDone) {
           const md = ramBase + 0x500;
           const m0 = mem8[md+12], m1 = mem8[md+13], m2 = mem8[md+14], m3 = mem8[md+15];
-          if (hltCnt === 2) {
-            console.log('[DIRECT-BOOT-CHK] ramBase=0x' + ramBase.toString(16) +
-              ' md=0x' + md.toString(16) +
+          /* Also check for kernel at highRamPtr (PGMPhysWrite target) */
+          const hasKernelAtHRP = highRamPtr && (mem8[highRamPtr] !== 0 ||
+            mem8[highRamPtr+1] !== 0 || mem8[highRamPtr+2] !== 0 || mem8[highRamPtr+3] !== 0);
+          if (hltCnt <= 10 && (hltCnt % 2 === 0)) {
+            console.log('[DIRECT-BOOT-CHK] hlt#' + hltCnt +
               ' magic=' + m0.toString(16) + ',' + m1.toString(16) +
               ',' + m2.toString(16) + ',' + m3.toString(16) +
-              ' (want 4B,52,4E,4C)');
+              ' hrp=' + (highRamPtr ? '0x'+highRamPtr.toString(16) : 'null') +
+              ' hasK=' + hasKernelAtHRP);
           }
-          if (m0 === 0x4B && m1 === 0x52 && m2 === 0x4E && m3 === 0x4C) { // "KRNL" magic
+          if ((m0 === 0x4B && m1 === 0x52 && m2 === 0x4E && m3 === 0x4C)
+              || hasKernelAtHRP) { // KRNL magic OR kernel present via PGMPhysWrite
             execBlock._directBootDone = true;
 
-            // Read staging metadata (written by main thread)
-            const stageBase = (mem8[md] | (mem8[md+1]<<8) | (mem8[md+2]<<16) | (mem8[md+3]<<24)) >>> 0;
-            const vmlinuzLen = (mem8[md+4] | (mem8[md+5]<<8) | (mem8[md+6]<<16) | (mem8[md+7]<<24)) >>> 0;
-            const initrdLen = (mem8[md+8] | (mem8[md+9]<<8) | (mem8[md+10]<<16) | (mem8[md+11]<<24)) >>> 0;
+            // Read staging metadata — try KRNL descriptor first, fallback to raw detection
+            let stageBase, vmlinuzLen, initrdLen;
+            if (m0 === 0x4B && m1 === 0x52 && m2 === 0x4E && m3 === 0x4C) {
+              stageBase = (mem8[md] | (mem8[md+1]<<8) | (mem8[md+2]<<16) | (mem8[md+3]<<24)) >>> 0;
+              vmlinuzLen = (mem8[md+4] | (mem8[md+5]<<8) | (mem8[md+6]<<16) | (mem8[md+7]<<24)) >>> 0;
+              initrdLen = (mem8[md+8] | (mem8[md+9]<<8) | (mem8[md+10]<<16) | (mem8[md+11]<<24)) >>> 0;
+            } else {
+              /* Kernel at highRamPtr via PGMPhysWrite. Find it directly. */
+              /* The setup header is at 0x10000 in guest RAM (if staged there),
+               * or the kernel is directly at 0x100000 (compressed bzImage). */
+              /* Check for setup header at 0x10000 */
+              const setupCheck = ramBase + 0x10000;
+              const hasSetup = mem8[setupCheck + 0x202] === 0x48 &&
+                               mem8[setupCheck + 0x203] === 0x64 &&
+                               mem8[setupCheck + 0x204] === 0x72 &&
+                               mem8[setupCheck + 0x205] === 0x53; /* HdrS */
+              if (hasSetup) {
+                stageBase = setupCheck;
+                const setupSz = (mem8[stageBase + 0x1F1] || 4);
+                vmlinuzLen = (setupSz + 1) * 512 + highRamSize; /* rough estimate */
+                initrdLen = 0; /* will be set from ramdisk fields if present */
+                console.log('[DIRECT-BOOT] Using setup header at 0x10000 (HdrS found)');
+              } else {
+                /* No setup header — use kernel directly at 0x100000 */
+                stageBase = highRamPtr;
+                vmlinuzLen = highRamSize;
+                initrdLen = 0;
+                console.log('[DIRECT-BOOT] Using kernel at highRamPtr (no HdrS at 0x10000)');
+              }
+            }
 
             console.log('[DIRECT-BOOT] Triggered at HLT #' + hltCnt +
               ' SP=0x' + hltSP.toString(16) +

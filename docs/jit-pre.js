@@ -4097,7 +4097,7 @@ function execBlock(cpuP, ramB, maxInsn) {
           const hasKernelAtHRP = highRamPtr && (mem8[highRamPtr] !== 0 ||
             mem8[highRamPtr+1] !== 0 || mem8[highRamPtr+2] !== 0 || mem8[highRamPtr+3] !== 0);
           if (hltCnt <= 10 && (hltCnt % 2 === 0)) {
-            err('[DIRECT-BOOT-CHK] hlt#' + hltCnt +
+            out('[DIRECT-BOOT-CHK] hlt#' + hltCnt +
               ' magic=' + m0.toString(16) + ',' + m1.toString(16) +
               ',' + m2.toString(16) + ',' + m3.toString(16) +
               ' hrp=' + (highRamPtr ? '0x'+highRamPtr.toString(16) : 'null') +
@@ -4128,17 +4128,17 @@ function execBlock(cpuP, ramB, maxInsn) {
                 const setupSz = (mem8[stageBase + 0x1F1] || 4);
                 vmlinuzLen = (setupSz + 1) * 512 + highRamSize; /* rough estimate */
                 initrdLen = 0; /* will be set from ramdisk fields if present */
-                err('[DIRECT-BOOT] Using setup header at 0x10000 (HdrS found)');
+                out('[DIRECT-BOOT] Using setup header at 0x10000 (HdrS found)');
               } else {
                 /* No setup header — use kernel directly at 0x100000 */
                 stageBase = highRamPtr;
                 vmlinuzLen = highRamSize;
                 initrdLen = 0;
-                err('[DIRECT-BOOT] Using kernel at highRamPtr (no HdrS at 0x10000)');
+                out('[DIRECT-BOOT] Using kernel at highRamPtr (no HdrS at 0x10000)');
               }
             }
 
-            err('[DIRECT-BOOT] Triggered at HLT #' + hltCnt +
+            out('[DIRECT-BOOT] Triggered at HLT #' + hltCnt +
               ' SP=0x' + hltSP.toString(16) +
               ' stage=0x' + stageBase.toString(16) +
               ' vmlinuz=' + vmlinuzLen + ' initrd=' + initrdLen);
@@ -4153,7 +4153,7 @@ function execBlock(cpuP, ramB, maxInsn) {
             // Read init_size and pref_address from setup header
             const initSz = dv.getUint32(stageBase + 0x260, true);
             const prefAddr = dv.getUint32(stageBase + 0x258, true);
-            err('[DIRECT-BOOT] header=' + hdrSig + ' proto=0x' +
+            out('[DIRECT-BOOT] header=' + hdrSig + ' proto=0x' +
               protoVer.toString(16) + ' setup_sects=' + setup_sects +
               ' init_size=0x' + initSz.toString(16) +
               ' pref_addr=0x' + prefAddr.toString(16));
@@ -4170,7 +4170,7 @@ function execBlock(cpuP, ramB, maxInsn) {
               // Place initrd at end of RAM, page-aligned
               const INITRD_GPA = ((0x100000 + highRamSize - initrdLen) & ~0xFFF) >>> 0;
 
-              err('[DIRECT-BOOT] Copying: setup=' + setupSize +
+              out('[DIRECT-BOOT] Copying: setup=' + setupSize +
                 ' @0x' + SETUP_GPA.toString(16) +
                 ' kernel=' + pmKernelSize + ' @0x' + KERNEL_GPA.toString(16) +
                 ' initrd=' + initrdLen + ' @0x' + INITRD_GPA.toString(16));
@@ -4244,7 +4244,7 @@ function execBlock(cpuP, ramB, maxInsn) {
               mem8[bp + 0x0F] = 0;     // orig_video_isVGA = 0 (standard VGA)
               dv.setUint16(bp + 0x10, 16, true); // orig_video_points (char height)
 
-              err('[DIRECT-BOOT] e820: ' + e820idx + ' entries, RAM=' +
+              out('[DIRECT-BOOT] e820: ' + e820idx + ' entries, RAM=' +
                 (TOTAL_RAM >> 20) + 'MB');
 
               // ── Fast kernel decompression (skip 20-min IEM decompressor) ──
@@ -4349,7 +4349,7 @@ function execBlock(cpuP, ramB, maxInsn) {
                 wr32(R_CR2, 0xC0DEBA5E);
                 _directBootDone = true;
 
-                err('[DIRECT-BOOT] Kernel loaded (slow path)! entrySeg=0x' +
+                out('[DIRECT-BOOT] Kernel loaded (slow path)! entrySeg=0x' +
                   ENTRY_SEG.toString(16) + ' initrd@0x' +
                   INITRD_GPA.toString(16) + ' (' + (initrdLen>>10) +
                   'KB) — C++ will set VCPU regs');

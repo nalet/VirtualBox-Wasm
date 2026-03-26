@@ -1034,7 +1034,7 @@ function execBlock(cpuP, ramB, maxInsn) {
   // After ISOLINUX loads the kernel to 0x100000, it may get stuck in a shuffle
   // loop or I/O loop. Detect this by counting execBlock calls while the kernel
   // is present but boot hasn't progressed.
-  if (!execBlock._directBootDone && !protMode && csBase < 0xF0000) {
+  if (false && !execBlock._directBootDone && !protMode && csBase < 0xF0000) {
     if (!execBlock._dbCallCount) execBlock._dbCallCount = 0;
     execBlock._dbCallCount++;
 

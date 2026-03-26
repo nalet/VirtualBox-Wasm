@@ -1320,7 +1320,7 @@ globalThis.VBoxJIT = (function() {
     // After ISOLINUX loads the kernel to 0x100000, it may get stuck in a shuffle
     // loop or I/O loop. Detect this by counting execBlock calls while the kernel
     // is present but boot hasn't progressed.
-    if (!execBlock._directBootDone && !protMode && csBase < 983040) {
+    if (false && !execBlock._directBootDone && !protMode && csBase < 983040) {
       if (!execBlock._dbCallCount) execBlock._dbCallCount = 0;
       execBlock._dbCallCount++;
       // Track whether we've ever been in a bootloader segment (not BIOS).

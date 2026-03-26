@@ -4091,7 +4091,7 @@ function execBlock(cpuP, ramB, maxInsn) {
         const hltSP = gr16(4);
         if (hltCnt >= 2 &&
             !execBlock._directBootDone) {
-          const md = ramBase + 0x500;
+          const md = ramBase + 0x800;
           const m0 = mem8[md+12], m1 = mem8[md+13], m2 = mem8[md+14], m3 = mem8[md+15];
           /* Also check for kernel at highRamPtr (PGMPhysWrite target) */
           const hasKernelAtHRP = highRamPtr && (mem8[highRamPtr] !== 0 ||

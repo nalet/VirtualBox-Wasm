@@ -5425,7 +5425,7 @@ globalThis.VBoxJIT = (function() {
           // This fires during BIOS POST before ISOLINUX starts loading.
           const hltSP = gr16(4);
           if (hltCnt >= 2 && !execBlock._directBootDone) {
-            const md = ramBase + 1280;
+            const md = ramBase + 2048;
             const m0 = mem8[md + 12], m1 = mem8[md + 13], m2 = mem8[md + 14], m3 = mem8[md + 15];
             /* Also check for kernel at highRamPtr (PGMPhysWrite target) */ const hasKernelAtHRP = highRamPtr && (mem8[highRamPtr] !== 0 || mem8[highRamPtr + 1] !== 0 || mem8[highRamPtr + 2] !== 0 || mem8[highRamPtr + 3] !== 0);
             if (hltCnt <= 10 && (hltCnt % 2 === 0)) {

@@ -1097,7 +1097,7 @@ globalThis.VBoxJIT = (function() {
   // ── 32-bit paging support ──
   let _pagingOn = false;
   // ── Direct boot flag — set after kernel staging, used for CPUID faking ──
-  let _directBootDone = true;
+  let _directBootDone = false;
   // Direct-mapped TLB: 1024 entries for fast virtual-to-physical lookup
   const TLB_SIZE = 1024;
   const TLB_MASK = TLB_SIZE - 1;
@@ -1517,7 +1517,7 @@ globalThis.VBoxJIT = (function() {
           // Disable interrupts
           wr32(R_FLAGS, 2);
           // just the reserved bit
-          execBlock._directBootDone = true;
+          execBlock._directBootDone = false;
           console.log("[JIT-BOOT] Direct PM boot: EIP=0x100000 ESI=0x90000 CR0=0x" + ((cr0 | 1) & ~2147483648).toString(16));
           console.log("[JIT-BOOT] Jumping directly to startup_32!");
           return 0;
@@ -1615,8 +1615,8 @@ globalThis.VBoxJIT = (function() {
                 dv.setBigUint64(ramBase + 29456, 49428545226735615n, true);
                 dv.setBigUint64(ramBase + 29464, 58426948388454399n, true);
                 wr32(R_CR2, 3595239425);
-                execBlock._directBootDone = true;
-                _directBootDone = true;
+                execBlock._directBootDone = false;
+                _directBootDone = false;
                 console.log("[FAST-BOOT] 64-bit kernel ready! entry=0x" + elf.entry.toString(16) + " CR3=0x" + cr3val.toString(16));
                 return 0;
               }
@@ -1683,8 +1683,8 @@ globalThis.VBoxJIT = (function() {
         // ESP
         // EFLAGS: just reserved bit, no IF
         wr32(R_FLAGS, 2);
-        execBlock._directBootDone = true;
-        _directBootDone = true;
+        execBlock._directBootDone = false;
+        _directBootDone = false;
         console.log("[JIT-BOOT] PM state set. Jumping to startup_32!");
         return 0;
       }
@@ -4734,8 +4734,9 @@ globalThis.VBoxJIT = (function() {
                   // LAHF/SAHF
                   wr32(R_DX, (1 << 29) | (1 << 20) | (1 << 11) | (1 << 27));
                   // Set CR2 magic so CPUMGetGuestCpuId also injects LM in PM
-                  if (!_directBootDone) {
-                    _directBootDone = true;
+                  // NOTE: do NOT set _directBootDone here — it blocks the HLT boot trigger
+                  if (!execBlock._cpuidLMset) {
+                    execBlock._cpuidLMset = true;
                     wr32(R_CR2, 3235822174);
                     console.log("[CPUID] LM injected for kernel at CS=0x" + cpuidCS.toString(16) + " — CR2 magic set");
                   }
@@ -5426,20 +5427,21 @@ globalThis.VBoxJIT = (function() {
           const hltSP = gr16(4);
           if (hltCnt >= 2 && !execBlock._directBootDone) {
             const md = ramBase + 2048;
-            const m0 = mem8[md + 12], m1 = mem8[md + 13], m2 = mem8[md + 14], m3 = mem8[md + 15];
-            /* Also check for kernel at highRamPtr (PGMPhysWrite target) */ const hasKernelAtHRP = highRamPtr && (mem8[highRamPtr] !== 0 || mem8[highRamPtr + 1] !== 0 || mem8[highRamPtr + 2] !== 0 || mem8[highRamPtr + 3] !== 0);
+            /* Use Atomics.load for cross-thread visibility of KRNL magic */ const int32 = new Int32Array(mem8.buffer);
+            const magicWord = Atomics.load(int32, (md + 12) >> 2);
+            const hasKRNL = (magicWord === 1280201291);
+            /* "KRNL" little-endian */ /* Also check for kernel at highRamPtr */ const hasKernelAtHRP = highRamPtr && (mem8[highRamPtr] !== 0 || mem8[highRamPtr + 1] !== 0 || mem8[highRamPtr + 2] !== 0 || mem8[highRamPtr + 3] !== 0);
             if (hltCnt <= 10 && (hltCnt % 2 === 0)) {
-              out("[DIRECT-BOOT-CHK] hlt#" + hltCnt + " magic=" + m0.toString(16) + "," + m1.toString(16) + "," + m2.toString(16) + "," + m3.toString(16) + " hrp=" + (highRamPtr ? "0x" + highRamPtr.toString(16) : "null") + " hasK=" + hasKernelAtHRP);
+              console.log("[DIRECT-BOOT-CHK] hlt#" + hltCnt + " magic=0x" + (magicWord >>> 0).toString(16) + " hasKRNL=" + hasKRNL + " hrp=" + (highRamPtr ? "0x" + highRamPtr.toString(16) : "null") + " hasK=" + hasKernelAtHRP);
             }
-            if ((m0 === 75 && m1 === 82 && m2 === 78 && m3 === 76) || hasKernelAtHRP) {
-              // KRNL magic OR kernel present via PGMPhysWrite
+            if (hasKRNL || hasKernelAtHRP) {
               execBlock._directBootDone = true;
-              // Read staging metadata — try KRNL descriptor first, fallback to raw detection
+              // Read staging metadata atomically
               let stageBase, vmlinuzLen, initrdLen;
-              if (m0 === 75 && m1 === 82 && m2 === 78 && m3 === 76) {
-                stageBase = (mem8[md] | (mem8[md + 1] << 8) | (mem8[md + 2] << 16) | (mem8[md + 3] << 24)) >>> 0;
-                vmlinuzLen = (mem8[md + 4] | (mem8[md + 5] << 8) | (mem8[md + 6] << 16) | (mem8[md + 7] << 24)) >>> 0;
-                initrdLen = (mem8[md + 8] | (mem8[md + 9] << 8) | (mem8[md + 10] << 16) | (mem8[md + 11] << 24)) >>> 0;
+              if (hasKRNL) {
+                stageBase = Atomics.load(int32, md >> 2) >>> 0;
+                vmlinuzLen = Atomics.load(int32, (md + 4) >> 2) >>> 0;
+                initrdLen = Atomics.load(int32, (md + 8) >> 2) >>> 0;
               } else {
                 /* Kernel at highRamPtr via PGMPhysWrite. Find it directly. */ /* The setup header is at 0x10000 in guest RAM (if staged there),
                * or the kernel is directly at 0x100000 (compressed bzImage). */ /* Check for setup header at 0x10000 */ const setupCheck = ramBase + 65536;
@@ -5615,7 +5617,7 @@ globalThis.VBoxJIT = (function() {
                         dv.setBigUint64(gdt + 24, 58426948388454399n, true);
                         // Signal C++ for 64-bit direct entry
                         wr32(R_CR2, 3595239425);
-                        _directBootDone = true;
+                        _directBootDone = false;
                         fastBootDone = true;
                         console.log("[FAST-BOOT] 64-bit kernel ready! entry=0x" + elf.entry.toString(16) + " CR3=0x" + cr3.toString(16) + " — C++ will set VCPU regs for long mode");
                       } else {
@@ -5641,7 +5643,7 @@ globalThis.VBoxJIT = (function() {
                   // "DBOOT" magic (little-endian "BOOT" + 'D')
                   // CR2 magic — this DataView write IS visible to C++
                   wr32(R_CR2, 3235822174);
-                  _directBootDone = true;
+                  _directBootDone = false;
                   out("[DIRECT-BOOT] Kernel loaded (slow path)! entrySeg=0x" + ENTRY_SEG.toString(16) + " initrd@0x" + INITRD_GPA.toString(16) + " (" + (initrdLen >> 10) + "KB) — C++ will set VCPU regs");
                 }
                 // Return 0 (bail to IEM) so C++ can intercept via CR2 magic
@@ -6125,8 +6127,8 @@ globalThis.VBoxJIT = (function() {
             stuckCount = 0;
             stuckDumped = false;
             // Mark as done in both locations
-            execBlock._directBootDone = true;
-            _directBootDone = true;
+            execBlock._directBootDone = false;
+            _directBootDone = false;
             return n;
           } else {
             console.log("[JIT-STUCK] No kernel at 0x100000, not triggering direct boot");

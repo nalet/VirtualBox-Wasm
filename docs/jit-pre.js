@@ -3637,8 +3637,9 @@ function execBlock(cpuP, ramB, maxInsn) {
               wr32(R_CX, 0x00000001); // LAHF/SAHF
               wr32(R_DX, (1 << 29) | (1 << 20) | (1 << 11) | (1 << 27));
               // Set CR2 magic so CPUMGetGuestCpuId also injects LM in PM
-              if (!_directBootDone) {
-                _directBootDone = true;
+              // NOTE: do NOT set _directBootDone here — it blocks the HLT boot trigger
+              if (!execBlock._cpuidLMset) {
+                execBlock._cpuidLMset = true;
                 wr32(R_CR2, 0xC0DEBA5E);
                 console.log('[CPUID] LM injected for kernel at CS=0x' +
                   cpuidCS.toString(16) + ' — CR2 magic set');
@@ -4092,27 +4093,29 @@ function execBlock(cpuP, ramB, maxInsn) {
         if (hltCnt >= 2 &&
             !execBlock._directBootDone) {
           const md = ramBase + 0x800;
-          const m0 = mem8[md+12], m1 = mem8[md+13], m2 = mem8[md+14], m3 = mem8[md+15];
-          /* Also check for kernel at highRamPtr (PGMPhysWrite target) */
+          /* Use Atomics.load for cross-thread visibility of KRNL magic */
+          const int32 = new Int32Array(mem8.buffer);
+          const magicWord = Atomics.load(int32, (md + 12) >> 2);
+          const hasKRNL = (magicWord === 0x4C4E524B); /* "KRNL" little-endian */
+          /* Also check for kernel at highRamPtr */
           const hasKernelAtHRP = highRamPtr && (mem8[highRamPtr] !== 0 ||
             mem8[highRamPtr+1] !== 0 || mem8[highRamPtr+2] !== 0 || mem8[highRamPtr+3] !== 0);
           if (hltCnt <= 10 && (hltCnt % 2 === 0)) {
-            out('[DIRECT-BOOT-CHK] hlt#' + hltCnt +
-              ' magic=' + m0.toString(16) + ',' + m1.toString(16) +
-              ',' + m2.toString(16) + ',' + m3.toString(16) +
+            console.log('[DIRECT-BOOT-CHK] hlt#' + hltCnt +
+              ' magic=0x' + (magicWord >>> 0).toString(16) +
+              ' hasKRNL=' + hasKRNL +
               ' hrp=' + (highRamPtr ? '0x'+highRamPtr.toString(16) : 'null') +
               ' hasK=' + hasKernelAtHRP);
           }
-          if ((m0 === 0x4B && m1 === 0x52 && m2 === 0x4E && m3 === 0x4C)
-              || hasKernelAtHRP) { // KRNL magic OR kernel present via PGMPhysWrite
+          if (hasKRNL || hasKernelAtHRP) {
             execBlock._directBootDone = true;
 
-            // Read staging metadata — try KRNL descriptor first, fallback to raw detection
+            // Read staging metadata atomically
             let stageBase, vmlinuzLen, initrdLen;
-            if (m0 === 0x4B && m1 === 0x52 && m2 === 0x4E && m3 === 0x4C) {
-              stageBase = (mem8[md] | (mem8[md+1]<<8) | (mem8[md+2]<<16) | (mem8[md+3]<<24)) >>> 0;
-              vmlinuzLen = (mem8[md+4] | (mem8[md+5]<<8) | (mem8[md+6]<<16) | (mem8[md+7]<<24)) >>> 0;
-              initrdLen = (mem8[md+8] | (mem8[md+9]<<8) | (mem8[md+10]<<16) | (mem8[md+11]<<24)) >>> 0;
+            if (hasKRNL) {
+              stageBase = Atomics.load(int32, md >> 2) >>> 0;
+              vmlinuzLen = Atomics.load(int32, (md + 4) >> 2) >>> 0;
+              initrdLen = Atomics.load(int32, (md + 8) >> 2) >>> 0;
             } else {
               /* Kernel at highRamPtr via PGMPhysWrite. Find it directly. */
               /* The setup header is at 0x10000 in guest RAM (if staged there),

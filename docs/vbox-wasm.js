@@ -1517,7 +1517,7 @@ globalThis.VBoxJIT = (function() {
           // Disable interrupts
           wr32(R_FLAGS, 2);
           // just the reserved bit
-          // DISABLED: execBlock.// DISABLED: /* DISABLED _directBootDone = true */;
+          execBlock._directBootDone = false;
           console.log("[JIT-BOOT] Direct PM boot: EIP=0x100000 ESI=0x90000 CR0=0x" + ((cr0 | 1) & ~2147483648).toString(16));
           console.log("[JIT-BOOT] Jumping directly to startup_32!");
           return 0;
@@ -1615,8 +1615,8 @@ globalThis.VBoxJIT = (function() {
                 dv.setBigUint64(ramBase + 29456, 49428545226735615n, true);
                 dv.setBigUint64(ramBase + 29464, 58426948388454399n, true);
                 wr32(R_CR2, 3595239425);
-                // DISABLED: execBlock.// DISABLED: /* DISABLED _directBootDone = true */;
-                // DISABLED: /* DISABLED _directBootDone = true */;
+                execBlock._directBootDone = false;
+                _directBootDone = false;
                 console.log("[FAST-BOOT] 64-bit kernel ready! entry=0x" + elf.entry.toString(16) + " CR3=0x" + cr3val.toString(16));
                 return 0;
               }
@@ -1683,8 +1683,8 @@ globalThis.VBoxJIT = (function() {
         // ESP
         // EFLAGS: just reserved bit, no IF
         wr32(R_FLAGS, 2);
-        // DISABLED: execBlock.// DISABLED: /* DISABLED _directBootDone = true */;
-        // DISABLED: /* DISABLED _directBootDone = true */;
+        execBlock._directBootDone = false;
+        _directBootDone = false;
         console.log("[JIT-BOOT] PM state set. Jumping to startup_32!");
         return 0;
       }
@@ -4735,7 +4735,7 @@ globalThis.VBoxJIT = (function() {
                   wr32(R_DX, (1 << 29) | (1 << 20) | (1 << 11) | (1 << 27));
                   // Set CR2 magic so CPUMGetGuestCpuId also injects LM in PM
                   if (!_directBootDone) {
-                    /* DISABLED _directBootDone = true */;
+                    _directBootDone = false;
                     wr32(R_CR2, 3235822174);
                     console.log("[CPUID] LM injected for kernel at CS=0x" + cpuidCS.toString(16) + " — CR2 magic set");
                   }
@@ -5615,7 +5615,7 @@ globalThis.VBoxJIT = (function() {
                         dv.setBigUint64(gdt + 24, 58426948388454399n, true);
                         // Signal C++ for 64-bit direct entry
                         wr32(R_CR2, 3595239425);
-                        /* DISABLED _directBootDone = true */;
+                        _directBootDone = false;
                         fastBootDone = true;
                         console.log("[FAST-BOOT] 64-bit kernel ready! entry=0x" + elf.entry.toString(16) + " CR3=0x" + cr3.toString(16) + " — C++ will set VCPU regs for long mode");
                       } else {
@@ -5641,7 +5641,7 @@ globalThis.VBoxJIT = (function() {
                   // "DBOOT" magic (little-endian "BOOT" + 'D')
                   // CR2 magic — this DataView write IS visible to C++
                   wr32(R_CR2, 3235822174);
-                  /* DISABLED _directBootDone = true */;
+                  _directBootDone = false;
                   err("[DIRECT-BOOT] Kernel loaded (slow path)! entrySeg=0x" + ENTRY_SEG.toString(16) + " initrd@0x" + INITRD_GPA.toString(16) + " (" + (initrdLen >> 10) + "KB) — C++ will set VCPU regs");
                 }
                 // Return 0 (bail to IEM) so C++ can intercept via CR2 magic
@@ -6125,8 +6125,8 @@ globalThis.VBoxJIT = (function() {
             stuckCount = 0;
             stuckDumped = false;
             // Mark as done in both locations
-            execBlock./* DISABLED _directBootDone = true */;
-            /* DISABLED _directBootDone = true */;
+            execBlock._directBootDone = false;
+            _directBootDone = false;
             return n;
           } else {
             console.log("[JIT-STUCK] No kernel at 0x100000, not triggering direct boot");

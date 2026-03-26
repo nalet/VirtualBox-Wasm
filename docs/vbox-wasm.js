@@ -201,59 +201,6 @@ globalThis.VBoxJIT = (function() {
     highRamSize = size;
     highRamEnd = 1048576 + size;
     console.log("[JIT] High RAM set: ptr=0x" + ptr.toString(16) + " size=" + (size >> 20) + "MB range=0x100000-0x" + highRamEnd.toString(16));
-    startJiffiesWatchdog();
-  }
-  // ── Jiffies watchdog ──
-  // The Linux 5.4 kernel stores jiffies_64 at GPA 0x02406980 (high RAM offset 0x02306980).
-  // Several .init.text calibration loops spin-wait for jiffies to advance.
-  // The deployed WASM uses PGMPhysSimpleReadGCPtr for the C++ monitor which silently
-  // fails when page-table walks are unavailable, so this JS watchdog writes directly
-  // to the Wasm linear memory backing guest RAM.
-  let _jiffiesWatchdog = null;
-  function startJiffiesWatchdog() {
-    if (_jiffiesWatchdog) return;
-    const JIFFIES_OFFSET = 36727168;
-    // GPA 0x02406980 - 0x100000
-    let lastJiffiesLo = -1, lastJiffiesHi = -1;
-    let stuckIntervals = 0;
-    _jiffiesWatchdog = setInterval(function() {
-      if (!mem8) return;
-      refreshViews();
-      // EM_JS isolation: highRamPtr is set in worker scope, not main thread scope.
-      // Read it from the shared location written by execBlockWrapped (ramBase+28688 = GPA 0x7010).
-      let hrp = highRamPtr;
-      if (!hrp && ramBase) {
-        hrp = (mem8[ramBase + 28688] | (mem8[ramBase + 28689] << 8) | (mem8[ramBase + 28690] << 16) | (mem8[ramBase + 28691] << 24)) >>> 0;
-      }
-      if (!hrp) return;
-      const base = hrp + JIFFIES_OFFSET;
-      const lo = (mem8[base] | (mem8[base + 1] << 8) | (mem8[base + 2] << 16) | (mem8[base + 3] << 24)) >>> 0;
-      const hi = (mem8[base + 4] | (mem8[base + 5] << 8) | (mem8[base + 6] << 16) | (mem8[base + 7] << 24)) >>> 0;
-      if (lo === lastJiffiesLo && hi === lastJiffiesHi) {
-        stuckIntervals++;
-        if (stuckIntervals >= 3) {
-          // Force jiffies_64 += 1
-          let newLo = (lo + 1) >>> 0;
-          let newHi = (newLo === 0) ? ((hi + 1) >>> 0) : hi;
-          mem8[base] = newLo & 255;
-          mem8[base + 1] = (newLo >> 8) & 255;
-          mem8[base + 2] = (newLo >> 16) & 255;
-          mem8[base + 3] = (newLo >> 24) & 255;
-          mem8[base + 4] = newHi & 255;
-          mem8[base + 5] = (newHi >> 8) & 255;
-          mem8[base + 6] = (newHi >> 16) & 255;
-          mem8[base + 7] = (newHi >> 24) & 255;
-          console.log("[JS-JIFFIES] stuck " + stuckIntervals + " intervals, forced 0x" + hi.toString(16) + ("00000000" + lo.toString(16)).slice(-8) + " -> 0x" + newHi.toString(16) + ("00000000" + newLo.toString(16)).slice(-8));
-          lastJiffiesLo = newLo;
-          lastJiffiesHi = newHi;
-          stuckIntervals = 0;
-        }
-      } else {
-        lastJiffiesLo = lo;
-        lastJiffiesHi = hi;
-        stuckIntervals = 0;
-      }
-    }, 200);
   }
   // ── Gzip/DEFLATE decompressor for fast kernel boot ──
   // Decompresses bzImage kernel payload in JavaScript, skipping the 20-minute
@@ -279,10 +226,25 @@ globalThis.VBoxJIT = (function() {
     return jsInflate(input, pos);
   }
   function jsInflate(data, pos) {
-    let outBuf = new Uint8Array(32 * 1024 * 1024);
-    // 32MB initial
+    // Use Wasm heap for output to avoid JS ArrayBuffer allocation failures.
+    // The Wasm heap is already 1GB+ so 40MB allocation always succeeds.
+    const INITIAL_SIZE = 40 * 1024 * 1024;
+    // 40MB — enough for most kernels
+    let outBuf;
+    try {
+      // Try Wasm-backed allocation first (always succeeds in worker thread)
+      if (typeof wasmMemory !== "undefined" && wasmMemory.buffer) {
+        outBuf = new Uint8Array(wasmMemory.buffer, wasmMemory.buffer.byteLength - INITIAL_SIZE, INITIAL_SIZE);
+      } else {
+        outBuf = new Uint8Array(INITIAL_SIZE);
+      }
+    } catch (e) {
+      // Fallback to small JS allocation
+      outBuf = new Uint8Array(4 * 1024 * 1024);
+    }
     let outPos = 0;
     let bitBuf = 0, bitCnt = 0;
+    const usingWasmMem = outBuf.buffer === (typeof wasmMemory !== "undefined" ? wasmMemory.buffer : null);
     function bits(n) {
       while (bitCnt < n) {
         bitBuf |= data[pos++] << bitCnt;
@@ -294,6 +256,8 @@ globalThis.VBoxJIT = (function() {
       return v;
     }
     function grow(need) {
+      if (usingWasmMem) return;
+      // Wasm buffer is pre-allocated large enough
       while (outPos + need > outBuf.length) {
         const b = new Uint8Array(outBuf.length * 2);
         b.set(outBuf);
@@ -1445,37 +1409,36 @@ globalThis.VBoxJIT = (function() {
           for (let i = 0; i < 4096; i++) mem8[setupBase + i] = 0;
           // e820 memory map: entries at offset 0xD00 (boot_params.e820_table)
           // Entry format: 20 bytes each (addr:8, size:8, type:4)
+          // Must match VirtualBox BIOS output for correct kernel memory init
           const e820Base = 3328;
-          const ramTop = highRamEnd ? highRamEnd : 134217728; /* 128MB */
-          const ramUsable = ramTop - 65536; /* leave 64K at top reserved */
-          // Entry 0: 0x0 - 0x9FC00 usable (conventional memory)
+          const ramTop = highRamEnd ? highRamEnd : 134217728;
+          /* 128MB default */ const ramUsable = ramTop - 65536;
+          /* leave 64K at top reserved */ // Entry 0: 0x0 - 0x9FC00 usable (conventional memory)
           writeDword(setupBase + e820Base + 0, 0);
           writeDword(setupBase + e820Base + 4, 0);
-          writeDword(setupBase + e820Base + 8, 654336); /* 0x9FC00 */
+          writeDword(setupBase + e820Base + 8, 654336);
           writeDword(setupBase + e820Base + 12, 0);
-          writeDword(setupBase + e820Base + 16, 1); /* usable */
+          writeDword(setupBase + e820Base + 16, 1);
           // Entry 1: 0x9FC00 - 0xA0000 reserved (EBDA)
           writeDword(setupBase + e820Base + 20, 654336);
           writeDword(setupBase + e820Base + 24, 0);
-          writeDword(setupBase + e820Base + 28, 1024); /* 0x400 */
+          writeDword(setupBase + e820Base + 28, 1024);
           writeDword(setupBase + e820Base + 32, 0);
-          writeDword(setupBase + e820Base + 36, 2); /* reserved */
-          // Entry 2: 0xF0000 - 0x100000 reserved (BIOS)
-          writeDword(setupBase + e820Base + 40, 983040); /* 0xF0000 */
+          writeDword(setupBase + e820Base + 36, 2);
+          // Entry 2: 0xF0000 - 0x100000 reserved (BIOS ROM)
+          writeDword(setupBase + e820Base + 40, 983040);
           writeDword(setupBase + e820Base + 44, 0);
-          writeDword(setupBase + e820Base + 48, 65536); /* 0x10000 */
+          writeDword(setupBase + e820Base + 48, 65536);
           writeDword(setupBase + e820Base + 52, 0);
-          writeDword(setupBase + e820Base + 56, 2); /* reserved */
+          writeDword(setupBase + e820Base + 56, 2);
           // Entry 3: 0x100000 - ramUsable usable (main memory)
-          writeDword(setupBase + e820Base + 60, 1048576); /* 0x100000 */
+          writeDword(setupBase + e820Base + 60, 1048576);
           writeDword(setupBase + e820Base + 64, 0);
           writeDword(setupBase + e820Base + 68, ramUsable - 1048576);
           writeDword(setupBase + e820Base + 72, 0);
-          writeDword(setupBase + e820Base + 76, 1); /* usable */
-          console.log('[E820] ramTop=0x' + ramTop.toString(16) +
-            ' usable=0x100000-0x' + ramUsable.toString(16) +
-            ' (' + ((ramUsable - 1048576) >> 20) + 'MB)');
-          mem8[setupBase + 488] = 4; /* 4 e820 entries */
+          writeDword(setupBase + e820Base + 76, 1);
+          console.log("[E820] ramTop=0x" + ramTop.toString(16) + " usable=0x100000-0x" + ramUsable.toString(16));
+          mem8[setupBase + 488] = 4;
           // e820_entries count
           // HdrS signature for kernel validation
           mem8[setupBase + 514] = 72;
@@ -1492,7 +1455,7 @@ globalThis.VBoxJIT = (function() {
           // code32_start
           writeDword(setupBase + 532, 1048576);
           // Command line
-          const cmdline = "pmedia=cd BOOT_IMAGE=/vmlinuz console=ttyS0,115200 earlyprintk=serial,ttyS0,115200 loglevel=8 idle=halt notsc clocksource=jiffies acpi=off nopti nospectre_v1 nospectre_v2 pci=lastbus=0 raid=noautodetect mitigations=off notrace";
+          const cmdline = "loglevel=3 cde vga=791 console=ttyS0,115200 earlyprintk=serial,ttyS0,115200 idle=halt notsc clocksource=jiffies acpi=off nopti nospectre_v1 nospectre_v2 pci=lastbus=0 mitigations=off lpj=100";
           for (let i = 0; i < cmdline.length; i++) mem8[ramBase + 626688 + i] = cmdline.charCodeAt(i);
           mem8[ramBase + 626688 + cmdline.length] = 0;
           writeDword(setupBase + 552, 626688);
@@ -1588,7 +1551,7 @@ globalThis.VBoxJIT = (function() {
             console.log("[JIT-BOOT] cmdline @0x" + cmdPtr.toString(16) + " (" + cmdLen + " bytes)");
           }
           // Append serial console options to command line
-          const serialOpts = " console=ttyS0,115200 earlyprintk=serial,ttyS0,115200 loglevel=8 idle=halt notsc clocksource=jiffies acpi=off nopti nospectre_v1 nospectre_v2 pci=lastbus=0 raid=noautodetect mitigations=off notrace lpj=100 initcall_debug dyndbg=+p";
+          const serialOpts = " console=ttyS0,115200";
           for (let i = 0; i < serialOpts.length; i++) mem8[ramBase + 626688 + cmdLen + i] = serialOpts.charCodeAt(i);
           mem8[ramBase + 626688 + cmdLen + serialOpts.length] = 0;
           cmdLen += serialOpts.length;
@@ -5457,15 +5420,16 @@ globalThis.VBoxJIT = (function() {
             console.log("[CODE-DUMP] around " + codeBase.toString(16) + ": " + codeDump);
           }
           // ── Direct Kernel Boot ──
-          // When the BIOS is stuck in its ATA retry/halt loop after boot failure,
-          // bypass ISOLINUX by loading the pre-staged kernel directly into guest RAM.
-          // Trigger: 30K+ HLTs at BIOS halt_forever (f000:709c) + KRNL magic present.
-          // BIOS POST is already complete by this point (ISOLINUX has run and failed).
+          // Bypass ISOLINUX by loading the pre-staged kernel directly into guest RAM.
+          // Trigger: 2+ HLTs (any CS) + KRNL magic present at 0x500.
+          // This fires during BIOS POST before ISOLINUX starts loading.
           const hltSP = gr16(4);
           if (hltCnt >= 2 && !execBlock._directBootDone) {
             const md = ramBase + 1280;
-            const m0=mem8[md+12],m1=mem8[md+13],m2=mem8[md+14],m3=mem8[md+15];
-            if (hltCnt===2) console.log('[DIRECT-BOOT-CHK] ramBase=0x'+ramBase.toString(16)+' magic='+m0+','+m1+','+m2+','+m3+' (want 75,82,78,76)');
+            const m0 = mem8[md + 12], m1 = mem8[md + 13], m2 = mem8[md + 14], m3 = mem8[md + 15];
+            if (hltCnt === 2) {
+              console.log("[DIRECT-BOOT-CHK] ramBase=0x" + ramBase.toString(16) + " md=0x" + md.toString(16) + " magic=" + m0.toString(16) + "," + m1.toString(16) + "," + m2.toString(16) + "," + m3.toString(16) + " (want 4B,52,4E,4C)");
+            }
             if (m0 === 75 && m1 === 82 && m2 === 78 && m3 === 76) {
               // "KRNL" magic
               execBlock._directBootDone = true;
@@ -5500,7 +5464,7 @@ globalThis.VBoxJIT = (function() {
                 // Copy initrd to end of RAM
                 mem8.set(mem8.subarray(stageBase + vmlinuzLen, stageBase + vmlinuzLen + initrdLen), highRamPtr + (INITRD_GPA - 1048576));
                 // Write kernel command line at guest 0x20000
-                const cmdline = "console=ttyS0,115200 earlyprintk=serial,ttyS0,115200 loglevel=8 lpj=5000 auto idle=halt notsc clocksource=jiffies acpi=off\0";
+                const cmdline = "loglevel=3 vga=normal console=ttyS0,115200 idle=halt notsc clocksource=jiffies acpi=off nopti nospectre_v1 nospectre_v2 pci=lastbus=0 mitigations=off notrace lpj=100\0";
                 for (let ci = 0; ci < cmdline.length; ci++) mem8[ramBase + CMDLINE_GPA + ci] = cmdline.charCodeAt(ci);
                 // Set boot params in setup header
                 const bp = ramBase + SETUP_GPA;
@@ -6024,9 +5988,9 @@ globalThis.VBoxJIT = (function() {
             const setupBase = rb + 589824;
             // Clear boot_params (first 4K)
             for (let i = 0; i < 4096; i++) mem8[setupBase + i] = 0;
-            // e820 memory map at offset 0xD00 — match VirtualBox BIOS format
+            // e820 memory map at offset 0xD00 — 4 entries matching BIOS
             const e820Base = 3328;
-            const ramTop = highRamEnd ? highRamEnd : 134217728; /* 128MB */
+            const ramTop = highRamEnd ? highRamEnd : 134217728;
             const ramUsable = ramTop - 65536;
             // Entry 0: 0x0 - 0x9FC00 usable
             writeDword(setupBase + e820Base + 0, 0);
@@ -6034,13 +5998,13 @@ globalThis.VBoxJIT = (function() {
             writeDword(setupBase + e820Base + 8, 654336);
             writeDword(setupBase + e820Base + 12, 0);
             writeDword(setupBase + e820Base + 16, 1);
-            // Entry 1: 0x9FC00 - 0xA0000 reserved (EBDA)
+            // Entry 1: 0x9FC00 - 0xA0000 reserved
             writeDword(setupBase + e820Base + 20, 654336);
             writeDword(setupBase + e820Base + 24, 0);
             writeDword(setupBase + e820Base + 28, 1024);
             writeDword(setupBase + e820Base + 32, 0);
             writeDword(setupBase + e820Base + 36, 2);
-            // Entry 2: 0xF0000 - 0x100000 reserved (BIOS)
+            // Entry 2: 0xF0000 - 0x100000 reserved
             writeDword(setupBase + e820Base + 40, 983040);
             writeDword(setupBase + e820Base + 44, 0);
             writeDword(setupBase + e820Base + 48, 65536);
@@ -6052,8 +6016,6 @@ globalThis.VBoxJIT = (function() {
             writeDword(setupBase + e820Base + 68, ramUsable - 1048576);
             writeDword(setupBase + e820Base + 72, 0);
             writeDword(setupBase + e820Base + 76, 1);
-            console.log('[E820-2] ramTop=0x' + ramTop.toString(16) +
-              ' usable=' + ((ramUsable - 1048576) >> 20) + 'MB');
             mem8[setupBase + 488] = 4;
             // e820_entries count
             // HdrS signature
@@ -6078,7 +6040,7 @@ globalThis.VBoxJIT = (function() {
             // Check if initrd was loaded (typically at ~0x1000000 for 32MB systems)
             // For now, we rely on the kernel finding it via initrd= cmdline or embedded
             // Command line
-            const cmdline = "pmedia=cd BOOT_IMAGE=/vmlinuz console=ttyS0,115200 earlyprintk=serial,ttyS0,115200 loglevel=8 idle=halt notsc clocksource=jiffies acpi=off nopti nospectre_v1 nospectre_v2 pci=lastbus=0 raid=noautodetect mitigations=off notrace";
+            const cmdline = "pmedia=cd BOOT_IMAGE=/vmlinuz console=ttyS0,115200 earlyprintk=serial,ttyS0,115200 loglevel=4 idle=halt notsc clocksource=jiffies acpi=off nopti nospectre_v1 nospectre_v2 pci=lastbus=0 raid=noautodetect mitigations=off notrace lpj=100";
             for (let ci = 0; ci < cmdline.length; ci++) mem8[rb + 626688 + ci] = cmdline.charCodeAt(ci);
             mem8[rb + 626688 + cmdline.length] = 0;
             writeDword(setupBase + 552, 626688);
@@ -6511,7 +6473,7 @@ globalThis.VBoxJIT = (function() {
         }
       }
       for (let i = 0; i < cmdLen; i++) mf[rb + 626688 + i] = mf[rb + cmdPtr + i];
-      const serialOpts = " console=ttyS0,115200 earlyprintk=serial,ttyS0,115200 loglevel=8 idle=halt notsc clocksource=jiffies acpi=off nopti nospectre_v1 nospectre_v2 pci=lastbus=0 raid=noautodetect mitigations=off notrace lpj=100 initcall_debug dyndbg=+p";
+      const serialOpts = " console=ttyS0,115200";
       for (let i = 0; i < serialOpts.length; i++) mf[rb + 626688 + cmdLen + i] = serialOpts.charCodeAt(i);
       mf[rb + 626688 + cmdLen + serialOpts.length] = 0;
       dvf.setUint32(rb + 65536 + 552, 626688, true);

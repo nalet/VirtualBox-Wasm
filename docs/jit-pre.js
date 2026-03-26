@@ -4085,12 +4085,11 @@ function execBlock(cpuP, ramB, maxInsn) {
         }
 
         // ── Direct Kernel Boot ──
-        // When the BIOS is stuck in its ATA retry/halt loop after boot failure,
-        // bypass ISOLINUX by loading the pre-staged kernel directly into guest RAM.
-        // Trigger: 30K+ HLTs at BIOS halt_forever (f000:709c) + KRNL magic present.
-        // BIOS POST is already complete by this point (ISOLINUX has run and failed).
+        // Bypass ISOLINUX by loading the pre-staged kernel directly into guest RAM.
+        // Trigger: 2+ HLTs (any CS) + KRNL magic present at 0x500.
+        // This fires during BIOS POST before ISOLINUX starts loading.
         const hltSP = gr16(4);
-        if (hltCnt >= 10 && hltCS === 0xF000 &&
+        if (hltCnt >= 2 &&
             !execBlock._directBootDone) {
           const md = ramBase + 0x500;
           if (mem8[md+12] === 0x4B && mem8[md+13] === 0x52 &&

@@ -4092,8 +4092,15 @@ function execBlock(cpuP, ramB, maxInsn) {
         if (hltCnt >= 2 &&
             !execBlock._directBootDone) {
           const md = ramBase + 0x500;
-          if (mem8[md+12] === 0x4B && mem8[md+13] === 0x52 &&
-              mem8[md+14] === 0x4E && mem8[md+15] === 0x4C) { // "KRNL" magic
+          const m0 = mem8[md+12], m1 = mem8[md+13], m2 = mem8[md+14], m3 = mem8[md+15];
+          if (hltCnt === 2) {
+            console.log('[DIRECT-BOOT-CHK] ramBase=0x' + ramBase.toString(16) +
+              ' md=0x' + md.toString(16) +
+              ' magic=' + m0.toString(16) + ',' + m1.toString(16) +
+              ',' + m2.toString(16) + ',' + m3.toString(16) +
+              ' (want 4B,52,4E,4C)');
+          }
+          if (m0 === 0x4B && m1 === 0x52 && m2 === 0x4E && m3 === 0x4C) { // "KRNL" magic
             execBlock._directBootDone = true;
 
             // Read staging metadata (written by main thread)

@@ -5464,7 +5464,9 @@ globalThis.VBoxJIT = (function() {
           const hltSP = gr16(4);
           if (hltCnt >= 2 && !execBlock._directBootDone) {
             const md = ramBase + 1280;
-            if (mem8[md + 12] === 75 && mem8[md + 13] === 82 && mem8[md + 14] === 78 && mem8[md + 15] === 76) {
+            const m0=mem8[md+12],m1=mem8[md+13],m2=mem8[md+14],m3=mem8[md+15];
+            if (hltCnt===2) console.log('[DIRECT-BOOT-CHK] ramBase=0x'+ramBase.toString(16)+' magic='+m0+','+m1+','+m2+','+m3+' (want 75,82,78,76)');
+            if (m0 === 75 && m1 === 82 && m2 === 78 && m3 === 76) {
               // "KRNL" magic
               execBlock._directBootDone = true;
               // Read staging metadata (written by main thread)
